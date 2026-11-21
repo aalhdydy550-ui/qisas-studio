@@ -170,8 +170,16 @@ TITLE_MOTION = {
 def assemble(concat_bin, projects_root, project_name, assets_dir, manifest,
              title, out_path, video, log_path):
     """يبني مشروع Concat ويصدّره. يرجع مسار ملف الفيديو عند النجاح."""
-    images = [os.path.join(assets_dir, "images", n)
-              for n in manifest["sequence"]]
+    from lib.paths import resolve_inside, safe_component
+    images_dir = os.path.join(assets_dir, "images")
+    images = []
+    for n in manifest["sequence"]:
+        # إصلاح اختبار اختراق 2026-11-21: اسم من البيان بلا تحقق
+        # كان يشير إلى ملف خارج مجلد الأصول.
+        safe_component(n, "اسم الصورة")
+        images.append(resolve_inside(images_dir,
+                                     os.path.join(images_dir, n),
+                                     "صورة المشروع"))
     narration = os.path.join(assets_dir, "audio", "narration-full.wav")
     phrases = manifest["phrases"]
     proj_dir = os.path.join(projects_root, project_name)
