@@ -28,3 +28,12 @@ queue/
 client_secrets*.json
 youtube-token.json
 whisper-test-results/
+# ملفات المزامنة والسجلات المحلية — لا تُنشر أبدًا
+# (اختبار اختراق 2026-11-21: الرفع عبر Contents API يتجاوز .gitignore
+# تمامًا، فهذه الأنماط وحدها لا تكفي — انظر خطوة التحقق في README).
+*.muse-github-snapshot-sync.json
+*.sqlite
+*.sqlite3
+storage/
+*.db
+runs/ensure-env-runs.log
