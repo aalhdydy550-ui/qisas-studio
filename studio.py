@@ -88,7 +88,7 @@ from lib import autoweek
 from lib import analyze
 from lib import help_ar
 
-VERSION = "0.1.21"
+VERSION = "0.1.22"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # الموسيقى الخلفية المدمجة (شوبان — ملكية عامة، assets/music/).
 DEFAULT_MUSIC = os.path.join(
@@ -187,7 +187,8 @@ def parse_size(text):
         raise ValueError("المقاس بصيغة WxH بأرقام صحيحة (وصل: %s)" % text)
     if width <= 0 or height <= 0:
         raise ValueError("أبعاد المقاس يجب أن تكون موجبة (وصل: %s)" % text)
-    return width, height
+    from lib.paths import check_size
+    return check_size(width, height, "المقاس")
 
 
 def expand(p):
@@ -198,20 +199,11 @@ def validate_run_component(name, what="اسم القصة"):
     r"""تحقق من مكوّن مسار واحد (slug قصة أو معرّف تشغيل) قبل ضمّه إلى مسار.
 
     يرفض أي قيمة قد تخرج بالمسار من مجلد التشغيل: فواصل مسارات (`/` أو
-    `\`)، أو `..`، أو حرف NUL، أو البدء بنقطة. القيم الصالحة مثل:
-    anza، aisha-part2، test_1.
+    `\`)، أو `..`، أو حرف NUL، أو البدء بنقطة أو بشرطة (حقن أعلام).
+    القيم الصالحة مثل: anza، aisha-part2، test_1.
     """
-    if not isinstance(name, str) or not name:
-        raise ValueError("%s غير صالح: قيمة فارغة" % what)
-    if "\x00" in name:
-        raise ValueError("%s غير صالح: يحوي حرف NUL" % what)
-    if name.startswith("."):
-        raise ValueError("%s غير صالح: يبدأ بنقطة" % what)
-    if "/" in name or "\\" in name:
-        raise ValueError("%s غير صالح: يحوي فاصل مسار" % what)
-    if ".." in name:
-        raise ValueError("%s غير صالح: يحوي '..'" % what)
-    return name
+    from lib.paths import safe_component
+    return safe_component(name, what)
 
 
 def run_dir_for(runs_dir, run_id):
@@ -249,6 +241,38 @@ def write_log(run_dir, log):
 
 
 # ---------------------------------------------------------------- status
+def _omniroute_bind_address(port=20128):
+    """عنوان ربط خادم OmniRoute من /proc/net/tcp.
+
+    يقرأ المنفذ 20128 ويعيد عنوان الاستماع الفعلي؛ تحذير صريح
+    إن لم يكن loopback (اختبار اختراق 2026-11-21: الخادم كان
+    يربط 0.0.0.0 لأن المتغير الصحيح HOSTNAME لا
+    OMNIROUTE_SERVER_HOST).
+    """
+    try:
+        with open("/proc/net/tcp", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                try:
+                    local = parts[1]
+                    addr, p = local.rsplit(":", 1)
+                    port_no = int(p, 16)
+                except ValueError:
+                    continue
+                if port_no != port or parts[3] != "0A":
+                    continue
+                ip = ".".join(str(int(addr[i:i + 2], 16))
+                              for i in (6, 4, 2, 0))
+                if ip == "127.0.0.1":
+                    return "127.0.0.1 فقط (loopback — آمن)"
+                return "%s — تحذير: ليس loopback!" % ip
+    except OSError:
+        pass
+    return "غير معروف (الخادم متوقف أو بلا /proc/net/tcp)"
+
+
 def cmd_status(cfg):
     ok = True
     print("== OmniRoute (الذكاء) ==")
@@ -260,13 +284,14 @@ def cmd_status(cfg):
     except Exception as e:
         print("  الخادم لا يرد على %s: %s" % (base, e))
         ok = False
+    print("  الربط: %s" % _omniroute_bind_address())
     try:
         out = subprocess.run(["omniroute", "providers", "list"],
                              capture_output=True, text=True, timeout=30)
         import re as _re
         clean = _re.sub(r"\x1b\[[0-9;]*m", "", out.stdout or "")
         rows = [l.strip() for l in clean.splitlines()
-                if l.strip() and not l.strip().startswith(("Loaded",
+                if l.strip() and not l.strip().startswith(("Loaded", "📋",
                       "STORAGE", "OmniRoute Providers", "⚠"))]
         print("  المزودون: %s" % ("؛ ".join(rows) if rows
                                    else "لا يوجد مزود مفعّل"))
@@ -314,6 +339,41 @@ _ENSURE_ENV_SCRIPT = os.path.join(os.path.expanduser("~"), "workspace",
 _CLAMAV_DB_DIR = "/var/lib/clamav"
 
 
+def _script_safe_to_run(script):
+    """هل سكربت الاستعادة آمن للتشغيل التلقائي؟
+
+    سكربتات الاستعادة تُنفَّذ تلقائيًا بصلاحيات المستخدم، فأي عبث
+    بها يتحول إلى تنفيذ كود. ارفض التشغيل إن لم يكن السكربت ملفًا
+    عاديًا مملوكًا للمستخدم (أو root) أو كان قابلًا للكتابة من
+    الجميع. (إصلاح اختبار اختراق 2026-11-21.)
+    """
+    try:
+        st = os.stat(script)
+    except OSError:
+        return False
+    import stat as _stat
+    if not _stat.S_ISREG(st.st_mode):
+        return False
+    if st.st_uid not in (os.getuid(), 0):
+        return False
+    if st.st_mode & 0o002:
+        return False
+    return True
+
+
+def _log_auto_script(script, reason):
+    """سجّل كل تشغيل تلقائي لسكربت استعادة (بدل إخفائه في DEVNULL)."""
+    try:
+        log = os.path.join(os.path.expanduser("~"), "workspace", "studio",
+                           "runs", "ensure-env-runs.log")
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("%s تشغيل تلقائي: %s (%s)\n"
+                    % (time.strftime("%Y-%m-%dT%H:%M:%S"), script, reason))
+    except OSError:
+        pass
+
+
 def _ensure_environment():
     """أصلح البيئة بنفسك قبل حلّ الأدوات (best-effort، بلا فشل).
 
@@ -347,15 +407,23 @@ def _ensure_environment():
                     reasons.append("ملف الخدمة غائب")
                 print("تحذير: %s — تشغيل سكربت الاستعادة…"
                       % " و".join(reasons))
-                env = dict(os.environ)
-                env["STUDIO_ENV_RESTORED"] = "1"
-                try:
-                    subprocess.run(["/bin/bash", script], env=env, timeout=300,
-                                   stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, check=False)
-                except (OSError, subprocess.TimeoutExpired) as e:
-                    print("تحذير: فشلت استعادة البيئة تلقائيًا (%s) — أكمل بدونها"
-                          % e)
+                if not _script_safe_to_run(script):
+                    print("تحذير: سكربت الاستعادة غير آمن للتشغيل "
+                          "التلقائي (مالك/صلاحيات) — يُتخطى: %s" % script)
+                else:
+                    _log_auto_script(script, " و".join(reasons))
+                    env = dict(os.environ)
+                    env["STUDIO_ENV_RESTORED"] = "1"
+                    try:
+                        subprocess.run(["/bin/bash", script], env=env,
+                                       timeout=300,
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL,
+                                       check=False)
+                    except (OSError,
+                            subprocess.TimeoutExpired) as e:
+                        print("تحذير: فشلت استعادة البيئة تلقائيًا (%s) — "
+                              "أكمل بدونها" % e)
     _ensure_protection_tools()
     _ensure_omniroute_server()
 
@@ -382,8 +450,11 @@ def _ensure_omniroute_server():
     exitCode فيُنهي العملية دون طباعة)، فيظن studio أن النماذج
     المجانية معطلة بينما المشكلة أن الخادم متوقف فقط. تحذير فحص
     التحديثات على stderr ضجيج غير قاتل ويُحذف من المخرجات أصلًا.
-    الخادم يُشغَّل على 127.0.0.1 فقط (OMNIROUTE_SERVER_HOST) فلا
+    خادم OmniRoute شغال على 127.0.0.1 فقط (HOSTNAME) فلا
     ينكشف على الشبكة، ويبقى شغالًا — أمر chat يحتاجه في كل تشغيل.
+    تنبيه (اختبار اختراق 2026-11-21): الخادم يقرأ `HOSTNAME`
+    لا `OMNIROUTE_SERVER_HOST` (server.js: `HOSTNAME || '0.0.0.0'`)،
+    فالمتغير القديم وحده كان يترك الخادم على كل الواجهات.
     best-effort: أي فشل تحذير فقط ولا يوقف التشغيل.
     """
     import shutil
@@ -392,6 +463,7 @@ def _ensure_omniroute_server():
     if shutil.which("omniroute") is None:
         return
     env = dict(os.environ)
+    env["HOSTNAME"] = "127.0.0.1"
     env["OMNIROUTE_SERVER_HOST"] = "127.0.0.1"
     # إصلاح 2026-11-21 (اختبار اختراق): REQUIRE_API_KEY=true إلزامي —
     # افتراضي حزمة omniroute هو false، وبدونه تقبل /v1/chat/completions
@@ -434,6 +506,11 @@ def _ensure_protection_tools():
     script = _ENSURE_ENV_SCRIPT
     if not os.path.isfile(script):
         return
+    if not _script_safe_to_run(script):
+        print("تحذير: سكربت حارس البيئة غير آمن للتشغيل التلقائي "
+              "(مالك/صلاحيات) — يُتخطى: %s" % script)
+        return
+    _log_auto_script(script, "أدوات حماية غائبة")
     try:
         subprocess.Popen(
             ["/bin/bash", script, "--apt-only"],
@@ -1019,7 +1096,11 @@ def cmd_long_narration(cfg, text, text_file, out_path, gap, atempo,
                        voice="piper"):
     """سرد طويل مقسّم إلى WAV واحد (Piper رجل افتراضيًا؛ أو gTTS)."""
     if text_file:
-        with open(expand(text_file), encoding="utf-8") as f:
+        # إصلاح اختبار اختراق 2026-11-21: ملف نص قادم من ملف فصول
+        # JSON كان يقرأ أي ملف على القرص — احصره في مساحة العمل.
+        from lib.paths import resolve_inside_workspace
+        text_file = resolve_inside_workspace(text_file, "ملف نص السرد")
+        with open(text_file, encoding="utf-8") as f:
             text = f.read()
     result = long_narration.synthesize_long(
         text, expand(out_path), gap=gap, atempo=atempo, voice=voice)
@@ -1097,21 +1178,40 @@ def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper"):
     if kind == "run":
         return _run_chapter(cfg, entry["run"], title=title, moral=moral)
     if kind == "chapter-dir":
+        # إصلاح اختبار اختراق 2026-11-21: مجلد فصل خارج مساحة العمل
+        # كان يُقرأ وتُكتب فيه ملفات عمل (.long-video) — احصره.
+        from lib.paths import resolve_inside_workspace
+        try:
+            chapter_path = resolve_inside_workspace(entry["path"],
+                                                    "مجلد الفصل")
+        except ValueError as e:
+            raise long_video.LongVideoError(str(e))
         return long_video.load_chapter_dir(
-            expand(entry["path"]),
+            chapter_path,
             work_dir=os.path.join(work_dir, "chapters", "ch%d" % index),
             atempo=atempo, title=title, moral=moral or None)
     if kind == "text":
+        from lib.paths import resolve_inside_workspace
         text = entry.get("text")
         if entry.get("text_file"):
-            with open(expand(entry["text_file"]), encoding="utf-8") as f:
+            try:
+                text_path = resolve_inside_workspace(entry["text_file"],
+                                                     "ملف نص الفصل")
+            except ValueError as e:
+                raise long_video.LongVideoError(str(e))
+            with open(text_path, encoding="utf-8") as f:
                 text = f.read()
         if not text or not text.strip():
             raise long_video.LongVideoError(
                 "الفصل النصي بلا نص: %s" % (title or "?"))
-        images = [expand(p) for p in entry.get("images", [])]
-        if entry.get("cover"):
-            images = [expand(entry["cover"])] + images
+        try:
+            images = [resolve_inside_workspace(p, "صورة الفصل")
+                      for p in entry.get("images", [])]
+            if entry.get("cover"):
+                images = [resolve_inside_workspace(entry["cover"],
+                                                   "غلاف الفصل")] + images
+        except ValueError as e:
+            raise long_video.LongVideoError(str(e))
         if not images:
             raise long_video.LongVideoError(
                 "الفصل النصي بلا صور (cover أو images): %s" % title)
@@ -1227,6 +1327,14 @@ def cmd_long_video(cfg, args):
             elif os.path.isfile(DEFAULT_MUSIC):
                 music = DEFAULT_MUSIC
                 print("الموسيقى الخلفية الافتراضية: %s" % music)
+        if music:
+            # إصلاح اختبار اختراق 2026-11-21: ملف موسيقى من ملف
+            # فصول JSON كان يُقرأ من أي مسار — احصره في مساحة العمل.
+            from lib.paths import resolve_inside_workspace
+            try:
+                music = resolve_inside_workspace(music, "ملف الموسيقى")
+            except ValueError as e:
+                raise long_video.LongVideoError(str(e))
         entries = list(spec.get("chapters", []))
         for slug in args.story:
             entries.append({"type": "story", "story": slug})
