@@ -113,11 +113,22 @@ def prepare_fill_images(manifest, assets_dir, out_dir, width, height):
         raise MltError("لا صور في البيان — لا شيء يُقصّ لـMLT")
     os.makedirs(out_dir, exist_ok=True)
     out_paths = {}
+    from lib.paths import resolve_inside, safe_component
+    images_dir = os.path.join(assets_dir, "images")
     for name in seq:
-        src = os.path.join(assets_dir, "images", name)
+        # إصلاح اختبار اختراق 2026-11-21: اسم من البيان بلا تحقق
+        # كان يكتب خارج مجلد القصّ (../../escape-target.jpg).
+        try:
+            safe_component(name, "اسم الصورة")
+            src = resolve_inside(images_dir,
+                                 os.path.join(images_dir, name),
+                                 "صورة MLT")
+            dst = resolve_inside(out_dir, os.path.join(out_dir, name),
+                                 "نسخة صورة MLT")
+        except ValueError as e:
+            raise MltError(str(e))
         if not os.path.isfile(src):
             raise MltError("صورة MLT غير موجودة: %s" % src)
-        dst = os.path.join(out_dir, name)
         vf = ("scale=%d:%d:force_original_aspect_ratio=increase,"
               "crop=%d:%d" % (width, height, width, height))
         cmd = [ffmpeg, "-y", "-v", "error", "-i", src,
