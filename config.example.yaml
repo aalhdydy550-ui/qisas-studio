@@ -1,0 +1,75 @@
+# مثال لإعدادات studio — انسخ هذا الملف إلى config.yaml وعدّل المسارات عند الحاجة.
+# لا تضع أي مفاتيح أو بيانات اعتماد هنا أبدًا.
+# مفتاح بوابة OmniRoute (لو وُجد) يمرَّر عبر متغير البيئة OMNIROUTE_API_KEY فقط.
+
+omniroute:
+  # البوابة تعمل محليًا على هذا المنفذ (تأكد أنها شغالة بـ `omniroute --no-open`)
+  base_url: "http://localhost:20128"
+  # الموديل المجاني المفضل (DuckDuckGo AI Chat — يعمل بلا مفتاح، اتحقق 2026-11-20)
+  model: "ddgw/gpt-5.4-mini"
+  # بديل g4f المجاني (رصيده ينفد سريعًا وقد يرجع 402)
+  fallback_model: "g4fpol/deepseek"
+  timeout_seconds: 120
+  # إعادة محاولة تلقائية عند فشل الاستدعاء (قبل اللجوء للبديل)
+  retries: 1
+  retry_delay_seconds: 5
+
+openmontage:
+  root: "~/workspace/openmontage"
+  # مجلد مشاريع OpenMontage (كل مشروع فيه artifacts/ و assets/)
+  projects_dir: "~/workspace/openmontage/projects"
+
+concat:
+  # ثنائي Concat المستخرج من AppImage (يعمل بلا FUSE)
+  bin: "~/workspace/concat/squashfs-root/usr/bin/concat"
+  # مجلد مشاريع Concat
+  projects_dir: "~/workspace/concat/projects"
+
+headless:
+  # نواة المحرر المستقلة (خلفية تجميع بديلة عبر --backend headless)
+  root: "~/workspace/headless-editor"
+  editor: "~/workspace/headless-editor/editor.py"
+
+video:
+  width: 720
+  height: 1280
+  fps: 30
+  codec: "h264"
+  crf: 20
+  # مدة كل صورة ثابتة في فيديوهات الصور (ثوانٍ)
+  image_clip_seconds: 5
+
+paths:
+  workspace: "~/workspace"
+  videos_dir: "~/workspace/videos"
+  runs_dir: "~/workspace/studio/runs"
+  # ملف طابور القصص لأمر run-queue (قصص «في الانتظار» بالترتيب)
+  queue_file: "~/workspace/goals/goal/hidden_files/story-queue-2026-11-20.md"
+
+publish:
+  # معرّف صفحة فيسبوك للنشر (أمر publish) — اتركه فارغًا واستخدم
+  # --page-id إن نشرت لصفحات مختلفة.
+  page_id: ""
+  # يوتيوب (Data API v3): ملفا إعداد OAuth لمرة واحدة (انظر README).
+  # لا تضع أي أسرار هنا — client_secrets.json وyoutube-token.json
+  # ملفان منفصلان مستثنيان من النشر (.gitignore).
+  youtube_client_secrets: "~/workspace/studio/client_secrets.json"
+  youtube_token: "~/workspace/studio/youtube-token.json"
+  youtube_privacy: "public"  # public/unlisted/private
+  # معرّف قناة يوتيوب لأمر analyze (عام — ليس سرًا).
+  youtube_channel_id: ""
+
+long_video:
+  # الموسيقى الخلفية الافتراضية للفيديو الطويل: فارغ = الملف المدمج
+  # (شوبان — ملكية عامة، assets/music/)؛ "none" = بلا موسيقى.
+  default_music: ""
+
+# whisper (خيار تجريبي — معلَّق افتراضيًا؛ التفاصيل في WHISPER-TEST.md):
+# يولّد ASS من word timestamps عبر `studio.py whisper-ass`، ويعمل فقط
+# من بيئة faster-whisper الخاصة بالمشروع (.venv-whisper).
+# لا يبدّل خط silencedetect الافتراضي: نص الشاشة في هذا المشروع صياغة
+# فصحى مختلفة عن النص المنطوق، وحتى موديل small يخطئ في ~22% من الكلمات.
+# whisper:
+#   model: "small"   # tiny/base/small — small هو الأدق بوضوح (WER ‏22% مقابل ~40%)
+#   max_words: 6     # أقصى كلمات في عبارة ASS واحدة
+#   max_gap: 0.6     # فجوة الصمت (ثوانٍ) التي تفصل عبارتين
