@@ -77,7 +77,11 @@ def wrap_hook(text, max_chars=20):
 def write_ass(hook, ass_path, width=WIDTH, height=HEIGHT,
               fontsize=FONTSIZE, margin_v=MARGIN_V, max_chars=20):
     """يكتب ملف ASS بنص الهوك أعلى الصورة (محاذاة 8 — أعلى الوسط)."""
-    lines = wrap_hook(hook, max_chars=max_chars)
+    # إصلاح اختبار اختراق 2026-11-21: الهوك كان يُدرج خامًا في سطر
+    # Dialogue فيستطيع نصه حقن وسوم ASS ({\\fs200} و{\\pos...}).
+    from lib.capite_captions import escape_ass_text
+    lines = [escape_ass_text(ln)
+             for ln in wrap_hook(hook, max_chars=max_chars)]
     text = "\\N".join(lines)
     ass = """[Script Info]
 ScriptType: v4.00+
@@ -94,6 +98,12 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Hook,,0,0,0,,{text}
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass)
     return lines
+
+
+def _escape_filter_path(p):
+    """هرب مسار داخل قيمة فلتر ffmpeg (نفس هروب نواة headless)."""
+    return (p.replace("\\", "\\\\").replace(":", "\\:")
+             .replace("'", "\\'"))
 
 
 def make_thumbnail(video_path, hook, out_path, at_seconds=None,
@@ -128,7 +138,7 @@ def make_thumbnail(video_path, hook, out_path, at_seconds=None,
                           height=height, fontsize=fontsize,
                           margin_v=margin_v, max_chars=max_chars)
         _run(["ffmpeg", "-y", "-v", "error", "-i", frame,
-              "-vf", "subtitles=%s" % ass_path.replace(":", "\\:"),
+              "-vf", "subtitles=%s" % _escape_filter_path(ass_path),
               "-frames:v", "1", out_path], "حرق نص الهوك على الصورة")
     finally:
         for p in (frame, ass_path):
