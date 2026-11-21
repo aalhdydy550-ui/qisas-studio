@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""مساعدة عربية — `studio.py help-ar`: كل أمر ووظيفته ومثال عليه.
+
+مساعدة نصية فقط (لا ترجمة كاملة للواجهة) — الأوامر نفسها
+تبقى بالإنجليزية كما هي في كل الأدوات.
+"""
+COMMANDS = [
+    ("status", "فحص حالة الطبقات الثلاث (OmniRoute وOpenMontage وConcat)",
+     "python3 studio.py status"),
+    ("doctor", "فحص بيئة studio كاملة (24 فحصًا) — PASS/FAIL صادق لكل فحص",
+     "python3 studio.py doctor"),
+    ("run", "خط الإنتاج الكامل: قصة ← فيديو عمودي 720×1280 جاهز للنشر",
+     "python3 studio.py run --story anza --project anza-part1 --out ~/workspace/videos/out.mp4"),
+    ("run --demo", "القصة التجريبية المدمجة — فيديو حقيقي في ~دقيقة، بلا مفاتيح ولا رصيد",
+     "python3 studio.py run --demo"),
+    ("script", "توليد هوك وعنوان وكابشن للقصة عبر نماذج مجانية",
+     "python3 studio.py script --story anza --allow-fallback"),
+    ("produce", "تجهيز أصول مشروع OpenMontage (سيناريو + سرد + صور)",
+     "python3 studio.py produce --project anza-part1"),
+    ("assemble", "تجميع تشغيل سابق وتصديره فيديو (Concat افتراضيًا)",
+     "python3 studio.py assemble --run <RUN_ID> --out ~/workspace/videos/out.mp4"),
+    ("thumbnail", "توليد صورة مصغرة 720×1280 بنص الهوك أعلى الصورة",
+     "python3 studio.py thumbnail --video ~/workspace/videos/out.mp4 --hook \"العنوان الصادم\""),
+    ("quote-cards", "توليد بطاقات الاقتباس الثلاث (عبرة/حكمة/موعظة) كصور مستقلة",
+     "python3 studio.py quote-cards --ibra \"...\" --hikma \"...\" --mawiza \"...\" --out-dir ~/workspace/videos/quote-cards/"),
+    ("long-video", "فيديو طويل أفقي 1280×720 (8–12 دقيقة) من عدة قصص",
+     "python3 studio.py long-video --out ~/workspace/videos/long.mp4 --title \"قصص الأسبوع\" --story anza"),
+    ("long-video --auto-week", "الفيديو الطويل من قصص الأسبوع المنشورة تلقائيًا (بلا تجميع يدوي)",
+     "python3 studio.py long-video --auto-week --out ~/workspace/videos/long.mp4"),
+    ("long-narration", "سرد طويل مقسّم بصوت الراوي — نص إلى WAV واحد بفواصل صمت",
+     "python3 studio.py long-narration --text-file story.txt --out narration.wav"),
+    ("run-queue", "دفعة جماعية من ملف الطابور — القصص الجاهزة فقط تُشغَّل بالتتابع",
+     "python3 studio.py run-queue --dry-run"),
+    ("queue add", "إضافة قصة جديدة إلى ملف الطابور بسطر واحد",
+     "python3 studio.py queue add --title \"قصة جديدة\" --text-file story.txt --parts 1"),
+    ("analyze", "تحليل آخر فيديو منشور بأرقام حقيقية (فيسبوك + يوتيوب) واقتراحات تحسين",
+     "python3 studio.py analyze"),
+    ("analyze-ref", "تحليل فيديو مرجعي لمنافس (الهوك وسرعة السرد والختام) — للتعلم فقط",
+     "python3 studio.py analyze-ref --url https://www.youtube.com/watch?v=..."),
+    ("publish", "نشر فيديو على فيسبوك (Reel) ويوتيوب معًا — أو --dry-run للمعاينة بلا نشر",
+     "python3 studio.py publish --video ~/workspace/videos/out.mp4 --title \"العنوان\" --dry-run"),
+    ("youtube-auth", "تبادل OAuth ليوتيوب لمرة واحدة (يفتح المتصفح للموافقة)",
+     "python3 studio.py youtube-auth"),
+    ("client-run", "تنفيذ طلب فيديو عميل واحد من صفحة «طلب فيديو»",
+     "python3 studio.py client-run --order QS-123456"),
+    ("process-queue", "تنفيذ كل طلبات العملاء الجديدة دفعة واحدة",
+     "python3 studio.py process-queue"),
+    ("whisper-ass", "كابشنات ASS من faster-whisper (تجريبي — راجع WHISPER-TEST.md)",
+     "python3 studio.py whisper-ass --audio narration.wav --out captions.ass"),
+    ("karaoke-ass", "كابشنات كاريوكي كلمة-بكلمة من الصوت",
+     "python3 studio.py karaoke-ass --audio narration.wav --out karaoke.ass"),
+    ("trim", "قص مقطع فيديو بلا إعادة ترميز (تنظيف مقاطع Veo قبل التجميع)",
+     "python3 studio.py trim --input clip.mp4 --out clip-cut.mp4 --start 0.5 --end 7.5"),
+    ("fx", "تركيبة MoviePy: Ken Burns + نص عربي متحرك على صورة",
+     "python3 studio.py fx --image cover.jpg --out clip.mp4 --text \"الهوك\""),
+    ("clean-audio", "قص صمت الصوت الخام عبر Auto-Editor (أبدًا على السرد النهائي)",
+     "python3 studio.py clean-audio --input raw.wav --out clean.wav"),
+    ("help-ar", "هذه المساعدة بالعربية — كل أمر ووظيفته ومثال عليه",
+     "python3 studio.py help-ar"),
+]
+
+
+def help_text():
+    """نص المساعدة العربية الكامل."""
+    lines = ["أوامر studio — المساعدة بالعربية", ""]
+    for cmd, desc, example in COMMANDS:
+        lines.append("  %s" % cmd)
+        lines.append("    %s" % desc)
+        lines.append("    مثال: %s" % example)
+        lines.append("")
+    lines.append("ملاحظات:")
+    lines.append("  - الراوي الافتراضي رجل (Piper Kareem)؛ والصوت الثاني "
+                 "الاختياري عبر --voice gtts في long-narration وlong-video.")
+    lines.append("  - كل فيديو يُنشر مدته 40–60 ثانية؛ والفيديو الطويل "
+                 "8–12 دقيقة أفقي ليوتيوب فقط.")
+    lines.append("  - للفحص الكامل: python3 studio.py doctor")
+    return "\n".join(lines) + "\n"
+
+
+def print_help():
+    """اطبع المساعدة العربية."""
+    print(help_text(), end="")
