@@ -51,7 +51,7 @@ class TestRunChecks(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _run(self, which_map=None):
+    def _run(self, which_map=None, fallbacks=None):
         which_map = which_map or {}
         real_which = doctor.shutil.which
 
@@ -60,7 +60,9 @@ class TestRunChecks(unittest.TestCase):
                 return which_map[cmd]
             return real_which(cmd)
 
+        fb = doctor._WHICH_FALLBACKS if fallbacks is None else fallbacks
         with mock.patch("lib.doctor.shutil.which", side_effect=fake_which), \
+             mock.patch("lib.doctor._WHICH_FALLBACKS", fb), \
              mock.patch("lib.doctor.urllib.request.urlopen",
                         return_value=_fake_response(200)), \
              mock.patch("lib.doctor.long_narration.PIPER_MODEL",
@@ -100,10 +102,28 @@ class TestRunChecks(unittest.TestCase):
         self.assertGreater(errors, 0)
 
     def test_missing_optional_tool_is_warning_only(self):
-        checks = self._run(which_map={"yt-dlp": None})
+        checks = self._run(which_map={"yt-dlp": None},
+                           fallbacks={})
         bad = [c for c in checks if "yt-dlp" in c["name"]][0]
         self.assertFalse(bad["ok"])
         self.assertEqual(bad["level"], "warn")
+
+    def test_home_fallback_counts_when_path_link_missing(self):
+        # بعد إعادة تشغيل الـVM تُمسح روابط /usr/local/bin فيغيب piper
+        # عن PATH رغم وجود ثنائيه في ~/.local/bin — يجب أن يجده doctor.
+        fake_piper = self.root / "piper"
+        fake_piper.write_text("x")
+        checks = self._run(which_map={"piper": None},
+                           fallbacks={"piper": (str(fake_piper),)})
+        good = [c for c in checks if c["name"].startswith("Piper (")][0]
+        self.assertTrue(good["ok"])
+        self.assertEqual(good["detail"], str(fake_piper))
+
+    def test_no_path_no_fallback_is_failure(self):
+        checks = self._run(which_map={"piper": None}, fallbacks={})
+        bad = [c for c in checks if c["name"].startswith("Piper (")][0]
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["level"], "error")
 
     def test_format_report_never_claims_success_on_failure(self):
         checks = [{"name": "x", "ok": False, "level": "error",
