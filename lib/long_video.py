@@ -173,8 +173,19 @@ def chapter_from_manifest(manifest, assets_dir, title=None, moral=""):
     duration = float(manifest.get("narration_duration") or 0.0)
     if duration <= 0:
         raise LongVideoError("مدة السرد في البيان صفر أو غائبة")
-    images = [os.path.join(assets_dir, "images", name)
-              for name in manifest.get("sequence", [])]
+    from lib.paths import resolve_inside, safe_component
+    images_dir = os.path.join(assets_dir, "images")
+    images = []
+    for name in manifest.get("sequence", []):
+        # إصلاح اختبار اختراق 2026-11-21: اسم من البيان بلا تحقق
+        # كان يشير إلى ملف خارج مجلد الأصول.
+        try:
+            safe_component(name, "اسم الصورة")
+            images.append(resolve_inside(
+                images_dir, os.path.join(images_dir, name),
+                "صورة الفصل"))
+        except ValueError as e:
+            raise LongVideoError(str(e))
     if not images:
         raise LongVideoError("تسلسل الصور في البيان فارغ")
     missing = [p for p in images if not os.path.isfile(p)]
