@@ -134,6 +134,9 @@ def generate_quote_cards(ibra, hikma, mawiza, mawiza_source, out_dir):
     """
     if not os.path.isfile(MAKE_CARDS):
         raise WatermarkError("سكربت البطاقات غير موجود: %s" % MAKE_CARDS)
+    # ملاحظة (اختبار اختراق 2026-11-21): out_dir مسار حر يختاره
+    # المشغّل (CLI أو كرون بمجلد ثابت) لا مدخل من ملف بيانات،
+    # فلا يُحصَر — الكتابة هنا مقصودة by design.
     os.makedirs(out_dir, exist_ok=True)
     jobs = [("عبرة", ibra, "ibra.png", ""),
             ("حكمة", hikma, "hikma.png", ""),
