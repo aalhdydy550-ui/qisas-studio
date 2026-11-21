@@ -1419,6 +1419,22 @@ class TestEnsureEnvironment(unittest.TestCase):
                         run_side=OSError("boom"))
         run.assert_called_once()  # حاول ثم أكمل بلا استثناء
 
+    def test_unsafe_script_is_skipped(self):
+        # إصلاح اختبار اختراق 2026-11-21: سكربت قابل للكتابة من
+        # الجميع لا يُنفَّذ تلقائيًا أبدًا.
+        with tempfile.NamedTemporaryFile("w", suffix=".sh",
+                                        delete=False) as f:
+            f.write("#!/bin/bash\necho hi\n")
+            path = f.name
+        try:
+            os.chmod(path, 0o666)
+            self.assertFalse(studio._script_safe_to_run(path))
+            os.chmod(path, 0o700)
+            self.assertTrue(studio._script_safe_to_run(path))
+            self.assertFalse(studio._script_safe_to_run(path + ".missing"))
+        finally:
+            os.unlink(path)
+
 
 class TestEnsureOmnirouteServer(unittest.TestCase):
     """خادم OmniRoute يجب أن يعمل قبل أي استدعاء ذكاء (عيب v0.1.16):
@@ -1505,6 +1521,34 @@ class TestParseSize(unittest.TestCase):
                     "-5x720", "1280x720x1", "", None):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 studio.parse_size(bad)
+
+
+class TestCmdStatusProviders(unittest.TestCase):
+    def test_hides_loaded_env_lines(self):
+        # سطور "📋 Loaded env" كانت تتسرب إلى سطر المزودين لأن المرشح
+        # كان يفحص البادئة "Loaded" فقط بينما السطر يبدأ بالإيموجي.
+        cfg = {"omniroute": {"base_url": "http://localhost:20128"},
+               "openmontage": {"root": "/tmp"},
+               "concat": {"bin": "/tmp/x"},
+               "headless": {"editor": "/tmp/x"}}
+        resp = mock.MagicMock()
+        resp.status = 200
+        resp.__enter__ = mock.MagicMock(return_value=resp)
+        resp.__exit__ = mock.MagicMock(return_value=False)
+        raw = ("\x1b[2m📋 Loaded env from /home/x/.env\x1b[0m\n"
+               "182fb2de   duckduckgo-web duckduckgo-web  active\n")
+        import io
+        buf = io.StringIO()
+        with mock.patch("studio.urllib.request.urlopen",
+                        return_value=resp), \
+             mock.patch("studio.subprocess.run",
+                        return_value=mock.MagicMock(stdout=raw)), \
+             mock.patch("sys.stdout", buf):
+            self.assertEqual(studio.cmd_status(cfg), 0)
+        out = buf.getvalue()
+        self.assertIn("duckduckgo-web", out)
+        self.assertNotIn("Loaded env", out)
+        self.assertNotIn(".env", out)
 
 
 if __name__ == "__main__":
