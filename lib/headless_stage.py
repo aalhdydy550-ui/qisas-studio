@@ -45,10 +45,17 @@ def build_project(manifest, title, assets_dir, video_cfg):
     fps = int(video_cfg["fps"])
     tracks = []
     start = 0.0
+    from lib.paths import resolve_inside, safe_component
+    images_dir = os.path.join(assets_dir, "images")
     for name in manifest["sequence"]:
+        # إصلاح اختبار اختراق 2026-11-21: اسم من البيان بلا تحقق
+        # كان يشير إلى ملف خارج مجلد الأصول (../../../../etc/passwd).
+        safe_component(name, "اسم الصورة")
+        src = resolve_inside(images_dir, os.path.join(images_dir, name),
+                             "صورة الفصل")
         tracks.append({
             "type": "image",
-            "src": os.path.join(assets_dir, "images", name),
+            "src": src,
             "start": round(start, 3),
             "duration": clip_seconds,
             "transition_in": "none",
