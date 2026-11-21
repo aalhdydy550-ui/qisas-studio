@@ -106,11 +106,14 @@ def _finish_phrase(words):
 
 def phrases_to_ass(phrases, font_size=52):
     """عبارات زمنية → نص ملف ASS كامل بنفس نمط subs/."""
+    # إصلاح اختبار اختراق 2026-11-21: العبارات كانت تُدرج خامًا
+    # فيستطيع نصها حقن وسوم ASS — نفس هروب capite_captions.
+    from lib.capite_captions import escape_ass_text
     lines = [ass_header(font_size)]
     for p in phrases:
         lines.append("Dialogue: 0,%s,%s,Default,,0,0,0,,%s" % (
             format_ass_time(p["start"]), format_ass_time(p["end"]),
-            p["text"]))
+            escape_ass_text(p["text"])))
     return "\n".join(lines) + "\n"
 
 
