@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""تحليل الأداء — `studio.py analyze`: آخر فيديو منشور بالأرقام الحقيقية.
+r"""تحليل الأداء — `studio.py analyze`: آخر فيديو منشور بالأرقام الحقيقية.
 
 مصدران عامّان فقط، بلا Analytics API وبلا مفاتيح جديدة:
 - فيسبوك: `facebook-cli pages posts list` — آخر منشور فيديو على
@@ -128,13 +128,18 @@ def yt_latest_video(channel_id, run=None):
     """آخر فيديو على قناة يوتيوب مع أرقامه العامة، أو (None, السبب)."""
     if not channel_id:
         return None, "معرّف قناة يوتيوب غير مضبوط (publish.youtube_channel_id)"
+    # إصلاح اختبار اختراق 2026-11-21: المعرف كان يُدرج خامًا في
+    # سلسلة استعلام URL فيحقن معامل list ثانٍ (&list=...).
+    if not re.fullmatch(r"UC[A-Za-z0-9_-]{10,}", channel_id):
+        return None, "معرّف قناة يوتيوب غير صالح: %s" % channel_id
     # قائمة الرفوعات: "UU" + معرّف القناة بلا بادئة "UC".
-    uploads = ("UU" + channel_id[2:] if channel_id.startswith("UC")
-               else "UU" + channel_id)
+    uploads = "UU" + channel_id[2:]
+    import urllib.parse
+    playlist_url = ("https://www.youtube.com/playlist?"
+                    + urllib.parse.urlencode({"list": uploads}))
     try:
         playlist = _run_ytdlp(
-            ["--flat-playlist", "-J",
-             "https://www.youtube.com/playlist?list=%s" % uploads],
+            ["--flat-playlist", "-J", playlist_url],
             run=run)
     except (AnalyzeError, FileNotFoundError) as e:
         return None, "تعذرت قراءة قائمة رفع يوتيوب: %s" % e
@@ -144,12 +149,13 @@ def yt_latest_video(channel_id, run=None):
     if not entries:
         return None, "قناة يوتيوب بلا فيديوهات"
     video_id = entries[0].get("id")
-    if not video_id:
+    if not video_id or not re.fullmatch(r"[A-Za-z0-9_-]{5,}",
+                                        str(video_id)):
         return None, "تعذر تحديد آخر فيديو على يوتيوب"
+    watch_url = ("https://www.youtube.com/watch?"
+                 + urllib.parse.urlencode({"v": video_id}))
     try:
-        info = _run_ytdlp(
-            ["-J", "https://www.youtube.com/watch?v=%s" % video_id],
-            run=run)
+        info = _run_ytdlp(["-J", watch_url], run=run)
     except (AnalyzeError, FileNotFoundError) as e:
         return None, "تعذرت قراءة بيانات الفيديو %s: %s" % (video_id, e)
     except subprocess.TimeoutExpired:
