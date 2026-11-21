@@ -53,11 +53,26 @@ def _which(cmd):
     return shutil.which(cmd)
 
 
+# مواقع ثابتة في الـhome تنجو من إعادة تشغيل الـVM (روابط
+# /usr/local/bin تُمسح معها، فيبلّغ doctor عن أداة موجودة أصلًا
+# كغائبة). تُفحص فقط إن غاب الأمر عن PATH، وdoctor لا يصلح شيئًا.
+_WHICH_FALLBACKS = {
+    "piper": ("~/.local/bin/piper",),
+    "yt-dlp": ("~/.local/bin/yt-dlp",),
+    "omniroute": ("~/.npm-global/bin/omniroute", "/usr/bin/omniroute"),
+}
+
+
 def _check(cmd, name, level="error"):
     path = _which(cmd)
     if path:
         return {"name": name, "ok": True, "level": level,
                 "detail": path, "fix": ""}
+    for cand in _WHICH_FALLBACKS.get(cmd, ()):
+        cand = os.path.expanduser(cand)
+        if os.path.isfile(cand):
+            return {"name": name, "ok": True, "level": level,
+                    "detail": cand, "fix": ""}
     return {"name": name, "ok": False, "level": level,
             "detail": "غير موجود في PATH",
             "fix": INSTALL_HINTS.get(cmd, "")}
