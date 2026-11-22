@@ -13,7 +13,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: pip install pyyaml
+        run: pip install pyyaml pillow
       - name: Compile check
         run: python -m py_compile studio.py lib/*.py tests/*.py
       - name: Run tests
