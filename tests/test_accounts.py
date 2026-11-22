@@ -158,10 +158,16 @@ class TestVeoBalance(unittest.TestCase):
         self.assertEqual(c["level"], "warn")
 
     def test_healthy_balance_passes(self):
+        # رصيد سليم ومحدَّث قبل ساعة (عمر معروف وحديث — الجولة 8:
+        # رصيد بلا updated_at يُحذَّر منه الآن، فالاختبار يمرّر
+        # ختمًا حديثًا صراحةً).
+        fresh = (datetime.datetime.now(datetime.timezone.utc)
+                 - datetime.timedelta(hours=1)).isoformat()
         cfg = {"veo": {"balance_units": 680,
                        "renews": "2026-12-13",
                        "daily_cost_min": 100,
-                       "daily_cost_max": 140}}
+                       "daily_cost_max": 140,
+                       "updated_at": fresh}}
         c = accounts.check_veo_balance(cfg, today=TODAY)
         self.assertTrue(c["ok"])
         self.assertIn("680", c["detail"])
@@ -183,12 +189,15 @@ class TestVeoBalance(unittest.TestCase):
 
 class TestRunAccountChecks(unittest.TestCase):
     def test_returns_three_checks(self):
+        fresh = (datetime.datetime.now(datetime.timezone.utc)
+                 - datetime.timedelta(hours=1)).isoformat()
         with tempfile.TemporaryDirectory() as td:
             cfg = {"publish": {
                        "page_id": "1048148471706586",
                        "youtube_token": _token_file(td, 1)},
                    "veo": {"balance_units": 680,
-                           "renews": "2026-12-13"}}
+                           "renews": "2026-12-13",
+                           "updated_at": fresh}}
             runner = lambda cmd, **kw: _fb_proc([_video_entry()])
             with mock.patch(
                     "lib.accounts.publish_lib.find_facebook_bin",
