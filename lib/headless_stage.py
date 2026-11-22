@@ -9,7 +9,8 @@
 - صور manifest["sequence"] مقاطع 5 ثوانٍ بقص صلب (بلا انتقالات،
   حتى تطابق مدة الفيديو مدة السرد بالتقريب كما في Concat).
 - السرد `narration-full.wav` مسارًا صوتيًا بمستوى 1.0 من الثانية 0.
-- العنوان (الهوك) نصًا أعلى الشاشة أول 4 ثوانٍ (مثل title_add).
+- العنوان (الهوك) نصًا أسفل الشاشة فوق العبارات أول 4 ثوانٍ
+  (موضع "above" — قاعدة دائمة 2026-11-22: لا نص أعلى أبدًا).
 - عبارات manifest["phrases"] نصوصًا أسفل الشاشة بأوقاتها
   (مثل captions_add).
 
@@ -84,7 +85,9 @@ def build_project(manifest, title, assets_dir, video_cfg):
             "text": title,
             "start": 0,
             "end": HOOK_DURATION_SECONDS,
-            "position": "top",
+            # "above" = أسفل الشاشة فوق الكابشن (قاعدة دائمة
+            # 2026-11-22: لا نص أعلى الشاشة أبدًا).
+            "position": "above",
             "fontsize": HOOK_FONTSIZE,
         })
     for p in manifest.get("phrases", []):
