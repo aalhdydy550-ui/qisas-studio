@@ -172,7 +172,9 @@ def build_demo_project(cfg, work_dir):
             "text": demo["hook"],
             "start": 0,
             "end": HOOK_DURATION_SECONDS,
-            "position": "top",
+            # "above" = أسفل الشاشة فوق الكابشن (قاعدة دائمة
+            # 2026-11-22: لا نص أعلى الشاشة أبدًا).
+            "position": "above",
             "fontsize": HOOK_FONTSIZE,
         })
     for ch in all_chunks:
