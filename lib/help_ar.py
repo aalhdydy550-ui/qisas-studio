@@ -7,8 +7,8 @@
 COMMANDS = [
     ("status", "فحص حالة الطبقات الثلاث (OmniRoute وOpenMontage وConcat)",
      "python3 studio.py status"),
-    ("doctor", "فحص بيئة studio كاملة (24 فحصًا) — PASS/FAIL صادق لكل فحص",
-     "python3 studio.py doctor"),
+    ("doctor", "فحص بيئة studio كاملة (24 فحصًا) — PASS/FAIL صادق لكل فحص — ومع --accounts فحوصات الحسابات (فيسبوك/يوتيوب/Veo) في قسم منفصل",
+     "python3 studio.py doctor --accounts"),
     ("init", "معالج إعداد تفاعلي — يسألك بالعربية ويكتب config.yaml + الكرونات المقترحة",
      "python3 studio.py init"),
     ("run", "خط الإنتاج الكامل: قصة ← فيديو عمودي 720×1280 جاهز للنشر",
@@ -35,6 +35,10 @@ COMMANDS = [
      "python3 studio.py run-queue --dry-run"),
     ("queue add", "إضافة قصة جديدة إلى ملف الطابور بسطر واحد",
      "python3 studio.py queue add --title \"قصة جديدة\" --text-file story.txt --parts 1"),
+    ("queue import", "استيراد قصة طويلة من ملف نصي — تقسيم لأجزاء 40–60 ثانية سردًا مع مواعيد مقترحة (9:00/19:00 بالتناوب)",
+     "python3 studio.py queue import --file story.txt --title \"قصة طويلة\" --start 2026-11-23"),
+    ("logs", "آخر التشغيلات من runs/ ونتائجها بالعربي (نُشر/فشل/ولماذا) — اليوم افتراضيًا، و--all لكل الأيام",
+     "python3 studio.py logs"),
     ("analyze", "تحليل آخر فيديو منشور بأرقام حقيقية (فيسبوك + يوتيوب) واقتراحات تحسين",
      "python3 studio.py analyze"),
     ("ideas", "مولّد أفكار قصص بأسلوب الصفحة (هوك صادم + عبرة + سؤال ختام) مع منع تكرار أي عنوان في الطابور — --add يضيف الفكرة للطابور",
@@ -49,14 +53,18 @@ COMMANDS = [
      "python3 studio.py update --dry-run"),
     ("backup", "نسخة احتياطية zip: الإعداد + الطابور + طلبات العملاء + سجلات التشغيل",
      "python3 studio.py backup"),
-    ("balance", "توقع رصيد Veo بالأيام: كم يوم يكفي + تاريخ النفاد + توصية — من الرصيد المسجَّل في الإعداد وليس حيًا من API",
-     "python3 studio.py balance"),
+    ("restore --backup", "استرجاع الإعداد والطابور وطلبات العملاء من نسخة backup — بنسخة أمان تلقائية من الحالة الحالية وتأكيد قبل الكتابة؛ والأسرار (توكن يوتيوب/client_secrets) لا تُستعاد أبدًا",
+     "python3 studio.py restore --backup backups/backup-20261122-084541.zip --dry-run"),
+    ("balance", "توقع رصيد Veo بالأيام: كم يوم يكفي + تاريخ النفاد + توصية — من الرصيد المسجَّل في الإعداد وليس حيًا من API — ومع --record N --video NAME تسجيل إنفاق فعلي بعد توليد Flow، و--history عرض السجل",
+     "python3 studio.py balance --record 120 --video \"عائشة ج2\" --clips 6"),
     ("analyze-ref", "تحليل فيديو مرجعي لمنافس (الهوك وسرعة السرد والختام) — للتعلم فقط",
      "python3 studio.py analyze-ref --url https://www.youtube.com/watch?v=..."),
-    ("publish", "نشر فيديو على فيسبوك (Reel) ويوتيوب معًا — أو --dry-run للمعاينة بلا نشر",
+    ("publish", "نشر فيديو على فيسبوك (Reel) ويوتيوب معًا — أو --dry-run للمعاينة بلا نشر — ويفحص الكابشن أولًا (يرفض أي بوابة متابعة/تعليق) ويعرض الكابشن النهائي قبل النشر",
      "python3 studio.py publish --video ~/workspace/videos/out.mp4 --title \"العنوان\" --dry-run"),
     ("check", "فحص جودة فيديو قبل النشر (المدة والصمت والصوت والمقاس والشعار) — PASS/FAIL",
      "python3 studio.py check --video ~/workspace/videos/out.mp4"),
+    ("preview", "صفحة معاينة HTML لفيديو قبل النشر (إطارات 25/50/75% + مستوى الصوت + فحص الجودة + الكابشن + أول تعليق)",
+     "python3 studio.py preview --video ~/workspace/videos/out.mp4 --caption \"...\""),
     ("youtube-auth", "تبادل OAuth ليوتيوب لمرة واحدة (يفتح المتصفح للموافقة)",
      "python3 studio.py youtube-auth"),
     ("client-run", "تنفيذ طلب فيديو عميل واحد من صفحة «طلب فيديو»",
@@ -88,7 +96,13 @@ def help_text():
         lines.append("")
     lines.append("ملاحظات:")
     lines.append("  - الراوي الافتراضي رجل (Piper Kareem)؛ والصوت الثاني "
-                 "الاختياري عبر --voice gtts في long-narration وlong-video.")
+                 "الاختياري عبر --voice gtts في long-narration وlong-video — "
+                 "والصوت الافتراضي نفسه يُضبط في معالج init "
+                 "(narration.voice في config.yaml).")
+    lines.append("  - النشر يفحص الكابشن أولًا (يرفض أي جملة تجعل الجزء "
+                 "التالي مشروطًا بالمتابعة أو التعليق) ويعرض الكابشن "
+                 "النهائي قبل النشر؛ وتجاوزه بـ --skip-caption-check "
+                 "فقط عند الضرورة.")
     lines.append("  - النشر يفحص جودة الفيديو أولًا تلقائيًا (المدة "
                  "والصمت والصوت والمقاس والشعار)؛ وتجاوزه بـ --skip-check "
                  "فقط عند الضرورة.")
