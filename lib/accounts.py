@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """فحوصات الحسابات — `studio.py doctor --accounts` (قراءة فقط).
 
-ثلاثة فحوصات منفصلة عن فحوصات البيئة الـ24، بعدّادها الخاص:
+خمسة فحوصات منفصلة عن فحوصات البيئة الـ24، بعدّادها الخاص:
 
 1. صفحة فيسبوك: معرّف الصفحة من الإعداد + قراءة آخر المنشورات
    عبر facebook-cli (نفس مسار `analyze` — قراءة فقط). أي تعذر
@@ -20,6 +20,11 @@
    (أكثر من 24 ساعة بلا تحديث — الجولة 6)؛ وعمر الرقم يُعرض
    دائمًا. رصيد بلا `updated_at` يُعرض «غير معروف العمر» مع
    تحذير صريح (الجولة 8)، وكذلك رصيد أقدم من 7 أيام.
+4. توكن TikTok (الجولة 9): فحص ملف فقط — مربوط/غير مربوط —
+   بلا أي شبكة وبلا أي محاولة رفع أو نشر. غيابه تحذير
+   (منصة إضافية اختيارية)، وتلفه خطأ.
+5. توكن Instagram (الجولة 9): مثل TikTok تمامًا — فحص ملف
+   فقط، بلا شبكة وبلا رفع أو نشر.
 
 لا يكتب شيئًا ولا ينشر شيئًا — قراءة ملفات واستدعاء قراءة واحد.
 """
@@ -30,6 +35,7 @@ import os
 from lib import analyze as analyze_lib
 from lib import balance as balance_lib
 from lib import publish as publish_lib
+from lib import social_publish as social_lib
 
 TESTING_TOKEN_DAYS = 7
 TOKEN_WARN_DAYS = 3
@@ -198,8 +204,52 @@ def check_veo_balance(cfg, today=None, now=None):
     return _check(name, True, "error", detail)
 
 
+def check_social_token(platform, studio_dir=None):
+    """توكن TikTok/Instagram: مربوط/غير مربوط — فحص ملف فقط
+    (الجولة 9 — v0.1.34).
+
+    بلا أي شبكة وبلا أي محاولة رفع أو نشر: الملف غائب يعني
+    «غير مربوط» (تحذير — المنصتان إضافيتان اختياريتان)؛ والملف
+    موجود بتوكن مقروء لا يقل عن حد الحفظ الأدنى يعني «مربوط»
+    (الصلاحية عبر الشبكة لا تُفحص هنا)؛ والملف موجود بلا توكن
+    مقروء/صالح يعني خطأً (ملف تالف). لا تُطبع قيمة التوكن أبدًا.
+    studio_dir: مجلد الاستوديو (للاختبار؛ الافتراضي: الحقيقي).
+    """
+    names = {"tiktok": "توكن TikTok",
+             "instagram": "توكن Instagram"}
+    name = names[platform]
+    path = social_lib.token_path(platform, studio_dir=studio_dir)
+    if not os.path.isfile(path):
+        return _check(
+            name, False, "warn",
+            "غير مربوط — لا يوجد ملف توكن (%s)" % os.path.basename(path),
+            "أكمل `studio.py %s-auth` مرة واحدة للربط" % platform)
+    token = social_lib.load_token(platform, studio_dir=studio_dir)
+    if (not token
+            or len(token.strip()) < social_lib.MIN_TOKEN_LENGTH):
+        return _check(
+            name, False, "error",
+            "ملف التوكن موجود لكنه تالف أو بلا توكن صالح: %s" % path,
+            "احذف الملف وأعد `studio.py %s-auth`" % platform)
+    return _check(
+        name, True, "error",
+        "مربوط (ملف توكن موجود — صلاحيته عبر الشبكة لم تُفحص)")
+
+
+def check_tiktok_token(studio_dir=None):
+    """توكن TikTok (فحص ملف فقط — بلا شبكة وبلا رفع)."""
+    return check_social_token("tiktok", studio_dir=studio_dir)
+
+
+def check_instagram_token(studio_dir=None):
+    """توكن Instagram (فحص ملف فقط — بلا شبكة وبلا رفع)."""
+    return check_social_token("instagram", studio_dir=studio_dir)
+
+
 def run_account_checks(cfg, runner=None, today=None, now=None):
-    """شغّل فحوصات الحسابات الثلاثة. يرجع قائمة قواميس doctor."""
+    """شغّل فحوصات الحسابات الخمسة. يرجع قائمة قواميس doctor."""
     return [check_facebook_page(cfg, runner=runner),
             check_youtube_token(cfg, today=today),
-            check_veo_balance(cfg, today=today, now=now)]
+            check_veo_balance(cfg, today=today, now=now),
+            check_tiktok_token(),
+            check_instagram_token()]
