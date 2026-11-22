@@ -25,6 +25,9 @@ __pycache__/
 .venv-youtube/
 .venv-gtts/
 queue/
+client-orders/
+backups/
+*.zip
 client_secrets*.json
 youtube-token.json
 whisper-test-results/
