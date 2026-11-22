@@ -98,6 +98,43 @@ def _words(text):
     return (text or "").split()
 
 
+# أرقام بداية الهوك تُكتب كلمات (قاعدة دائمة: الهوك لا يبدأ
+# برقم — خلل اتجاه ثنائي الاتجاه يجعل الرقم يقفز لآخر السطر).
+# 1–10 فقط؛ الأكبر يُترك للكاتب (لا تهجئة موثوقة فوق العشرة
+# بلا قواعد إعراب)، والصفر يُترك كما هو.
+_ARABIC_INDIC_DIGITS = "٠١٢٣٤٥٦٧٨٩"
+_HOOK_NUMBER_WORDS = {
+    1: "واحد", 2: "اثنان", 3: "ثلاثة", 4: "أربعة", 5: "خمسة",
+    6: "ستة", 7: "سبعة", 8: "ثمانية", 9: "تسعة", 10: "عشرة",
+}
+
+
+def normalize_hook(hook):
+    """أعد كتابة رقم بداية الهوك كلمات (1–10، غربي أو مشرقي).
+
+    «3 أخطاء…» → «ثلاثة أخطاء…»؛ و«٣ أخطاء» مثلها. يرجع الهوك
+    كما هو إن لم يبدأ برقم، أو كان الرقم صفرًا أو فوق 10.
+    """
+    hook = (hook or "").strip()
+    if not hook:
+        return hook
+    m = re.match(r"^([0-9٠-٩]+)[\s.\-–—:؛،,]*", hook)
+    if not m:
+        return hook
+    digits = "".join(
+        str(_ARABIC_INDIC_DIGITS.index(ch)) if ch in _ARABIC_INDIC_DIGITS
+        else ch for ch in m.group(1))
+    try:
+        number = int(digits)
+    except ValueError:
+        return hook
+    word = _HOOK_NUMBER_WORDS.get(number)
+    if word is None:
+        return hook
+    rest = hook[m.end():].strip()
+    return (word + " " + rest).strip() if rest else word
+
+
 def score_hook(hook, story_text=None):
     """سجّل هوكًا بجدول maquina 0–10. يرجع قاموسًا بالتفصيل.
 
@@ -148,7 +185,7 @@ def score_hook(hook, story_text=None):
         tail = " ".join(last_third)
         bd["payoff"] = 1 if any(
             w in tail for w in ("العبرة", "الدرس", "تعلم", "فهم",
-                                "عرف", "ندم", "تاب", "رجع")) else 0
+                                "عرف", "ندم", "تاب", "رجع", "حصد")) else 0
     else:
         bd["payoff"] = None
     # قائم بذاته 0–1
@@ -412,6 +449,133 @@ def build_verdict(hook_score, cuts, silence_ok, density,
         lines.append("المشاهدات الحقيقية: غير معروفة — انشر الفيديو "
                      "أولًا ثم أعد analyze --dna لمطابقته بأرقامه.")
     return lines
+
+
+def build_rebuild_proposal(report, story_text):
+    """اقتراح إعادة بناء فيديو جديد على نمط فيديو مرجعي.
+
+    تأخذ تقرير DNA (ناتج analyze_dna) ونص قصة عربية، وترجع
+    نصًا عربيًا من 4 أقسام: قالب الهوك المقترح (من نمط هوك
+    المرجع + تفصيل درجته)، وهدف إيقاع اللقطات (من متوسط طول
+    لقطة المرجع)، وتوجيه الصمت (من فجوات صمت المرجع)، وهدف
+    كثافة الكلمات. كل قسم برقم المرجع الحقيقي أو «غير مقاس»
+    إن غاب — لا أرقام مخترعة أبدًا.
+    """
+    report = report or {}
+    hook = report.get("hook") or {}
+    pacing = report.get("pacing") or {}
+    silence = report.get("silence") or {}
+    density = report.get("word_density") or {}
+    lines = ["== اقتراح إعادة بناء ==",
+             "المرجع: %s" % (report.get("video") or "غير معروف"),
+             ""]
+    # 1) قالب الهوك — من تفصيل درجة هوك المرجع.
+    lines.append("-- 1) قالب الهوك المقترح --")
+    bd = hook.get("breakdown") or {}
+    total = hook.get("total")
+    mx = hook.get("max")
+    if total is not None:
+        lines.append("هوك المرجع: «%s» — الدرجة %s/%s (%s)"
+                     % (hook.get("hook", "")[:80], total, mx,
+                        hook.get("verdict") or ""))
+        strong = []
+        if (bd.get("curiosity_gap") or 0) >= 2:
+            strong.append("فجوة فضول قوية (سؤال + تشويق)")
+        elif (bd.get("curiosity_gap") or 0) >= 1:
+            strong.append("فجوة فضول (تشويق بلا سؤال)")
+        if (bd.get("specific_fact") or 0) >= 1:
+            strong.append("حقيقة محددة (رقم/اسم)")
+        if (bd.get("conflict") or 0) >= 1:
+            strong.append("صراع/رأي قوي")
+        if bd.get("direct_entry"):
+            strong.append("دخول مباشر بلا تمهيد")
+        if bd.get("payoff"):
+            strong.append("عائد داخل المقطع")
+        if bd.get("self_contained"):
+            strong.append("قائم بذاته")
+        if total < 6:
+            lines.append("تنبيه: هوك المرجع نفسه ضعيف (أقل من 6) — "
+                         "القالب أدناه من أقوى عناصره فقط، لا من "
+                         "صيغته كاملة.")
+        if strong:
+            lines.append("أقوى عناصر هوك المرجع: %s."
+                         % "، ".join(strong))
+        else:
+            lines.append("هوك المرجع بلا عنصر قوي واحد — لا تُقلّد "
+                         "صيغته؛ ابنِ الهوك الجديد من الصفر.")
+        lines.append("القالب المقترح: «ليه [الشخص] [فعل صادم]؟ "
+                     "[حقيقة محددة] — [مفاجأة/صراع]»")
+        lines.append("مثال على القالب (من عناصر المرجع لا من نصه): "
+                     "سؤال يفتح فجوة فضول، ثم رقم أو اسم محدد، ثم "
+                     "كلمة صراع أو مفاجأة — في جملة واحدة ≤140 حرفًا "
+                     "بلا رقم في البداية.")
+    else:
+        lines.append("هوك المرجع: غير مقاس — لا قالب هوك من المرجع؛ "
+                     "استخدم جدول maquina (سؤال + حقيقة محددة + "
+                     "صراع) لبناء هوك جديد.")
+    # العائد داخل المقطع — من نص القصة الجديدة نفسها.
+    if story_text:
+        sents = [s.strip() for s in re.split(r"[.!؟\n]+", story_text)
+                 if s.strip()]
+        last_third = sents[len(sents) * 2 // 3:] if sents else []
+        tail = " ".join(last_third)
+        if any(w in tail for w in ("العبرة", "الدرس", "تعلم", "فهم",
+                                   "عرف", "ندم", "تاب", "رجع", "حصد")):
+            lines.append("نص القصة الجديدة: العبرة/الختام موجودة في "
+                         "آخر ثلث النص — معيار العائد محقق.")
+        else:
+            lines.append("نص القصة الجديدة: لا عبرة/ختام واضح في آخر "
+                         "ثلث النص — أضف العبرة في آخر ثلث ليُقاس "
+                         "معيار العائد.")
+    else:
+        lines.append("نص القصة غير متاح — معيار العائد غير مقاس.")
+    lines.append("")
+    # 2) هدف إيقاع اللقطات — من متوسط طول لقطة المرجع.
+    lines.append("-- 2) هدف إيقاع اللقطات --")
+    avg = pacing.get("avg_shot_seconds")
+    shots = pacing.get("shot_count")
+    duration = report.get("duration")
+    if avg is not None:
+        lines.append("متوسط لقطة المرجع: %.1f ثانية (%s لقطة في "
+                     "فيديو مدته %s ثانية) — استهدف نفس المتوسط "
+                     "في إعادة البناء (قطع كل ~%.1f ث)."
+                     % (avg, shots if shots is not None else "غير معروف",
+                        duration if duration is not None else "غير معروف",
+                        avg))
+    else:
+        lines.append("إيقاع المرجع: غير مقاس — لا هدف إيقاع رقمي؛ "
+                     "قس الإيقاع بـ analyze --dna على المرجع أولًا.")
+    lines.append("")
+    # 3) توجيه الصمت — من فجوات صمت المرجع.
+    lines.append("-- 3) توجيه الصمت --")
+    detail = silence.get("detail") or ""
+    ok = silence.get("ok")
+    if ok is True:
+        lines.append("المرجع بلا صمت مزعج عند الفواصل — حافظ على "
+                     "نفس المعالجة في إعادة البناء (لا صمت ≥1 ثانية "
+                     "عند الفاصل).")
+        if detail and "غير مقاس" not in detail:
+            lines.append("  تفصيل المرجع: %s" % detail)
+    elif ok is False:
+        lines.append("المرجع فيه فجوات صمت عند الفواصل — أصلحها في "
+                     "إعادة البناء بـ fix-audio قبل النشر.")
+        if detail:
+            lines.append("  تفصيل المرجع: %s" % detail)
+    else:
+        lines.append("صمت المرجع: غير مقاس — لا توجيه صمت رقمي؛ "
+                     "افحص الصمت بـ check قبل النشر.")
+    lines.append("")
+    # 4) هدف كثافة الكلمات — من كثافة سرد المرجع.
+    lines.append("-- 4) هدف كثافة الكلمات --")
+    wpm = density.get("wpm")
+    if wpm is not None:
+        lines.append("كثافة سرد المرجع: %.0f كلمة/دقيقة (%d كلمة) — "
+                     "استهدف نفس الكثافة في إعادة البناء."
+                     % (wpm, density.get("words") or 0))
+    else:
+        lines.append("كثافة سرد المرجع: غير مقاسة (لا ملفات ASS "
+                     "متاحة) — لا هدف كثافة رقمي.")
+    return "\n".join(lines) + "\n"
 
 
 def format_report(dna):
