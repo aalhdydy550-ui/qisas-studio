@@ -192,6 +192,12 @@ class TestRetry(unittest.TestCase):
             def __init__(self, data):
                 self._data = data
 
+            def geturl(self):
+                # A real HTTPResponse always carries the final URL; the
+                # round-4 host allowlist in _http_get reads it.
+                return ("https://api.github.com/repos/o/r/git/trees/"
+                        "main?recursive=1")
+
             def read(self):
                 return self._data
 
