@@ -90,6 +90,16 @@ def add_story(queue_path, title, text, parts=1, note=None,
     title = _norm_title(title)
     if not title:
         raise QueueError("عنوان القصة فارغ")
+    # إصلاح اختبار اختراق 2026-11-22 (M3): `*` في العنوان كان
+    # يكسر تحليل `**...**` (عنوان فيه `** — ` يُقرأ عنوانًا
+    # مقطوعًا فيتجاوز منع التكرار) — يُرفض صراحةً.
+    if "*" in title:
+        raise QueueError("عنوان القصة لا يجوز أن يحوي `*`: %s" % title)
+    # إصلاح اختبار اختراق 2026-11-22 (L12): `parts=True` كان
+    # يُقبل كـ1 لأن bool صنف فرعي من int — يُرفض صراحةً.
+    if isinstance(parts, bool):
+        raise QueueError("عدد الأجزاء يجب أن يكون عددًا صحيحًا (وصل: %s)"
+                         % parts)
     if not text or not text.strip():
         raise QueueError("نص القصة فارغ")
     if not isinstance(parts, int) or parts < 1:
@@ -128,12 +138,20 @@ def _add_story_locked(queue_path, title, text, parts, note,
         text_file = os.path.join(stories_dir, name)
         with open(text_file, "w", encoding="utf-8") as f:
             f.write(text.strip() + "\n")
+        # إصلاح اختبار اختراق 2026-11-22 (L7): نص القصة حساس —
+        # 600 صراحةً بدل الاعتماد على umask.
+        os.chmod(text_file, 0o600)
     if parts == 1:
         parts_note = "منشور واحد"
     else:
         parts_note = "يحتاج %d أجزاء" % parts
     if note:
-        parts_note = "%s — %s" % (parts_note, note.strip())
+        # إصلاح اختبار اختراق 2026-11-22 (M2): سطر جديد في
+        # الملاحظة كان يحقن سطر انتظار وهميًا ويختطف الترقيم —
+        # تُطوى كل المسافات البيضاء (سطور/تبويبات) إلى مسافة واحدة
+        # فيبقى الإدخال سطرًا واحدًا دائمًا.
+        note = re.sub(r"\s+", " ", note.strip())
+        parts_note = "%s — %s" % (parts_note, note)
     if text_file:
         parts_note += " (النص: queue/%s)" % os.path.basename(text_file)
     new_line = "%d. **%s** — %s" % (number, title, parts_note)
@@ -163,6 +181,9 @@ def _write_atomic(path, text):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
+        # إصلاح اختبار اختراق 2026-11-22 (L7): ملف الطابور
+        # حساس — 600 صراحةً بدل الاعتماد على umask.
+        os.chmod(tmp, 0o600)
         os.replace(tmp, path)
     except BaseException:
         try:
