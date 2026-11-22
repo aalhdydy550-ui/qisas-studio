@@ -210,5 +210,31 @@ class TestCheckRules(unittest.TestCase):
             [("3.0ث", 100), ("20.0ث", 200)])[0])
 
 
+class TestSampleVideo(unittest.TestCase):
+    """عيّنة سلوكية في check — جولة v0.1.37 (مقترح tinker رقم 6)."""
+
+    def test_sample_creates_frames_and_preview(self):
+        with tempfile.TemporaryDirectory() as td:
+            video = os.path.join(td, "v.mp4")
+            _make_video(video, duration=12)
+            out_dir = os.path.join(td, "samples", "v")
+            sample = check_lib.sample_video(video, out_dir)
+            self.assertEqual(len(sample["frames"]), 3)
+            for frame in sample["frames"]:
+                self.assertTrue(os.path.isfile(frame), frame)
+                self.assertGreater(os.path.getsize(frame), 0)
+            self.assertTrue(os.path.isfile(sample["preview"]))
+            # المعاينة 3 ثوانٍ فعلًا.
+            info = check_lib.probe(sample["preview"])
+            self.assertAlmostEqual(info["duration"], 3.0, delta=0.5)
+
+    def test_sample_missing_video_raises(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(check_lib.CheckError):
+                check_lib.sample_video(os.path.join(td, "nope.mp4"),
+                                       os.path.join(td, "out"))
+
+
+
 if __name__ == "__main__":
     unittest.main()
