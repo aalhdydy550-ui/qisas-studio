@@ -107,13 +107,15 @@ class TestYoutubeToken(unittest.TestCase):
         self.assertTrue(c["ok"])
         self.assertIn("6 أيام", c["detail"])
 
-    def test_token_with_two_days_left_warns(self):
+    def test_token_with_two_days_left_is_error(self):
+        # الجولة 6: يومان أو أقل = خطأ لا تنبيهًا — أعد الموافقة
+        # فورًا (كان «warn» في الجولة 5؛ غيّره القرار الجديد).
         with tempfile.TemporaryDirectory() as td:
             cfg = {"publish": {"youtube_token": _token_file(td, 5)}}
             c = accounts.check_youtube_token(cfg, today=TODAY)
         self.assertFalse(c["ok"])
-        self.assertEqual(c["level"], "warn")
-        self.assertIn("2 أيام", c["detail"])
+        self.assertEqual(c["level"], "error")
+        self.assertIn("2 يومين", c["detail"])
 
     def test_expired_token_is_error(self):
         with tempfile.TemporaryDirectory() as td:
