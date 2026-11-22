@@ -187,8 +187,52 @@ class TestVeoBalance(unittest.TestCase):
         self.assertEqual(c["level"], "error")
 
 
+class TestSocialTokens(unittest.TestCase):
+    """فحصا توكن TikTok/Instagram (الجولة 9): ملف فقط — بلا
+    شبكة وبلا رفع أو نشر. كل الكتابة في مجلد مؤقت."""
+
+    def test_missing_token_is_unlinked_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            c = accounts.check_tiktok_token(studio_dir=td)
+        self.assertFalse(c["ok"])
+        self.assertEqual(c["level"], "warn")
+        self.assertIn("غير مربوط", c["detail"])
+        with tempfile.TemporaryDirectory() as td:
+            c = accounts.check_instagram_token(studio_dir=td)
+        self.assertFalse(c["ok"])
+        self.assertEqual(c["level"], "warn")
+
+    def test_saved_token_is_linked(self):
+        from lib import social_publish as social_lib
+        with tempfile.TemporaryDirectory() as td:
+            social_lib.save_token("tiktok", "x" * 20, studio_dir=td)
+            c = accounts.check_tiktok_token(studio_dir=td)
+        self.assertTrue(c["ok"])
+        self.assertIn("مربوط", c["detail"])
+        with tempfile.TemporaryDirectory() as td:
+            social_lib.save_token("instagram", "y" * 20, studio_dir=td)
+            c = accounts.check_instagram_token(studio_dir=td)
+        self.assertTrue(c["ok"])
+
+    def test_corrupt_token_file_is_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            Path(os.path.join(td, "tiktok-token.json")).write_text(
+                "{not json", encoding="utf-8")
+            c = accounts.check_tiktok_token(studio_dir=td)
+        self.assertFalse(c["ok"])
+        self.assertEqual(c["level"], "error")
+
+    def test_short_token_is_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            Path(os.path.join(td, "instagram-token.json")).write_text(
+                json.dumps({"token": "short"}), encoding="utf-8")
+            c = accounts.check_instagram_token(studio_dir=td)
+        self.assertFalse(c["ok"])
+        self.assertEqual(c["level"], "error")
+
+
 class TestRunAccountChecks(unittest.TestCase):
-    def test_returns_three_checks(self):
+    def test_returns_five_checks(self):
         fresh = (datetime.datetime.now(datetime.timezone.utc)
                  - datetime.timedelta(hours=1)).isoformat()
         with tempfile.TemporaryDirectory() as td:
@@ -204,8 +248,11 @@ class TestRunAccountChecks(unittest.TestCase):
                     return_value="facebook-cli"):
                 checks = accounts.run_account_checks(
                     cfg, runner=runner, today=TODAY)
-        self.assertEqual(len(checks), 3)
-        self.assertTrue(all(c["ok"] for c in checks))
+        self.assertEqual(len(checks), 5)
+        names = [c["name"] for c in checks]
+        self.assertIn("توكن TikTok", names)
+        self.assertIn("توكن Instagram", names)
+        self.assertTrue(all(c["ok"] for c in checks[:3]))
 
 
 if __name__ == "__main__":
