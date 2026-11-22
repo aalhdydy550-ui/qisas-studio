@@ -7,9 +7,9 @@
 COMMANDS = [
     ("status", "فحص حالة الطبقات الثلاث (OmniRoute وOpenMontage وConcat)",
      "python3 studio.py status"),
-    ("doctor", "فحص بيئة studio كاملة (24 فحصًا) — PASS/FAIL صادق لكل فحص — ومع --accounts فحوصات الحسابات (فيسبوك/يوتيوب/Veo) في قسم منفصل",
+    ("doctor", "فحص بيئة studio كاملة (24 فحصًا) — PASS/FAIL صادق لكل فحص — ومع --accounts فحوصات الحسابات (فيسبوك/يوتيوب/Veo) في قسم منفصل؛ وتوكن يوتيوب بقي له يومان أو أقل = خطأ يطلب إعادة الموافقة فورًا عبر youtube-reauth",
      "python3 studio.py doctor --accounts"),
-    ("init", "معالج إعداد تفاعلي — يسألك بالعربية ويكتب config.yaml + الكرونات المقترحة",
+    ("init", "معالج إعداد تفاعلي موجَّه — يفحص كل حساب خطوة بخطوة (فيسبوك/يوتيوب/صوت الراوي) وينجز ما يمكن أتمتته ويعرض الباقي كخطوة واحدة واضحة؛ ويسأل عن الهوية والدفع (اسم الصفحة وملف الشعار PNG ورقم فودافون كاش) ويكتب config.yaml + الكرونات المقترحة",
      "python3 studio.py init"),
     ("run", "خط الإنتاج الكامل: قصة ← فيديو عمودي 720×1280 جاهز للنشر",
      "python3 studio.py run --story anza --project anza-part1 --out ~/workspace/videos/out.mp4"),
@@ -51,26 +51,36 @@ COMMANDS = [
      "python3 studio.py ab-results"),
     ("update", "جلب آخر إصدار من GitHub وتطبيق الملفات المتغيرة فقط، مع نسخة احتياطية أولًا — config.yaml والأسرار والطابور وبيانات العملاء لا تُمسّ أبدًا",
      "python3 studio.py update --dry-run"),
-    ("backup", "نسخة احتياطية zip: الإعداد + الطابور + طلبات العملاء + سجلات التشغيل",
-     "python3 studio.py backup"),
+    ("backup", "نسخة احتياطية zip: الإعداد + الطابور + طلبات العملاء + سجلات التشغيل — مع احتفاظ بآخر 7 نسخ فقط (الأقدم تُحذف تلقائيًا)، وكرون يومي تلقائي للنسخ يُبلَّغ فقط عند الفشل",
+     "python3 studio.py backup --keep 7"),
     ("restore --backup", "استرجاع الإعداد والطابور وطلبات العملاء من نسخة backup — بنسخة أمان تلقائية من الحالة الحالية وتأكيد قبل الكتابة؛ والأسرار (توكن يوتيوب/client_secrets) لا تُستعاد أبدًا",
      "python3 studio.py restore --backup backups/backup-20261122-084541.zip --dry-run"),
-    ("balance", "توقع رصيد Veo بالأيام: كم يوم يكفي + تاريخ النفاد + توصية — من الرصيد المسجَّل في الإعداد وليس حيًا من API — ومع --record N --video NAME تسجيل إنفاق فعلي بعد توليد Flow، و--history عرض السجل",
+    ("balance", "توقع رصيد Veo بالأيام: كم يوم يكفي + تاريخ النفاد + توصية — من الرصيد المسجَّل في الإعداد وليس حيًا من API — ويُعرض عمر الرقم دائمًا بجانب القيمة، ورصيد أقدم من 24 ساعة يُحذَّر منه؛ ومع --record N --video NAME تسجيل إنفاق فعلي بعد توليد Flow (يسجَّل معه وقت التحديث)، و--history عرض السجل",
      "python3 studio.py balance --record 120 --video \"عائشة ج2\" --clips 6"),
     ("analyze-ref", "تحليل فيديو مرجعي لمنافس (الهوك وسرعة السرد والختام) — للتعلم فقط",
      "python3 studio.py analyze-ref --url https://www.youtube.com/watch?v=..."),
-    ("publish", "نشر فيديو على فيسبوك (Reel) ويوتيوب معًا — أو --dry-run للمعاينة بلا نشر — ويفحص الكابشن أولًا (يرفض أي بوابة متابعة/تعليق) ويعرض الكابشن النهائي قبل النشر",
-     "python3 studio.py publish --video ~/workspace/videos/out.mp4 --title \"العنوان\" --dry-run"),
-    ("check", "فحص جودة فيديو قبل النشر (المدة والصمت والصوت والمقاس والشعار) — PASS/FAIL",
+    ("publish", "نشر فيديو على فيسبوك (Reel) ويوتيوب معًا — أو --dry-run للمعاينة بلا نشر — ويفحص الكابشن أولًا (يرفض أي بوابة متابعة/تعليق) ويعرض الكابشن النهائي قبل النشر؛ ومع --schedule \"YYYY-MM-DD HH:MM\" (بتوقيت القاهرة) يجدول النشر على المنصتين بدل الفوري",
+     "python3 studio.py publish --video ~/workspace/videos/out.mp4 --title \"العنوان\" --schedule \"2026-11-23 19:00\" --dry-run"),
+    ("check", "فحص جودة فيديو قبل النشر (المدة والصمت والصوت والمقاس والشعار) — PASS/FAIL؛ وإن فشل الصمت فالإصلاح بأمر fix-audio",
      "python3 studio.py check --video ~/workspace/videos/out.mp4"),
+    ("fix-audio", "إصلاح فجوات الصمت في فيديو تلقائيًا (وصفة عائشة ج2: مزج صوت المشاهد الأصلي مكبَّرًا ليستقر ~-28 ديسيبل + ضجيج وردي خافت 0.05 تحت السرد) — المدة والنص والإيقاع بلا تغيير؛ ويُستدعى تلقائيًا في assemble عند فشل فحص الصمت",
+     "python3 studio.py fix-audio --video ~/workspace/videos/out.mp4"),
     ("preview", "صفحة معاينة HTML لفيديو قبل النشر (إطارات 25/50/75% + مستوى الصوت + فحص الجودة + الكابشن + أول تعليق)",
      "python3 studio.py preview --video ~/workspace/videos/out.mp4 --caption \"...\""),
     ("youtube-auth", "تبادل OAuth ليوتيوب لمرة واحدة (يفتح المتصفح للموافقة)",
      "python3 studio.py youtube-auth"),
+    ("youtube-reauth", "إعادة الموافقة على يوتيوب (نفس تبادل OAuth في youtube-auth) — يُستخدم عندما يقترب توكن الاختبار من الانتهاء؛ وdoctor --accounts يحذّر عند ≤3 أيام ويخطئ عند ≤يومين",
+     "python3 studio.py youtube-reauth"),
     ("client-run", "تنفيذ طلب فيديو عميل واحد من صفحة «طلب فيديو»",
      "python3 studio.py client-run --order QS-123456"),
     ("process-queue", "تنفيذ كل طلبات العملاء الجديدة دفعة واحدة",
      "python3 studio.py process-queue"),
+    ("orders confirm", "تأكيد دفع طلب عميل بعد التحقق من التحويل يدويًا — الطلب الـ11 فصاعدًا لنفس العميل (برقم الواتساب) لا يُنتَج إلا بعدها؛ وأول 10 طلبات لكل عميل تجربة مجانية",
+     "python3 studio.py orders confirm QS-123456"),
+    ("orders trial", "حالة التجربة المجانية لعميل: كم فيديو مجاني بقي له من أول 10 طلبات",
+     "python3 studio.py orders trial 01023468196"),
+    ("orders list", "عرض طلبات العملاء — اختياريًا بحالة معينة (مثال awaiting_payment لقائمة انتظار الدفع)",
+     "python3 studio.py orders list --status awaiting_payment"),
     ("whisper-ass", "كابشنات ASS من faster-whisper (تجريبي — راجع WHISPER-TEST.md)",
      "python3 studio.py whisper-ass --audio narration.wav --out captions.ass"),
     ("karaoke-ass", "كابشنات كاريوكي كلمة-بكلمة من الصوت",
@@ -106,6 +116,9 @@ def help_text():
     lines.append("  - النشر يفحص جودة الفيديو أولًا تلقائيًا (المدة "
                  "والصمت والصوت والمقاس والشعار)؛ وتجاوزه بـ --skip-check "
                  "فقط عند الضرورة.")
+    lines.append("  - عند أي فشل (ffmpeg أو OpenMontage أو فيسبوك أو "
+                 "يوتيوب أو ملف مفقود) يظهر شرح بالعربي: ماذا حدث وماذا "
+                 "تفعل — لا رسالة تقنية خام.")
     lines.append("  - كل فيديو يُنشر مدته 40–60 ثانية؛ والفيديو الطويل "
                  "8–12 دقيقة أفقي ليوتيوب فقط.")
     lines.append("  - للفحص الكامل: python3 studio.py doctor")
