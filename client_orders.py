@@ -82,22 +82,44 @@ def load_orders():
     إصلاح اختبار اختراق 2026-11-21: سطر JSON تالف كان يرفع
     JSONDecodeError فيمنع قراءة كل الطلبات الصالحة. السطور التالفة
     تُتخطى وتُنقل إلى orders.bad.jsonl مع تحذير برقم السطر.
+    إصلاح اختبار اختراق 2026-11-22 (M6): سطر JSON صالح لكنه ليس
+    كائنًا (`[1,2]` أو `"x"` أو `123`) كان يُسمّم الطابور —
+    `o.get` بعده يرفع AttributeError فيعطّل كل الطلبات؛
+    يُعامل كسطر تالف ويُنقل إلى .bad.
+    إصلاح اختبار اختراق 2026-11-22 (L9): .bad كان يتضخم عند كل
+    قراءة لأن نفس السطر التالف يُلحق مرة أخرى في كل مرة —
+    السطور الموجودة فيه أصلًا لا تُلحق مجددًا.
     """
     orders = []
     if not os.path.isfile(ORDERS_FILE):
         return orders
     bad_path = ORDERS_FILE + ".bad"
+    bad_seen = set()
+    if os.path.isfile(bad_path):
+        with open(bad_path, encoding="utf-8") as bad_f:
+            bad_seen = {line.rstrip("\n") for line in bad_f}
+
+    def _record_bad(line, n):
+        print("تحذير: سطر تالف %d في %s — يُتخطى" % (n, ORDERS_FILE))
+        if line not in bad_seen:
+            bad_seen.add(line)
+            with open(bad_path, "a", encoding="utf-8") as bad:
+                bad.write(line + "\n")
+
     with open(ORDERS_FILE, encoding="utf-8") as f:
         for n, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
             try:
-                orders.append(json.loads(line))
+                obj = json.loads(line)
             except ValueError:
-                print("تحذير: سطر تالف %d في %s — يُتخطى" % (n, ORDERS_FILE))
-                with open(bad_path, "a", encoding="utf-8") as bad:
-                    bad.write(line + "\n")
+                _record_bad(line, n)
+                continue
+            if not isinstance(obj, dict):
+                _record_bad(line, n)
+                continue
+            orders.append(obj)
     return orders
 
 
@@ -116,6 +138,9 @@ def save_orders(orders):
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             for o in orders:
                 f.write(json.dumps(o, ensure_ascii=False) + "\n")
+        # إصلاح اختبار اختراق 2026-11-22 (L7): طابور الطلبات
+        # حساس — 600 صراحةً بدل الاعتماد على umask.
+        os.chmod(tmp, 0o600)
         os.replace(tmp, ORDERS_FILE)
     except BaseException:
         if os.path.exists(tmp):
@@ -444,10 +469,20 @@ def _wikimedia_search(query, limit=6):
             "original_url": info.get("descriptionurl") or info.get("url"),
             "width": info.get("width"),
         })
-    return [o for o in out if o["url"]]
+    # إصلاح اختبار اختراق 2026-11-22 (L13): لا يُعاد إلا رابط
+    # من مضيف الصور المسموح — أي مضيف آخر يُستبعد قبل التنزيل.
+    return [o for o in out if o["url"] and
+            (urllib.parse.urlparse(o["url"]).hostname or "").casefold()
+            == "upload.wikimedia.org"]
 
 
 def _wikimedia_download(url, dest):
+    # إصلاح اختبار اختراق 2026-11-22 (L13): التنزيل بلا قائمة
+    # مضيفين كان يقبل أي مضيف يأتي من رد API — المسموح فقط
+    # upload.wikimedia.org (مضيف صور Wikimedia نفسه).
+    host = (urllib.parse.urlparse(url or "").hostname or "").casefold()
+    if host != "upload.wikimedia.org":
+        raise ClientOrderError("مضيف صورة غير مسموح: %s" % url)
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=60) as resp:
         data = resp.read()
