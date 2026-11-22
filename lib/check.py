@@ -26,6 +26,8 @@ import re
 import subprocess
 import tempfile
 
+from lib import errors as errors_lib
+
 SILENCE_NOISE_DB = -40
 SILENCE_MIN_SECONDS = 1.0
 # الفيديو الطويل: بطاقات عناوين الفصول حتى 3 ثوانٍ، فلا يُرفض
@@ -69,8 +71,13 @@ def probe(path):
     proc = _run(["ffprobe", "-v", "error", "-show_format",
                  "-show_streams", "-of", "json", path], timeout=30)
     if proc.returncode != 0:
-        raise CheckError("تعذر قراءة الفيديو عبر ffprobe: %s"
-                         % (proc.stderr or "").strip()[-300:])
+        raw = (proc.stderr or "").strip()[-300:]
+        msg = "تعذر قراءة الفيديو عبر ffprobe: %s" % raw
+        if raw:
+            # stderr الخام من ffprobe إنجليزي غالبًا — ألحق
+            # ترجمته العربية (lib.errors) دون حذف الأصل.
+            msg += "\n" + errors_lib.explain_error_text(raw, "ffmpeg")
+        raise CheckError(msg)
     try:
         data = json.loads(proc.stdout or "{}")
     except ValueError:
