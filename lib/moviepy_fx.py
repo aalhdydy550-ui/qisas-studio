@@ -138,7 +138,11 @@ def ken_burns_clip(image_path, duration, zoom_to=1.15,
 
 def animated_text_clip(text, duration, fontsize=58, position="bottom",
                        font_path=ARABIC_FONT, fade=0.5):
-    """مقطع نص عربي متحرك (ظهور/اختفاء تدريجي) — أسفل أو أعلى الشاشة.
+    """مقطع نص عربي متحرك (ظهور/اختفاء تدريجي) — أسفل الشاشة دائمًا.
+
+    قاعدة دائمة 2026-11-22: لا نص أعلى الشاشة أبدًا — أي موضع
+    غير "bottom" (ومنها "top" القديم) يُعاد توجيهه إلى الأسفل
+    (y=0.78) بدل رفضه، حتى لا يكسر متصلًا قديمًا بصمت.
 
     النص يُرسم بـPillow (direction=rtl) ثم يُمرَّر كـImageClip —
     لا TextClip (لا يشكّل العربية).
@@ -148,7 +152,7 @@ def animated_text_clip(text, duration, fontsize=58, position="bottom",
     img = render_arabic_text_image(text, fontsize=fontsize,
                                    font_path=font_path)
     clip = ImageClip(np.array(img), transparent=True)
-    y = 0.78 if position == "bottom" else 0.06
+    y = 0.78  # أسفل الشاشة دائمًا (انظر القاعدة أعلاه)
     clip = clip.with_position(("center", y), relative=True)
     clip = clip.with_duration(duration)
     try:
