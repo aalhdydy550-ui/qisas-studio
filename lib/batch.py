@@ -140,21 +140,59 @@ def plan_batch(cfg, count, source="openmontage", ready_fn=None,
     }
 
 
+def required_units_line(plan):
+    """سطر «الرصيد المطلوب» الصريح (الجولة 9 — v0.1.34).
+
+    للمصدر veo: إجمالي الدفعة المطلوب مقابل الرصيد المسجَّل
+    مع حكم صريح (ضمن الرصيد/يتجاوز الرصيد)؛ ولـ openmontage:
+    0 وحدة صراحةً (بلا رصيد). كان format_plan يطبع الرصيد
+    والسقف والمجموع في سطر مدمج واحد لمصدر veo فقط، ولا شيء
+    إطلاقًا لمصدر openmontage — فلوحة التحكم تعرض الخطة
+    حرفيًا كانت تبقى بلا هذين السطرين.
+    """
+    if plan["source"] == "openmontage":
+        return "الرصيد المطلوب: 0 وحدة (OpenMontage بلا رصيد)"
+    total = plan.get("total_expected_units") or 0
+    balance = plan.get("balance_units")
+    if balance is None:
+        return ("الرصيد المطلوب: %d وحدة "
+                "(الرصيد المسجَّل: غير مسجَّل)" % total)
+    verdict = ("ضمن الرصيد" if total <= balance
+               else "يتجاوز الرصيد")
+    return ("الرصيد المطلوب: %d وحدة (الرصيد المسجَّل: %d وحدة "
+            "— %s)" % (total, balance, verdict))
+
+
+def cap_status_line(plan):
+    """سطر «حالة السقف» الصريح (الجولة 9 — v0.1.34).
+
+    للمصدر veo: حكم صريح على المتوقع للفيديو مقابل السقف
+    (ضمن السقف/يتجاوز السقف/بلا سقف مضبوط)؛ ولـ openmontage:
+    لا ينطبق صراحةً. السقف لكل فيديو (لا للدفعة كلها) —
+    فالحكم يقيس المتوقع للفيديو الواحد.
+    """
+    if plan["source"] == "openmontage":
+        return "حالة السقف: لا ينطبق (OpenMontage بلا رصيد ولا سقف)"
+    cap = plan.get("cap_units")
+    per_video = plan.get("expected_units_per_video") or 0
+    if cap is None:
+        return ("حالة السقف: بلا سقف مضبوط (المتوقع للفيديو %d "
+                "وحدة — يُفحص الرصيد فقط)" % per_video)
+    if per_video > cap:
+        return ("حالة السقف: يتجاوز السقف (المتوقع للفيديو %d "
+                "وحدة > سقف %d وحدة)" % (per_video, cap))
+    return ("حالة السقف: ضمن السقف (المتوقع للفيديو %d وحدة "
+            "≤ سقف %d وحدة)" % (per_video, cap))
+
+
 def format_plan(plan):
     """نص عربي للخطة (وضع تجريبي)."""
     lines = ["== خطة الدفعة — %d قصص (المصدر: %s) =="
              % (plan["count"],
                 "Veo (في Google Flow)" if plan["source"] == "veo"
-                else "OpenMontage (بلا رصيد)")]
-    if plan["source"] == "veo":
-        lines.append("الرصيد المسجَّل: %s وحدة — السقف: %s — المتوقع "
-                     "للفيديو: %d وحدة"
-                     % (plan["balance_units"],
-                        ("%d وحدة" % plan["cap_units"])
-                        if plan["cap_units"] is not None else "بلا سقف",
-                        plan["expected_units_per_video"]))
-        lines.append("المجموع المتوقع للدفعة: %d وحدة"
-                     % plan["total_expected_units"])
+                else "OpenMontage (بلا رصيد)"),
+             required_units_line(plan),
+             cap_status_line(plan)]
     lines.append("")
     for s in plan["stories"]:
         if not s["ready"]:
