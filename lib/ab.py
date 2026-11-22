@@ -60,11 +60,14 @@ def suggest_hooks(title, chat_fn=None):
 
 
 def create_ab(video, hook_a, hook_b, out_dir, title=None,
-              thumbnail_fn=None, duration_fn=None):
+              thumbnail_fn=None, duration_fn=None, cost_per_video=0):
     """ولّد مصغرتين (أ عند 35% من المدة، ب عند 65%) وسجّل
     الزوج في ab-<وقت>.json داخل out_dir. يرجع السجل.
     thumbnail_fn(video, hook, out, at_seconds) -> مسار؛
-    duration_fn(video) -> المدة بالثواني."""
+    duration_fn(video) -> المدة بالثواني.
+    cost_per_video: تقدير وحدات Veo لإنتاج كل بديل من جديد
+    (الافتراضي 0 — نفس الفيديو، هوك+مصغرة فقط بلا توليد جديد؛
+    وتوليد جديد كامل = 120 وحدة: 6 مقاطع × 20)."""
     video = os.path.abspath(os.path.expanduser(video))
     if not os.path.isfile(video):
         raise ValueError("ملف الفيديو غير موجود: %s" % video)
@@ -81,6 +84,11 @@ def create_ab(video, hook_a, hook_b, out_dir, title=None,
     if hook_a == hook_b:
         raise ValueError("الهوكان متطابقان — اختبار A/B يحتاج "
                          "هوكين مختلفين")
+    if isinstance(cost_per_video, bool) \
+            or not isinstance(cost_per_video, int) \
+            or cost_per_video < 0:
+        raise ValueError("تقدير تكلفة البديل يجب أن يكون عددًا صحيحًا "
+                         "≥ 0 (وصل: %s)" % (cost_per_video,))
     duration_fn = duration_fn or thumbnail.video_duration
     thumbnail_fn = thumbnail_fn or thumbnail.make_thumbnail
     duration = duration_fn(video)
@@ -104,6 +112,15 @@ def create_ab(video, hook_a, hook_b, out_dir, title=None,
         "thumb_b": thumb_b,
         "publish_title_a": hook_a,
         "publish_title_b": hook_b,
+        "cost_estimate_units": {
+            "variant_a": cost_per_video,
+            "variant_b": cost_per_video,
+            "total": 2 * cost_per_video,
+            "note": ("نفس الفيديو — هوك ومصغرة فقط بلا توليد جديد"
+                     if cost_per_video == 0
+                     else "تقدير توليد كل بديل من جديد "
+                          "(6 مقاطع Veo × 20 وحدة)"),
+        },
         "note": AB_NOTE,
     }
     record_path = os.path.join(ab_dir, "ab-%s.json" % ts)
@@ -240,6 +257,14 @@ def format_comparison(record, comparison):
                         analyze.format_value(v["youtube_views"]),
                         analyze.format_value(v["total_views"])))
     lines.append("")
+    cost = record.get("cost_estimate_units") or {}
+    if cost:
+        lines.append("تقدير التكلفة (وحدات Veo): أ %s — ب %s — المجموع %s"
+                     % (cost.get("variant_a"), cost.get("variant_b"),
+                        cost.get("total")))
+        if cost.get("note"):
+            lines.append("  %s" % cost["note"])
+        lines.append("")
     if not comparison["decisive"]:
         lines.append("النتيجة: غير حاسمة بعد — انشر النسختين "
                      "وانتظر مشاهداتهما.")
