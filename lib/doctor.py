@@ -15,6 +15,8 @@ import os
 import shutil
 import subprocess
 import sys
+
+from lib import queue_check
 import urllib.request
 
 from lib import long_narration
@@ -159,6 +161,57 @@ def _writable_dir_check(path, name):
                 "fix": "أصلح صلاحيات المجلد"}
 
 
+def _protect_check(cfg=None):
+    """حماية المشروع — مسح أسرار + .gitignore + نسخة احتياطية
+    (المجموعة السريعة من `protect`، بلا عمليات خارجية).
+    الفحص الكامل (سلامة + صلاحيات) بأمر `protect`."""
+    from lib import protect as protect_lib
+    results = protect_lib.run_fast_checks()
+    fails = [r for r in results
+             if r["ok"] is False and r["level"] == "error"]
+    warns = [r for r in results if r["ok"] is False]
+    detail = "؛ ".join(r["detail"] for r in results)
+    if fails:
+        return {"name": "حماية المشروع (protect)", "ok": False,
+                "level": "error", "detail": detail[:300],
+                "fix": "شغّل `python3 studio.py protect` للتفاصيل"}
+    if warns:
+        return {"name": "حماية المشروع (protect)", "ok": False,
+                "level": "warn", "detail": detail[:300],
+                "fix": "شغّل `python3 studio.py protect` للتفاصيل"}
+    return {"name": "حماية المشروع (protect)", "ok": True,
+            "level": "ok", "detail": detail[:300], "fix": ""}
+
+
+def _queue_check(cfg=None):
+    """بنية ملف الطابور (جولة v0.1.37) — خطأ إن معطوب،
+    تحذير إن غاب الملف (تثبيت جديد بلا طابور بعد)."""
+    queue_file = None
+    if cfg:
+        queue_file = (cfg.get("paths") or {}).get("queue_file")
+    if not queue_file:
+        queue_file = ("~/workspace/goals/goal/hidden_files/"
+                      "story-queue-2026-11-20.md")
+    path = os.path.expanduser(queue_file)
+    if not os.path.isfile(path):
+        return {"name": "بنية الطابور",
+                "ok": False,
+                "level": "warn",
+                "detail": "ملف الطابور غير موجود بعد: %s" % path,
+                "fix": "أنشئه بـ `queue add` أو انسخ ملف طابور موجود"}
+    ok, issues = queue_check.validate_queue_file(path)
+    if ok:
+        return {"name": "بنية الطابور",
+                "ok": True,
+                "level": "ok",
+                "detail": "الطابور سليم (لا أرقام/عناوين/مواعيد مكررة)"}
+    return {"name": "بنية الطابور",
+            "ok": False,
+            "level": "error",
+            "detail": "; ".join(issues[:3]),
+            "fix": "شغّل: python3 studio.py queue validate"}
+
+
 def run_checks(cfg=None):
     """شغّل كل الفحوصات. يرجع قائمة قواميس (بالترتيب الظاهر للمستخدم)."""
     cfg = cfg or {}
@@ -214,6 +267,8 @@ def run_checks(cfg=None):
                     level="warn",
                     fix="شغّل setup.sh لإنشائها (أو تجاهلها إن لم تنشر "
                         "على يوتيوب عبر API)"),
+        _queue_check(cfg),
+        _protect_check(cfg),
     ]
     return checks
 
