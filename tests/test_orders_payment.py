@@ -12,6 +12,10 @@
 كل الاختبارات على ملف طلبات مؤقت (ORDERS_FILE/ORDERS_DIR
 مستبدلة بدليل مؤقت) وبلا إنتاج فيديو حقيقي: الإنتاج يُحاكى
 بـ mock على cmd_client_run. بلا شبكة.
+
+أرقام الواتساب الوهمية مولَّدة ببذرة ثابتة من
+`lib.test_identity` (جولة v0.1.37 — البند 13) — لا أرقام
+ثابتة مكتوبة يدًا، ولا رقم فودافون كاش الحقيقي كبيانات اختبار.
 """
 import io
 import json
@@ -25,13 +29,18 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import client_orders
+from lib import test_identity
+
+_FAKE_NUMBERS = test_identity.fake_whatsapp_numbers(count=4)
+CLIENT_A = _FAKE_NUMBERS[0]
+CLIENT_B = _FAKE_NUMBERS[1]
 
 
 def _row(order_id, status, **extra):
     row = {"id": order_id, "status": status,
            "client_name": "عميل اختبار",
-           "contact": "01023468196",
-           "whatsapp": "01023468196",
+           "contact": CLIENT_A,
+           "whatsapp": CLIENT_A,
            "description": "قصة اختبار قصيرة عن الأمانة.",
            "duration": "40-60", "size": "vertical", "logo": "page",
            "created_at": "2026-11-22T10:00:00"}
@@ -81,22 +90,25 @@ class TestOrdersPayment(unittest.TestCase):
                          ["new"] * 10)
 
     def test_eleventh_order_same_number_waits_for_payment(self):
-        self._fill_orders("01023468196", 10)
+        self._fill_orders(CLIENT_A, 10)
         with mock.patch("sys.stdout", io.StringIO()):
             client_orders.append_order(_row("QS-T11", None))
         self.assertEqual(self._read()[-1]["status"], "awaiting_payment")
 
     def test_eleventh_order_different_number_is_free(self):
-        self._fill_orders("01023468196", 10)
+        self._fill_orders(CLIENT_A, 10)
         with mock.patch("sys.stdout", io.StringIO()):
             client_orders.append_order(
-                _row("QS-T11B", None, whatsapp="01111111111",
-                     contact="01111111111"))
+                _row("QS-T11B", None, whatsapp=CLIENT_B,
+                     contact=CLIENT_B))
         self.assertEqual(self._read()[-1]["status"], "new")
 
     def test_whatsapp_form_variants_count_as_one_client(self):
+        # الصيغ الثلاث للرقم الواحد (محلي / +20 / 0020) عميل واحد.
+        canon = test_identity.canonical_whatsapp(CLIENT_A)
+        forms = ["0" + canon, "+20" + canon, "0020" + canon]
         for i in range(10):
-            num = "01023468196" if i % 2 == 0 else "+201023468196"
+            num = forms[i % 3]
             with mock.patch("sys.stdout", io.StringIO()):
                 client_orders.append_order(
                     _row("QS-V%02d" % (i + 1), "done",
@@ -106,11 +118,11 @@ class TestOrdersPayment(unittest.TestCase):
         self.assertEqual(self._read()[-1]["status"], "awaiting_payment")
 
     def test_failed_order_does_not_consume_trial(self):
-        self._fill_orders("01023468196", 9)
+        self._fill_orders(CLIENT_A, 9)
         with mock.patch("sys.stdout", io.StringIO()):
             client_orders.append_order(
-                _row("QS-FAIL-1", "failed", whatsapp="01023468196",
-                     contact="01023468196"))
+                _row("QS-FAIL-1", "failed", whatsapp=CLIENT_A,
+                     contact=CLIENT_A))
         with mock.patch("sys.stdout", io.StringIO()):
             client_orders.append_order(_row("QS-T10", None))
         self.assertEqual(self._read()[-1]["status"], "new")
@@ -125,19 +137,19 @@ class TestOrdersPayment(unittest.TestCase):
 
     def test_free_trial_remaining_counts(self):
         self.assertEqual(
-            client_orders.free_trial_remaining("01023468196"), 10)
-        self._fill_orders("01023468196", 3)
+            client_orders.free_trial_remaining(CLIENT_A), 10)
+        self._fill_orders(CLIENT_A, 3)
         self.assertEqual(
-            client_orders.free_trial_remaining("01023468196"), 7)
-        self._fill_orders("01023468196", 7, prefix="QS-FILL2")
+            client_orders.free_trial_remaining(CLIENT_A), 7)
+        self._fill_orders(CLIENT_A, 7, prefix="QS-FILL2")
         self.assertEqual(
-            client_orders.free_trial_remaining("01023468196"), 0)
+            client_orders.free_trial_remaining(CLIENT_A), 0)
 
     # التدفق الكامل: طلب أول مجاني يُنتج، والـ11 يتوقف حتى التأكيد
     def test_full_flow_first_free_eleventh_waits_then_produces(self):
         with mock.patch("sys.stdout", io.StringIO()):
             client_orders.append_order(_row("QS-FLOW-1", None))
-        self._fill_orders("01023468196", 9, prefix="QS-FLOWF")
+        self._fill_orders(CLIENT_A, 9, prefix="QS-FLOWF")
         with mock.patch("sys.stdout", io.StringIO()):
             client_orders.append_order(_row("QS-FLOW-11", None))
         self.assertEqual(
