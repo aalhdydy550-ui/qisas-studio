@@ -13,9 +13,12 @@ config.yaml
 config.yml
 .env
 .env*
+*.env*
 *.key
 *.pem
 *.token
+*token*
+id_rsa*
 __pycache__/
 *.pyc
 .DS_Store
