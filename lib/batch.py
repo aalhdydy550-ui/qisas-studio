@@ -173,18 +173,22 @@ def format_plan(plan):
 
 
 def execute_batch(cfg, plan, produce_fn, check_fn, thumbnail_fn,
-                  runs_dir, continue_on_error=False):
+                  runs_dir, continue_on_error=False,
+                  record_spend_fn=None):
     """نفّذ خطة الدفعة (بعد --execute الصريح).
 
     الدوال المحقونة (قابلة للاختبار بلا تنفيذ حقيقي):
       produce_fn(cfg, slug, project, out_path) -> 0/1
       check_fn(video) -> قاموس run_checks (فيه "passed")
       thumbnail_fn(video, hook, out_path) -> مسار المصغرة
+      record_spend_fn(units) -> الرصيد الجديد أو None: تُستدعى
+        بعد كل فيديو Veo مكتمل فقط (الجولة 8) — لا خصم لقصة
+        متخطاة أو فاشلة، ولا خصم أبدًا في وضع تجريبي.
     يرجع (رمز الخروج، قاموس النتائج المحفوظ في runs/batch-*.json).
     """
     result = {"date": time.strftime("%Y-%m-%d %H:%M:%S"),
               "count": plan["count"], "source": plan["source"],
-              "stories": []}
+              "stories": [], "total_spent_units": 0}
     overall = 0
     for item in plan["stories"]:
         entry = {"number": item["number"], "title": item["title"],
@@ -239,6 +243,13 @@ def execute_batch(cfg, plan, produce_fn, check_fn, thumbnail_fn,
         entry["thumbnail"] = thumb
         entry["output"] = video
         entry["status"] = "done"
+        # الجولة 8: فيديو Veo مكتمل فعلًا — يُخصم إنفاقه (120
+        # وحدة) من الرصيد المسجَّل ويُختم الوقت.
+        if plan["source"] == "veo" and record_spend_fn is not None:
+            entry["units_spent"] = VEO_UNITS_PER_VIDEO
+            entry["new_balance"] = record_spend_fn(
+                VEO_UNITS_PER_VIDEO)
+            result["total_spent_units"] += VEO_UNITS_PER_VIDEO
         entry["seconds"] = round(time.time() - t0, 1)
         result["stories"].append(entry)
         print("  تمت: %s" % video)
