@@ -11,6 +11,8 @@
       --token FILE
       # رفع resumable + صورة مصغرة اختيارية. يطبع JSON واحدًا:
       # {"video_id": ..., "url": ...} — بلا أي نص آخر على stdout.
+      # --publish-at يفرض privacyStatus=private تلقائيًا (شرط
+      # YouTube API للفيديو المجدول: خاص حتى موعده ثم يُنشر).
 
 لا يُنشر شيء وهمي: أي فشل يخرج برمز غير صفري ورسالة على stderr.
 """
@@ -82,22 +84,37 @@ def build_service(creds):
     return build("youtube", "v3", credentials=creds)
 
 
-def upload_video(service, video, title, description, tags,
-                 privacy="public", publish_at=None, category_id="24",
-                 thumbnail=None):
-    """ارفع فيديو (resumable) + صورة مصغرة اختيارية. يرجع dict النتيجة."""
-    _, _, _, _, HttpError, MediaFileUpload = _import_google()
-    body = {
+def build_upload_body(title, description, tags, privacy="public",
+                      publish_at=None, category_id="24"):
+    """ابنِ جسم videos.insert (دالة نقية — بلا مكتبات Google).
+
+    ملاحظة API: `publishAt` لا يقبله يوتيوب إلا مع
+    `privacyStatus=private` — الفيديو المجدول يُنشأ خاصًا
+    ويُنشر تلقائيًا عند موعده؛ أي privacy تُمرَّر مع
+    publish_at تُستبدل بـ private.
+    """
+    status = {"privacyStatus": privacy or "public"}
+    if publish_at:
+        status["privacyStatus"] = "private"
+        status["publishAt"] = publish_at
+    return {
         "snippet": {
             "title": title,
             "description": description,
             "tags": [t for t in tags if t],
             "categoryId": category_id or "24",
         },
-        "status": {"privacyStatus": privacy or "public"},
+        "status": status,
     }
-    if publish_at:
-        body["status"]["publishAt"] = publish_at
+
+
+def upload_video(service, video, title, description, tags,
+                 privacy="public", publish_at=None, category_id="24",
+                 thumbnail=None):
+    """ارفع فيديو (resumable) + صورة مصغرة اختيارية. يرجع dict النتيجة."""
+    _, _, _, _, HttpError, MediaFileUpload = _import_google()
+    body = build_upload_body(title, description, tags, privacy,
+                             publish_at, category_id)
     media = MediaFileUpload(video, chunksize=1024 * 1024, resumable=True)
     try:
         request = service.videos().insert(part="snippet,status",
