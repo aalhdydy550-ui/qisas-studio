@@ -47,6 +47,23 @@
   studio.py analyze-ref --url URL
       # تحليل فيديو مرجعي (بيانات + تفريغ + هوك/إيقاع/ختام) — تحليل
       # خاص فقط، بلا إعادة نشر أو توزيع (انظر README).
+  studio.py ideas [--count N] [--theme THEME] [--add N]
+      # مولّد أفكار قصص بأسلوب الصفحة (النموذج أولًا، والبنك
+      # المحلي بديلًا) مع منع تكرار أي عنوان في الطابور.
+  studio.py daily [--slot morning|evening] [--execute]
+      # أمر اليوم الواحد: إنتاج + فحص + مصغرة + نشر المنصتين +
+      # نص أول تعليق. افتراضيًا --dry-run (خطة بلا تنفيذ).
+  studio.py ab --video F [--hook-a A --hook-b B]
+      # اختبار A/B: هوكان ومصغرتان + سجل الزوج في runs/ab-*.
+  studio.py ab-results [--ab-file FILE]
+      # قارن مشاهدات النسختين (فيسبوك + يوتيوب).
+  studio.py update [--dry-run]
+      # جلب آخر إصدار من GitHub وتطبيق الملفات المتغيرة
+      # (مع نسخة احتياطية؛ والملفات المحمية لا تُمسّ).
+  studio.py backup [--out-dir DIR]
+      # نسخة احتياطية zip: الإعداد + الطابور + الطلبات + السجلات.
+  studio.py balance [--balance N] [--renew DATE]
+      # توقع رصيد Veo بالأيام — من الرصيد المسجَّل (ليس حيًا).
 
 الخطوات تعمل بالتتابع (الجهاز محدود: 1.5 وحدة CPU و~6 جيجا رام بلا
 كارت شاشة). خادم OmniRoute يبقى شغالًا على loopback (127.0.0.1:20128)
@@ -87,8 +104,15 @@ from lib import queue as queue_lib
 from lib import autoweek
 from lib import analyze
 from lib import help_ar
+from lib import check as check_lib
+from lib import init_wizard
+from lib import ideas
+from lib import daily
+from lib import ab as ab_lib
+from lib import update_backup
+from lib import balance as balance_lib
 
-VERSION = "0.1.22"
+VERSION = "0.1.27"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # الموسيقى الخلفية المدمجة (شوبان — ملكية عامة، assets/music/).
 DEFAULT_MUSIC = os.path.join(
@@ -120,6 +144,13 @@ DEFAULTS = {
                 "youtube_privacy": "public",
                 "youtube_channel_id": "UCz5VeqN-eolCaCPGTpiWtJw"},
     "long_video": {"default_music": ""},
+    "schedule": {"morning": "09:00", "evening": "19:00"},
+    "narration": {"voice": "piper"},
+    # رصيد Veo مسجَّل يدويًا (ليس حيًا من API — لا واجهة رسمية
+    # لرصيد Flow): يُحدَّث بعد كل توليد في Flow. 750 وحدة
+    # تتجدد 13 ديسمبر؛ فيديو Veo اليومي 100–140 وحدة.
+    "veo": {"balance_units": 750, "renews": "2026-12-13",
+            "daily_cost_min": 100, "daily_cost_max": 140},
 }
 
 
@@ -325,8 +356,10 @@ def cmd_status(cfg):
 # أدوات يتوقع خط الإنتاج وجودها في PATH (روابط /usr/local/bin
 # لنسخها في الـhome). إن غاب أحدها أو غاب ملف خدمة systemd، يُشغَّل
 # سكربت الاستعادة تلقائيًا — إصلاح ذاتي بعد أي مسح كامل.
+# (fc-list: أُضيف 2026-11-22 — fontconfig حزمة apt تُمسح مع الريستارت
+# وكان فحص الخطوط بلا تغطية إصلاح.)
 _EXPECTED_TOOLS = ("ffmpeg", "melt", "yt-dlp", "omniroute", "ollama",
-                   "piper", "zstd")
+                   "piper", "zstd", "fc-list")
 _SETUP_ENV_SCRIPT = os.path.join(os.path.expanduser("~"), "workspace",
                                   "setup-env.sh")
 _UNIT_FILE = "/etc/systemd/system/studio-env-restore.service"
@@ -393,6 +426,15 @@ def _ensure_environment():
             os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
     if os.environ.get("STUDIO_ENV_RESTORED") != "1":
         missing = [t for t in _EXPECTED_TOOLS if shutil.which(t) is None]
+        # مكتبتا بايثون النظاميتان (PyYAML/Pillow) — حزمتا apt قد تُمسحان
+        # مع الريستارت ولا يغطيهما `command -v`؛ فحص الاستيراد يطلق
+        # الاستعادة نفسها (setup-env.sh يعيد تثبيتهما في الخطوة 8).
+        # إصلاح 2026-11-22 (حل مشكلة التثبيت بعد إعادة التشغيل).
+        import importlib.util as _ilu
+        py_missing = [m for m in ("yaml", "PIL")
+                      if _ilu.find_spec(m) is None]
+        if py_missing:
+            missing = missing + ["python:%s" % m for m in py_missing]
         unit_missing = not os.path.isfile(_UNIT_FILE)
         if missing or unit_missing:
             script = _SETUP_ENV_SCRIPT
@@ -935,6 +977,47 @@ def cmd_run(cfg, story, project, out_path, allow_fallback, dry_run=False,
 
 
 # ---------------------------------------------------------------- doctor
+def cmd_check(cfg, video, long_mode=False, as_json=False):
+    """فحص جودة فيديو قبل النشر (تقرير عربي PASS/FAIL).
+
+    يرجع 0 إن نجحت كل الفحوصات، و1 عند أي فشل (أو تعذر القراءة).
+    """
+    try:
+        result = check_lib.run_checks(expand(video), long_mode=long_mode)
+    except check_lib.CheckError as e:
+        print("تعذر فحص الفيديو: %s" % e)
+        return 1
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(check_lib.format_report(result))
+    return 0 if result["passed"] else 1
+
+
+def cmd_init(cfg, args):
+    """معالج الإعداد التفاعلي — يكتب config.yaml.
+
+    بلا أعلام: يسأل المستخدم بالعربية. مع أي علم: يعمل بلا
+    تفاعل بالقيم الممررة + الافتراضيات للباقي.
+    """
+    config_path = expand(args.config) if args.config else os.path.join(
+        STUDIO_DIR, "config.yaml")
+    flags = {}
+    for key, attr in (("page_id", "page_id"),
+                      ("channel_id", "channel_id"),
+                      ("voice", "voice"),
+                      ("morning", "morning"),
+                      ("evening", "evening"),
+                      ("queue_file", "queue_file")):
+        value = getattr(args, attr, None)
+        if value is not None:
+            flags[key] = value
+    if not flags:
+        flags = None
+    return init_wizard.run_wizard(cfg, config_path, flags=flags,
+                                  force=args.force)
+
+
 def cmd_doctor(cfg, fix=False):
     """فحص بيئة studio (تقرير PASS/FAIL صادق). --fix ينشئ config.yaml."""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -971,7 +1054,8 @@ YT_DEFAULT_TAGS = ["قصص وعبر", "قصص واقعية", "قصص مؤثرة"
 
 def cmd_publish(cfg, video, title, caption, thumbnail=None,
                 platforms=("facebook", "youtube"), page_id=None,
-                schedule=None, privacy=None, tags=None, dry_run=False):
+                schedule=None, privacy=None, tags=None, dry_run=False,
+                skip_check=False):
     """انشر فيديوًا واحدًا على فيسبوك و/أو يوتيوب.
 
     يرجع 0 فقط إن نُشر على كل المنصات المطلوبة فعلًا؛ وإن نُشر بعضها
@@ -1000,6 +1084,20 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     if thumb and not os.path.isfile(thumb):
         print("ملف الصورة المصغرة غير موجود: %s" % thumb)
         return 1
+    # فحص جودة مسبق افتراضي قبل أي نشر (أو معاينة): فيديو فاشل
+    # لا يُنشر ولا تُطبع حمولته. --skip-check للتجاوز الصريح فقط.
+    if not skip_check:
+        try:
+            result = check_lib.run_checks(video)
+        except check_lib.CheckError as e:
+            print("تعذر فحص الجودة قبل النشر: %s" % e)
+            print("أصلح الفيديو أو استخدم --skip-check للتجاوز")
+            return 1
+        print(check_lib.format_report(result))
+        if not result["passed"]:
+            print("فشل فحص الجودة قبل النشر — أصلح الملاحظات أعلاه "
+                  "أو استخدم --skip-check للتجاوز على مسؤوليتك")
+            return 1
     if dry_run:
         print("== وضع تجريبي — لن يُنشر شيء ==")
         if "facebook" in platforms:
@@ -1729,6 +1827,254 @@ def cmd_analyze_ref(cfg, url, model="small"):
     return 0
 
 
+# ------------------------------------------------------------------ ideas
+def cmd_ideas(cfg, count=5, theme=None, add=None, queue_file=None):
+    """ولّد أفكار قصص بأسلوب الصفحة (النموذج أولًا، والبنك
+    المحلي بديلًا)، مع منع تكرار أي عنوان في الطابور.
+    --add N يضيف الفكرة رقم N إلى الطابور عبر queue add."""
+    queue_path = expand(queue_file or cfg["paths"]["queue_file"])
+    cfg_o = cfg["omniroute"]
+
+    def chat_fn(prompt):
+        text, _via, _model = omniroute_client.chat(
+            prompt, cfg_o["model"], cfg_o.get("fallback_model"),
+            cfg_o["base_url"], max_tokens=800, temperature=0.8,
+            retries=int(cfg_o.get("retries", 1)),
+            retry_delay=int(cfg_o.get("retry_delay_seconds", 5)))
+        return text
+
+    ideas_list, notes = ideas.generate_ideas(
+        queue_path, count=count, theme=theme, chat_fn=chat_fn)
+    print(ideas.format_ideas(ideas_list))
+    for note in notes:
+        print("ملاحظة: %s" % note)
+    if not ideas_list:
+        print("لم تُولَّد أي فكرة — جرّب موضوعًا آخر")
+        return 1
+    if add is not None:
+        if add < 1 or add > len(ideas_list):
+            print("رقم الفكرة غير صالح: %d (المتاح 1–%d)"
+                  % (add, len(ideas_list)))
+            return 2
+        idea = ideas_list[add - 1]
+        stories_dir = os.path.join(STUDIO_DIR, "queue")
+        try:
+            result = ideas.add_idea(queue_path, idea, stories_dir)
+        except queue_lib.QueueError as e:
+            print("رفضت الإضافة: %s" % e)
+            return 1
+        print("أُضيفت الفكرة رقم %d إلى الطابور: %s"
+              % (result["number"], result["title"]))
+        print("مسودة النص في: %s" % result["text_file"])
+    return 0
+
+
+# ------------------------------------------------------------------ daily
+def cmd_daily(cfg, slot="morning", execute=False, video=None,
+              moral="", question="", queue_file=None):
+    """أمر اليوم الواحد: خطة (dry-run افتراضيًا) أو تنفيذ
+    كامل مع --execute (إنتاج + فحص + مصغرة + نشر + نص
+    أول تعليق)."""
+    if queue_file:
+        cfg = json.loads(json.dumps(cfg))
+        cfg["paths"]["queue_file"] = queue_file
+    try:
+        plan = daily.plan_daily(
+            cfg, slot, video=video, moral=moral, question=question,
+            ready_fn=lambda s: check_story_ready(cfg, s))
+    except daily.DailyError as e:
+        print("تعذر التخطيط لليوم: %s" % e)
+        return 1
+    except publish.PublishError as e:
+        print("خطأ في بيانات النشر: %s" % e)
+        return 1
+    if not execute:
+        print(daily.format_plan(plan))
+        print("== وضع تجريبي — لم يُنفَّذ شيء "
+              "(أضف --execute للتنفيذ) ==")
+        return 0
+
+    def produce_fn(c, slug, project, out_path):
+        return cmd_run(c, slug, project, out_path, False)
+
+    def check_fn(v):
+        return check_lib.run_checks(v)
+
+    def thumbnail_fn(v, hook, out):
+        path, _sec, _lines = thumbnail.make_thumbnail(v, hook, out)
+        return path
+
+    def publish_fn(c, v, t, cap, thumb):
+        return cmd_publish(c, v, t, cap, thumbnail=thumb,
+                           skip_check=True)
+
+    try:
+        rc, _result = daily.execute_daily(
+            cfg, plan, produce_fn, check_fn, thumbnail_fn, publish_fn,
+            expand(cfg["paths"]["runs_dir"]))
+    except check_lib.CheckError as e:
+        print("تعذر فحص الجودة: %s" % e)
+        return 1
+    return rc
+
+
+# ---------------------------------------------------------------------- ab
+def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
+           out_dir=None):
+    """اختبار A/B: هوكان ومصغرتان لفيديو واحد + سجل الزوج."""
+    runs_dir = expand(out_dir or cfg["paths"]["runs_dir"])
+    if not hook_a or not hook_b:
+        cfg_o = cfg["omniroute"]
+
+        def chat_fn(prompt):
+            text, _via, _model = omniroute_client.chat(
+                prompt, cfg_o["model"], cfg_o.get("fallback_model"),
+                cfg_o["base_url"], max_tokens=200, temperature=0.8,
+                retries=int(cfg_o.get("retries", 1)),
+                retry_delay=int(cfg_o.get("retry_delay_seconds", 5)))
+            return text
+
+        sug_a, sug_b, src = ab_lib.suggest_hooks(
+            title or os.path.basename(video), chat_fn)
+        hook_a = hook_a or sug_a
+        hook_b = hook_b or sug_b
+        print("الهوكان المقترحان (%s)" % src)
+    try:
+        record = ab_lib.create_ab(expand(video), hook_a, hook_b,
+                                  runs_dir, title=title)
+    except (ValueError, thumbnail.ThumbnailError) as e:
+        print("فشل اختبار A/B: %s" % e)
+        return 1
+    print("نسخة أ — الهوك: %s" % record["hook_a"])
+    print("  المصغرة: %s" % record["thumb_a"])
+    print("نسخة ب — الهوك: %s" % record["hook_b"])
+    print("  المصغرة: %s" % record["thumb_b"])
+    print("سُجّل الزوج في: %s" % record["record_path"])
+    print(ab_lib.AB_NOTE)
+    print("انشر كل نسخة بعنوانها (هوكها) ثم قارن بـ:")
+    print("  python3 studio.py ab-results --ab-file %s"
+          % record["record_path"])
+    return 0
+
+
+def cmd_ab_results(cfg, ab_file=None):
+    """قارن مشاهدات نسختي اختبار A/B (فيسبوك + يوتيوب)."""
+    runs_dir = expand(cfg["paths"]["runs_dir"])
+    if ab_file:
+        path = expand(ab_file)
+    else:
+        candidates = sorted(
+            Path(runs_dir).glob("ab-*/ab-*.json"))
+        path = str(candidates[-1]) if candidates else None
+    if not path or not os.path.isfile(path):
+        print("لا يوجد سجل اختبار A/B — أنشئ واحدًا أولًا "
+              "بـ studio.py ab")
+        return 1
+    with open(path, encoding="utf-8") as f:
+        record = json.load(f)
+    record["record_path"] = path
+    page_id = (cfg.get("publish") or {}).get("page_id")
+    channel_id = (cfg.get("publish") or {}).get("youtube_channel_id")
+    fb_bin = publish.find_facebook_bin()
+    if not page_id:
+        fb_entries, fb_note = [], "معرّف الصفحة غير مضبوط"
+    elif not fb_bin:
+        fb_entries, fb_note = [], "facebook-cli غير متاح"
+    else:
+        fb_entries, fb_note = ab_lib.fetch_fb_posts(fb_bin, page_id)
+    yt_entries, yt_note = ab_lib.fetch_yt_uploads(channel_id)
+    if fb_note:
+        print("فيسبوك: %s" % fb_note)
+    if yt_note:
+        print("يوتيوب: %s" % yt_note)
+    comparison = ab_lib.compare_ab(record, fb_entries, yt_entries)
+    print(ab_lib.format_comparison(record, comparison))
+    return 0
+
+
+# ------------------------------------------------------- update + backup
+def cmd_update(cfg, dry_run=False,
+               repo="aalhdydy550-ui/qisas-studio", branch="main"):
+    """جلب آخر إصدار من GitHub وتطبيق الملفات المتغيرة فقط،
+    مع نسخة احتياطية أولًا؛ والملفات المحمية لا تُمسّ أبدًا."""
+    try:
+        tree = update_backup.fetch_tree(repo, branch)
+    except update_backup.UpdateError as e:
+        print("فشل جلب الشجرة البعيدة: %s" % e)
+        return 1
+    changes = update_backup.plan_update(STUDIO_DIR, tree)
+    if not changes:
+        print("المشروع محدَّث بالفعل — لا ملفات متغيرة")
+        return 0
+    print("ملفات ستتغير (%d):" % len(changes))
+    for change in changes:
+        print("  %s %s" % ("+" if change["action"] == "add" else "~",
+                           change["path"]))
+    if dry_run:
+        print("وضع تجريبي — لم يُكتب شيء")
+        return 0
+
+    def fetch_fn(path):
+        return update_backup.fetch_file_raw(repo, branch, path)
+
+    def backup_fn(_paths):
+        zip_path, _inc, _miss = update_backup.make_backup(
+            STUDIO_DIR, cfg)
+        print("نسخة احتياطية قبل التحديث: %s" % zip_path)
+
+    try:
+        written = update_backup.apply_update(
+            STUDIO_DIR, changes, fetch_fn, backup_fn)
+    except update_backup.UpdateError as e:
+        print("فشل التحديث: %s" % e)
+        return 1
+    print("طُبّق %d ملفًا" % len(written))
+    print("أعد تشغيل الاختبارات: "
+          "python3 -m unittest discover -s tests")
+    return 0
+
+
+def cmd_backup(cfg, out_dir=None):
+    """نسخة احتياطية zip: الإعداد + الطابور + طلبات العملاء +
+    سجلات التشغيل."""
+    try:
+        zip_path, included, missing = update_backup.make_backup(
+            STUDIO_DIR, cfg,
+            out_dir=expand(out_dir) if out_dir else None)
+    except update_backup.UpdateError as e:
+        print("فشل النسخ الاحتياطي: %s" % e)
+        return 1
+    print("نسخة احتياطية: %s (%d ملفًا)"
+          % (zip_path, len(included)))
+    for name in included:
+        print("  %s" % name)
+    if missing:
+        print("مفقود (لم يُضمَّن): %s" % ", ".join(missing))
+    return 0
+
+
+# ----------------------------------------------------------------- balance
+def cmd_balance(cfg, balance=None, renew=None, cost_min=None,
+                cost_max=None):
+    """توقع رصيد Veo بالأيام — من الرصيد المسجَّل في الإعداد
+    (ليس حيًا من API)."""
+    veo = cfg.get("veo") or {}
+    bal = (balance if balance is not None
+           else veo.get("balance_units", balance_lib.DEFAULT_BALANCE))
+    ren = renew or veo.get("renews", balance_lib.DEFAULT_RENEWS)
+    cmin = (cost_min if cost_min is not None
+            else veo.get("daily_cost_min", balance_lib.DEFAULT_COST_MIN))
+    cmax = (cost_max if cost_max is not None
+            else veo.get("daily_cost_max", balance_lib.DEFAULT_COST_MAX))
+    try:
+        result = balance_lib.forecast(bal, ren, cmin, cmax)
+    except (ValueError, TypeError) as e:
+        print("قيم غير صالحة: %s" % e)
+        return 2
+    print(balance_lib.format_forecast(result))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="studio",
                                  description="خط إنتاج موحد لفيديوهات "
@@ -1741,6 +2087,24 @@ def main():
     p = sub.add_parser("doctor", help="فحص بيئة studio (PASS/FAIL صادق)")
     p.add_argument("--fix", action="store_true",
                    help="أنشئ config.yaml من المثال إن غاب")
+    p = sub.add_parser("check", help="فحص جودة فيديو قبل النشر (PASS/FAIL)")
+    p.add_argument("--video", required=True, help="ملف الفيديو mp4")
+    p.add_argument("--long", action="store_true",
+                   help="فيديو طويل أفقي 1280×720 (8–12 دقيقة)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع التقرير JSON بدل النص العربي")
+    p = sub.add_parser("init", help="معالج إعداد تفاعلي — يكتب config.yaml")
+    p.add_argument("--page-id", help="معرّف صفحة فيسبوك")
+    p.add_argument("--channel-id", help="معرّف قناة يوتيوب")
+    p.add_argument("--voice", choices=["piper", "gtts"],
+                   help="صوت الراوي: piper (الرجل، الافتراضي) أو gtts")
+    p.add_argument("--morning", help="موعد النشر الصباحي HH:MM")
+    p.add_argument("--evening", help="موعد النشر المسائي HH:MM")
+    p.add_argument("--queue-file", help="ملف طابور القصص")
+    p.add_argument("--config",
+                   help="مسار config.yaml (الافتراضي: مجلد studio)")
+    p.add_argument("--force", action="store_true",
+                   help="اكتب فوق config.yaml موجود بلا سؤال")
     p = sub.add_parser("publish", help="نشر فيديو على فيسبوك ويوتيوب")
     p.add_argument("--video", required=True, help="ملف الفيديو mp4")
     p.add_argument("--title", required=True, help="عنوان الفيديو")
@@ -1759,6 +2123,8 @@ def main():
                    help="وسوم يوتيوب مفصولة بفاصلة (الافتراضي: وسوم الصفحة)")
     p.add_argument("--dry-run", action="store_true",
                    help="اطبع الحمولة الدقيقة دون نشر أي شيء")
+    p.add_argument("--skip-check", action="store_true",
+                   help="تجاوز فحص الجودة المسبق (غير مستحسن)")
     p = sub.add_parser("youtube-auth",
                        help="تبادل OAuth ليوتيوب لمرة واحدة (يفتح المتصفح)")
     p.add_argument("--client-secrets",
@@ -1993,6 +2359,70 @@ def main():
     p.add_argument("--order", required=True, help="رقم الطلب")
     sub.add_parser("process-queue",
                    help="تنفيذ كل طلبات العملاء الجديدة (client-orders)")
+    p = sub.add_parser("ideas", help="مولّد أفكار قصص بأسلوب الصفحة")
+    p.add_argument("--count", type=int, default=5,
+                   help="عدد الأفكار (افتراضي 5)")
+    p.add_argument("--theme", default=None,
+                   help="موضوع واحد من بنك المواضيع")
+    p.add_argument("--add", type=int, default=None,
+                   help="أضف الفكرة بهذا الرقم إلى الطابور")
+    p.add_argument("--queue-file", default=None,
+                   help="ملف طابور بديل (للاختبار)")
+    p = sub.add_parser("daily",
+                       help="أمر اليوم الواحد: إنتاج + فحص + مصغرة "
+                            "+ نشر + أول تعليق")
+    p.add_argument("--slot", choices=["morning", "evening"],
+                   default="morning",
+                   help="موعد اليوم (افتراضي الصباح)")
+    p.add_argument("--execute", action="store_true",
+                   help="تنفيذ حقيقي (بدونه: وضع تجريبي فقط)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="وضع تجريبي صريح (هو الافتراضي)")
+    p.add_argument("--video", default=None,
+                   help="فيديو جاهز (مثلًا من Flow) بدل الإنتاج")
+    p.add_argument("--moral", default="",
+                   help="العبرة لنص أول تعليق والكابشن")
+    p.add_argument("--question", default="",
+                   help="سؤال المعضلة لنص أول تعليق")
+    p.add_argument("--queue-file", default=None,
+                   help="ملف طابور بديل (للاختبار)")
+    p = sub.add_parser("ab", help="اختبار A/B: هوكان ومصغرتان "
+                                  "لفيديو واحد")
+    p.add_argument("--video", required=True,
+                   help="ملف الفيديو")
+    p.add_argument("--hook-a", default=None, help="هوك النسخة أ")
+    p.add_argument("--hook-b", default=None, help="هوك النسخة ب")
+    p.add_argument("--title", default=None, help="عنوان الفيديو")
+    p.add_argument("--out-dir", default=None,
+                   help="مجلد السجلات (افتراضي runs/)")
+    p = sub.add_parser("ab-results",
+                       help="قارن مشاهدات نسختي اختبار A/B")
+    p.add_argument("--ab-file", default=None,
+                   help="ملف سجل ab-*.json (افتراضي: الأحدث)")
+    p = sub.add_parser("update",
+                       help="جلب آخر إصدار من GitHub وتطبيقه "
+                            "(مع نسخة احتياطية)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="اعرض ما سيتغير بلا كتابة")
+    p.add_argument("--repo", default="aalhdydy550-ui/qisas-studio",
+                   help="المستودع (افتراضي aalhdydy550-ui/qisas-studio)")
+    p.add_argument("--branch", default="main",
+                   help="الفرع (افتراضي main)")
+    p = sub.add_parser("backup",
+                       help="نسخة احتياطية zip للإعداد والطابور "
+                            "والطلبات والسجلات")
+    p.add_argument("--out-dir", default=None,
+                   help="مجلد النسخ (افتراضي backups/)")
+    p = sub.add_parser("balance",
+                       help="توقع رصيد Veo بالأيام (مسجَّل لا حي)")
+    p.add_argument("--balance", type=int, default=None,
+                   help="رصيد حالي بديل (وحدة)")
+    p.add_argument("--renew", default=None,
+                   help="تاريخ تجديد بديل (YYYY-MM-DD)")
+    p.add_argument("--cost-min", type=int, default=None,
+                   help="أقل تكلفة فيديو يومي (وحدة)")
+    p.add_argument("--cost-max", type=int, default=None,
+                   help="أعلى تكلفة فيديو يومي (وحدة)")
     args = ap.parse_args()
     cfg = load_config()
     # خيار --size (في run/assemble): يبدّل مقاس الفيديو لهذا التشغيل
@@ -2044,6 +2474,11 @@ def main():
 
     if args.cmd == "doctor":
         return cmd_doctor(cfg, fix=args.fix)
+    if args.cmd == "check":
+        return cmd_check(cfg, args.video, long_mode=args.long,
+                         as_json=args.json)
+    if args.cmd == "init":
+        return cmd_init(cfg, args)
     if args.cmd == "status":
         return cmd_status(cfg)
     if args.cmd == "script":
@@ -2273,7 +2708,8 @@ def main():
                            thumbnail=args.thumbnail, platforms=platforms,
                            page_id=args.page_id, schedule=args.schedule,
                            privacy=args.privacy, tags=tags,
-                           dry_run=args.dry_run)
+                           dry_run=args.dry_run,
+                           skip_check=args.skip_check)
     if args.cmd == "youtube-auth":
         return cmd_youtube_auth(cfg, args.client_secrets, args.token)
     if args.cmd == "long-video":
@@ -2333,6 +2769,29 @@ def main():
     if args.cmd == "process-queue":
         import client_orders
         return client_orders.cmd_process_queue(cfg)
+    if args.cmd == "ideas":
+        return cmd_ideas(cfg, count=args.count, theme=args.theme,
+                         add=args.add, queue_file=args.queue_file)
+    if args.cmd == "daily":
+        return cmd_daily(cfg, slot=args.slot,
+                         execute=args.execute and not args.dry_run,
+                         video=args.video, moral=args.moral,
+                         question=args.question,
+                         queue_file=args.queue_file)
+    if args.cmd == "ab":
+        return cmd_ab(cfg, args.video, args.hook_a, args.hook_b,
+                      args.title, args.out_dir)
+    if args.cmd == "ab-results":
+        return cmd_ab_results(cfg, args.ab_file)
+    if args.cmd == "update":
+        return cmd_update(cfg, dry_run=args.dry_run, repo=args.repo,
+                          branch=args.branch)
+    if args.cmd == "backup":
+        return cmd_backup(cfg, args.out_dir)
+    if args.cmd == "balance":
+        return cmd_balance(cfg, balance=args.balance, renew=args.renew,
+                           cost_min=args.cost_min,
+                           cost_max=args.cost_max)
     return 0
 
 
