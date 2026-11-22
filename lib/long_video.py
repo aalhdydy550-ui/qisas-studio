@@ -435,7 +435,9 @@ def build_project(spec):
                    "volume": 1.0})
     tracks.append({"type": "text", "text": spec.get("hook") or spec["title"],
                    "start": 0.0, "end": round(intro_dur, 3),
-                   "position": "top", "fontsize": HOOK_FONTSIZE})
+                   # "above" = أسفل الشاشة فوق الكابشن (قاعدة دائمة
+                   # 2026-11-22: لا نص أعلى الشاشة أبدًا).
+                   "position": "above", "fontsize": HOOK_FONTSIZE})
     intro_meta = {"start": 0.0, "end": round(intro_dur, 3)}
     cursor = intro_dur
 
