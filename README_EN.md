@@ -41,6 +41,15 @@ Copy `config.example.yaml` to `config.yaml` to change paths/endpoints.
 Never put secrets in config files; the OmniRoute gateway key (if any)
 goes through the `OMNIROUTE_API_KEY` environment variable only.
 
+Round 7 (0.1.31) commands: `batch --count N [--source veo|openmontage]`
+(dry-run by default; real run only with `--execute`), `publish --platforms
+tiktok,instagram` (dry-run prints the payload; real upload untested — no
+accounts connected) + `tiktok-auth`/`instagram-auth` (print manual steps),
+`analyze --dna --video FILE` (viral-DNA analysis: hook 0–10, pacing,
+silence, word density), `balance --cap N` (Veo spend cap, refused in Arabic
+before any spend), `scene-plan --story N` (scene plan printed and saved
+before spending any credits).
+
 ## Known limits (verified 2026-11-20)
 
 - Concat does not generate video; Veo clips still come from Google Flow.
@@ -76,3 +85,10 @@ and the license file will be sent to you.
 The three tools (OmniRoute, OpenMontage, Concat) are independent
 projects under their own licenses (see the table above) and are
 not covered by this repository's license.
+
+The orchestrated tools (OpenMontage and Concat) are used unmodified,
+exactly as released by their authors, and buyers obtain them
+themselves from their sources under AGPL-3.0 with all of its rights
+(use, study, modification, sharing):
+[OpenMontage](https://github.com/OpenMontageInc/OpenMontage) and
+[Concat](https://github.com/jub0t/Concat).
