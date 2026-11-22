@@ -54,6 +54,10 @@ def _run(cmd, what, timeout=300):
 
 def probe_duration(path):
     """مدة ملف صوتي بالثواني عبر ffprobe."""
+    # إصلاح اختبار اختراق 2026-11-22 (L2): مسار نسبي يبدأ
+    # بشرطة كان يُفسَّر كخيار من ffprobe — المسار المطلق كما في
+    # check.py.
+    path = os.path.abspath(os.path.expanduser(path))
     out = _run(["ffprobe", "-v", "error", "-show_entries",
                 "format=duration", "-of",
                 "default=noprint_wrappers=1:nokey=1", path],
