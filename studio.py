@@ -112,7 +112,7 @@ from lib import ab as ab_lib
 from lib import update_backup
 from lib import balance as balance_lib
 
-VERSION = "0.1.27"
+VERSION = "0.1.29"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # الموسيقى الخلفية المدمجة (شوبان — ملكية عامة، assets/music/).
 DEFAULT_MUSIC = os.path.join(
@@ -256,13 +256,22 @@ def new_run(runs_dir, story):
     ts = time.strftime("%Y%m%d-%H%M%S")
     run_id = "%s-%s" % (story, ts)
     run_dir = run_dir_for(runs_dir, run_id)
+    # إصلاح اختبار اختراق 2026-11-22 (L14): الفحص ثم الإنشاء
+    # (exists + makedirs exist_ok=True) كان سباقًا نظريًا —
+    # تشغيلان متوازيان في نفس الثانية قد يأخذا نفس المجلد.
+    # الآن إنشاء ذري: makedirs(..., exist_ok=False) والتعارض
+    # (FileExistsError) يعيد المحاولة بلاحقة رقمية.
     n = 2
-    while os.path.exists(run_dir):  # تشغيلان في نفس الثانية لنفس القصة
-        run_id = "%s-%s-%d" % (story, ts, n)
-        run_dir = run_dir_for(runs_dir, run_id)
-        n += 1
-    os.makedirs(run_dir, exist_ok=True)
-    return run_id, run_dir
+    for _attempt in range(10000):
+        try:
+            os.makedirs(run_dir, exist_ok=False)
+            return run_id, run_dir
+        except FileExistsError:
+            run_id = "%s-%s-%d" % (story, ts, n)
+            run_dir = run_dir_for(runs_dir, run_id)
+            n += 1
+    raise OSError("تعذّر إنشاء مجلد تشغيل فريد بعد 10000 محاولة: %s"
+                  % story)
 
 
 def write_log(run_dir, log):
@@ -1018,14 +1027,26 @@ def cmd_init(cfg, args):
                                   force=args.force)
 
 
-def cmd_doctor(cfg, fix=False):
-    """فحص بيئة studio (تقرير PASS/FAIL صادق). --fix ينشئ config.yaml."""
+def cmd_doctor(cfg, fix=False, accounts_flag=False):
+    """فحص بيئة studio (تقرير PASS/FAIL صادق). --fix ينشئ config.yaml.
+
+    --accounts يضيف قسمًا منفصلًا بعدّاده الخاص لفحوصات الحسابات
+    (فيسبوك/يوتيوب/Veo — قراءة فقط).
+    """
     here = os.path.dirname(os.path.abspath(__file__))
     if fix and doctor.ensure_config(here):
         print("أُنشئ config.yaml من المثال")
     checks = doctor.run_checks(cfg)
     text, errors, warnings = doctor.format_report(checks)
     print(text)
+    if accounts_flag:
+        from lib import accounts as accounts_lib
+        acc = accounts_lib.run_account_checks(cfg)
+        acc_text, acc_errors, acc_warnings = doctor.format_report(acc)
+        print("== فحوصات الحسابات (%d) ==" % len(acc))
+        print(acc_text)
+        errors += acc_errors
+        warnings += acc_warnings
     return 0 if errors == 0 else 1
 
 
@@ -1055,12 +1076,14 @@ YT_DEFAULT_TAGS = ["قصص وعبر", "قصص واقعية", "قصص مؤثرة"
 def cmd_publish(cfg, video, title, caption, thumbnail=None,
                 platforms=("facebook", "youtube"), page_id=None,
                 schedule=None, privacy=None, tags=None, dry_run=False,
-                skip_check=False):
+                skip_check=False, skip_caption_check=False):
     """انشر فيديوًا واحدًا على فيسبوك و/أو يوتيوب.
 
     يرجع 0 فقط إن نُشر على كل المنصات المطلوبة فعلًا؛ وإن نُشر بعضها
     فقط (أو كُتبت حزمة يوتيوب اليدوية بدل الرفع) يرجع 1 مع شرح
     ما بقي. --dry-run يطبع الحمولة الدقيقة دون نشر أي شيء.
+    فحص امتثال الكابشن مسبق افتراضيًا (يرفض أي بوابة متابعة/
+    تعليق)؛ و--skip-caption-check للتجاوز الصريح فقط.
     """
     video = expand(video)
     if not os.path.isfile(video):
@@ -1084,6 +1107,33 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     if thumb and not os.path.isfile(thumb):
         print("ملف الصورة المصغرة غير موجود: %s" % thumb)
         return 1
+    # فحص امتثال الكابشن مسبق افتراضيًا: أي جملة تجعل الجزء التالي
+    # مشروطًا بالمتابعة أو التعليق ترفض النشر كله قبل أي فحص فيديو
+    # أو طباعة حمولة. --skip-caption-check للتجاوز الصريح فقط.
+    # الكابشن النهائي يُعرض دائمًا قبل النشر (تجريبي وحقيقي).
+    from lib import caption_check
+    if not skip_caption_check:
+        cap_result = caption_check.check_caption(fb_caption)
+        print("الكابشن النهائي (%d حرفًا):" % len(fb_caption))
+        print("   " + fb_caption.replace("\n", "\n   "))
+        if not cap_result["ok"]:
+            print("الكابشن مرفوض — جمل مشروطة بالمتابعة/التعليق:")
+            for issue in cap_result["issues"]:
+                print("  - «%s» (%s)"
+                      % (issue["sentence"], issue["reason"]))
+            if cap_result["fixed"]:
+                print("الكابشن المقترح:")
+                print("   " + cap_result["fixed"].replace("\n", "\n   "))
+            else:
+                print("الجملة المحظورة في الهوك نفسه — أعد كتابة "
+                      "الكابشن كاملًا.")
+            print("أعد النشر بالكابشن المصحح، أو استخدم "
+                  "--skip-caption-check للتجاوز على مسؤوليتك")
+            return 1
+    else:
+        print("الكابشن النهائي (%d حرفًا) — فحص الامتثال متخطَّى "
+              "(--skip-caption-check):" % len(fb_caption))
+        print("   " + fb_caption.replace("\n", "\n   "))
     # فحص جودة مسبق افتراضي قبل أي نشر (أو معاينة): فيديو فاشل
     # لا يُنشر ولا تُطبع حمولته. --skip-check للتجاوز الصريح فقط.
     if not skip_check:
@@ -1190,6 +1240,14 @@ def cmd_youtube_auth(cfg, client_secrets=None, token=None):
 
 
 # ---------------------------------------------------------- long-narration
+def _default_voice(cfg):
+    """صوت السرد الافتراضي: من الإعداد (narration.voice — يضبطه
+    معالج `init`)، وإلا piper (الراوي الرجل). قيمة غير معروفة
+    في الإعداد تُعامل كـ piper."""
+    voice = (cfg.get("narration") or {}).get("voice") or "piper"
+    return voice if voice in ("piper", "gtts") else "piper"
+
+
 def cmd_long_narration(cfg, text, text_file, out_path, gap, atempo,
                        voice="piper"):
     """سرد طويل مقسّم إلى WAV واحد (Piper رجل افتراضيًا؛ أو gTTS)."""
@@ -1247,13 +1305,56 @@ def _run_chapter(cfg, run_id, title=None, moral=""):
                                             title=title, moral=moral)
 
 
+def _validate_chapters_spec(spec):
+    """تحقق من بنية ملف الفصول (L5): كائن، و«chapters» قائمة،
+    وكل مدخل كائن فيه «type» من الأنواع المعروفة، والحقول
+    المطلوبة لكل نوع موجودة نصًا غير فارغ. يرفع LongVideoError."""
+    chapters = spec.get("chapters", [])
+    if not isinstance(chapters, list):
+        raise long_video.LongVideoError(
+            "حقل «chapters» في ملف الفصول يجب أن يكون قائمة")
+    required = {"story": "story", "project": "project", "run": "run",
+                "chapter-dir": "path", "text": "text"}
+    for i, entry in enumerate(chapters):
+        if not isinstance(entry, dict):
+            raise long_video.LongVideoError(
+                "الفصل %d في ملف الفصول ليس كائنًا" % (i + 1))
+        kind = entry.get("type")
+        if kind not in required:
+            raise long_video.LongVideoError(
+                "الفصل %d نوعه غير معروف: %s (المسموح: "
+                "story/project/run/chapter-dir/text)"
+                % (i + 1, kind))
+        field = required[kind]
+        value = entry.get(field)
+        if kind == "text":
+            value = value or entry.get("text_file")
+        if not isinstance(value, str) or not value.strip():
+            raise long_video.LongVideoError(
+                "الفصل %d من نوع %s ينقصه الحقل «%s»"
+                % (i + 1, kind, field))
+        for key in ("title", "moral"):
+            if key in entry and not isinstance(entry[key], str):
+                raise long_video.LongVideoError(
+                    "الفصل %d حقل «%s» يجب أن يكون نصًا" % (i + 1, key))
+    for key in ("title", "hook", "intro", "outro", "music"):
+        if key in spec and not isinstance(spec[key], str):
+            raise long_video.LongVideoError(
+                "حقل «%s» في ملف الفصول يجب أن يكون نصًا" % key)
+
+
 def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper"):
     """حوّل مدخل فصل واحد (من ملف الفصول أو CLI) إلى قاموس فصل."""
+    if not isinstance(entry, dict):
+        raise long_video.LongVideoError("مدخل فصل ليس كائنًا: %r" % (entry,))
     kind = entry.get("type")
     title = entry.get("title")
     moral = entry.get("moral") or ""
     if kind == "story":
-        slug = entry["story"]
+        slug = entry.get("story")
+        if not isinstance(slug, str) or not slug.strip():
+            raise long_video.LongVideoError(
+                "فصل story بلا حقل «story»")
         known = _long_video_known_projects()
         if slug in known:
             project = known[slug]
@@ -1271,14 +1372,25 @@ def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper"):
         return _stage_project_chapter(cfg, project, work_dir,
                                       title=title, moral=moral)
     if kind == "project":
-        return _stage_project_chapter(cfg, entry["project"], work_dir,
+        proj = entry.get("project")
+        if not isinstance(proj, str) or not proj.strip():
+            raise long_video.LongVideoError(
+                "فصل project بلا حقل «project»")
+        return _stage_project_chapter(cfg, proj, work_dir,
                                       title=title, moral=moral)
     if kind == "run":
-        return _run_chapter(cfg, entry["run"], title=title, moral=moral)
+        run = entry.get("run")
+        if not isinstance(run, str) or not run.strip():
+            raise long_video.LongVideoError("فصل run بلا حقل «run»")
+        return _run_chapter(cfg, run, title=title, moral=moral)
     if kind == "chapter-dir":
         # إصلاح اختبار اختراق 2026-11-21: مجلد فصل خارج مساحة العمل
         # كان يُقرأ وتُكتب فيه ملفات عمل (.long-video) — احصره.
         from lib.paths import resolve_inside_workspace
+        if not isinstance(entry.get("path"), str) \
+                or not entry.get("path", "").strip():
+            raise long_video.LongVideoError(
+                "فصل chapter-dir بلا حقل «path»")
         try:
             chapter_path = resolve_inside_workspace(entry["path"],
                                                     "مجلد الفصل")
@@ -1291,20 +1403,35 @@ def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper"):
     if kind == "text":
         from lib.paths import resolve_inside_workspace
         text = entry.get("text")
+        if not isinstance(text, (str, type(None))):
+            raise long_video.LongVideoError(
+                "الفصل النصي حقل «text» يجب أن يكون نصًا")
         if entry.get("text_file"):
+            if not isinstance(entry.get("text_file"), str):
+                raise long_video.LongVideoError(
+                    "الفصل النصي حقل «text_file» يجب أن يكون نصًا")
             try:
                 text_path = resolve_inside_workspace(entry["text_file"],
                                                      "ملف نص الفصل")
             except ValueError as e:
                 raise long_video.LongVideoError(str(e))
-            with open(text_path, encoding="utf-8") as f:
-                text = f.read()
+            try:
+                with open(text_path, encoding="utf-8") as f:
+                    text = f.read()
+            except OSError as e:
+                raise long_video.LongVideoError(
+                    "تعذّرت قراءة ملف نص الفصل: %s" % e)
         if not text or not text.strip():
             raise long_video.LongVideoError(
                 "الفصل النصي بلا نص: %s" % (title or "?"))
+        raw_images = entry.get("images", [])
+        if not isinstance(raw_images, list) or any(
+                not isinstance(p, str) for p in raw_images):
+            raise long_video.LongVideoError(
+                "الفصل النصي حقل «images» يجب أن يكون قائمة نصوص")
         try:
             images = [resolve_inside_workspace(p, "صورة الفصل")
-                      for p in entry.get("images", [])]
+                      for p in raw_images]
             if entry.get("cover"):
                 images = [resolve_inside_workspace(entry["cover"],
                                                    "غلاف الفصل")] + images
@@ -1354,15 +1481,28 @@ def cmd_long_video(cfg, args):
     run_id, run_dir = new_run(runs_dir, "long-video")
     log = {"run": run_id, "cmd": "long-video",
            "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "steps": {}}
+    # صوت السرد: --voice الصريح أولًا، وإلا الافتراضي من الإعداد.
+    voice = getattr(args, "voice", None) or _default_voice(cfg)
     print("تشغيل الفيديو الطويل: %s" % run_id)
     try:
         spec = {}
         if args.chapters_file:
-            with open(expand(args.chapters_file), encoding="utf-8") as f:
-                spec = json.load(f)
+            # إصلاح اختبار اختراق 2026-11-22 (L5): ملف فصول
+            # مشوَّه كان يتعطل برسائل خام (JSONDecodeError/KeyError/
+            # AttributeError) — يُتحقق من البنية كلها هنا ويرفع
+            # LongVideoError برسالة عربية قبل أي معالجة.
+            try:
+                with open(expand(args.chapters_file),
+                          encoding="utf-8") as f:
+                    spec = json.load(f)
+            except (ValueError, OSError) as e:
+                raise long_video.LongVideoError(
+                    "ملف الفصول غير صالح (%s): %s"
+                    % (args.chapters_file, e))
             if not isinstance(spec, dict):
                 raise long_video.LongVideoError(
                     "ملف الفصول يجب أن يكون كائن JSON")
+            _validate_chapters_spec(spec)
         # --auto-week: قصص الأسبوع من ملف الطابور بدل التجميع اليدوي.
         if getattr(args, "auto_week", False):
             if (args.story or args.project or args.run_id
@@ -1471,7 +1611,7 @@ def cmd_long_video(cfg, args):
         for i, entry in enumerate(entries):
             t0 = time.time()
             ch = _resolve_long_chapter(cfg, entry, run_dir, args.atempo, i,
-                                       voice=getattr(args, "voice", "piper"))
+                                       voice=voice)
             chapters.append(ch)
             print("فصل %d: %s (%.1f ثانية، %d عبارة)"
                   % (i + 1, ch["title"], ch["duration"],
@@ -1482,7 +1622,6 @@ def cmd_long_video(cfg, args):
         # 2) سرد المقدمة والخاتمة (Piper مقسّم افتراضيًا؛ أو gTTS)
         narr_dir = os.path.join(run_dir, "narration")
         os.makedirs(narr_dir, exist_ok=True)
-        voice = getattr(args, "voice", "piper")
         intro_info = long_narration.synthesize_long(
             intro_text, os.path.join(narr_dir, "intro.wav"),
             atempo=args.atempo, voice=voice)
@@ -1721,6 +1860,48 @@ def cmd_queue_add(cfg, title, text_file, parts=1, note=None,
           % (result["number"], result["title"]))
     if result["text_file"]:
         print("نص القصة محفوظ في: %s" % result["text_file"])
+    return 0
+
+
+def cmd_queue_import(cfg, text_file, title, queue_file=None, start=None):
+    """استورد قصة طويلة من ملف نصي إلى الطابور — مقسَّمة لأجزاء
+    ~40–60 ثانية سردًا، كل جزء بموعد مقترح (9:00/19:00 بالتناوب).
+
+    يرجع 0 عند النجاح، و1 عند أي رفض (ملف مفقود/نص فارغ/عنوان
+    مكرر)، و2 عند تاريخ بداية غير صالح.
+    """
+    from lib import queue_import as queue_import_lib
+    from lib.paths import resolve_inside_workspace
+    queue_path = expand(queue_file or cfg["paths"]["queue_file"])
+    try:
+        text_path = resolve_inside_workspace(text_file, "ملف نص القصة")
+    except ValueError as e:
+        print("ملف قصة غير صالح: %s" % e)
+        return 1
+    start_date = None
+    if start:
+        try:
+            start_date = datetime.date.fromisoformat(start)
+        except ValueError:
+            print("تاريخ بداية غير صالح (YYYY-MM-DD): %s" % start)
+            return 2
+    stories_dir = os.path.join(STUDIO_DIR, "queue")
+    try:
+        result = queue_import_lib.import_story(
+            queue_path, text_path, title, stories_dir=stories_dir,
+            start_date=start_date)
+    except (ValueError, queue_lib.QueueError) as e:
+        print("فشل الاستيراد: %s" % e)
+        return 1
+    except OSError as e:
+        print("فشل الكتابة في ملف الطابور: %s" % e)
+        return 1
+    print("استُوردت «%s» — %d أجزاء:" % (result["title"],
+                                          len(result["parts"])))
+    for part in result["parts"]:
+        print("  الجزء %d — الطابور #%d — ~%s ثانية — مقترح %s"
+              % (part["part"], part["number"], part["seconds"],
+                 part["suggested_time"]))
     return 0
 
 
@@ -2017,20 +2198,116 @@ def cmd_update(cfg, dry_run=False,
     def fetch_fn(path):
         return update_backup.fetch_file_raw(repo, branch, path)
 
-    def backup_fn(_paths):
+    def backup_fn(paths):
         zip_path, _inc, _miss = update_backup.make_backup(
             STUDIO_DIR, cfg)
         print("نسخة احتياطية قبل التحديث: %s" % zip_path)
+        # إصلاح اختبار اختراق 2026-11-22 (M5): نسخة ثانية من
+        # الملفات المتغيرة نفسها (ومنها الكود) للتراجع منها
+        # بأمر `restore --file <zip>`.
+        pre_path, pre_inc = update_backup.make_pre_update_backup(
+            STUDIO_DIR, paths)
+        if pre_path:
+            print("نسخة الملفات المتغيرة قبل التحديث: %s (%d ملفًا)"
+                  % (pre_path, len(pre_inc)))
 
     try:
+        # إصلاح اختبار اختراق 2026-11-22 (H1): تُمرَّر بصمات
+        # الشجرة فيُتحقق من كل محتوى منزَّل قبل أي كتابة.
         written = update_backup.apply_update(
-            STUDIO_DIR, changes, fetch_fn, backup_fn)
+            STUDIO_DIR, changes, fetch_fn, backup_fn, tree=tree)
     except update_backup.UpdateError as e:
         print("فشل التحديث: %s" % e)
         return 1
     print("طُبّق %d ملفًا" % len(written))
     print("أعد تشغيل الاختبارات: "
           "python3 -m unittest discover -s tests")
+    return 0
+
+
+def cmd_restore(cfg, backup_file):
+    """استعد ملفات من نسخة «قبل التحديث» (zip).
+
+    التراجع الصريح من تحديث فاسد (إصلاح اختبار اختراق
+    2026-11-22، M5): `studio.py restore --file
+    backups/pre-update-....zip`. ملف النسخة يجب أن يكون داخل
+    مجلد المشروع، والملفات المحمية لا تُستعاد أبدًا.
+    """
+    try:
+        from lib.paths import resolve_inside
+        path = resolve_inside(STUDIO_DIR, expand(backup_file),
+                              "ملف النسخة الاحتياطية")
+    except ValueError as e:
+        print("ملف نسخة غير صالح: %s" % e)
+        return 1
+    try:
+        restored = update_backup.restore_backup(path, STUDIO_DIR)
+    except update_backup.UpdateError as e:
+        print("فشلت الاستعادة: %s" % e)
+        return 1
+    print("استُعيد %d ملفًا من %s" % (len(restored), path))
+    for name in restored:
+        print("  %s" % name)
+    print("أعد تشغيل الاختبارات: "
+          "python3 -m unittest discover -s tests")
+    return 0
+
+
+def cmd_restore_backup(cfg, backup_file, dry_run=False, yes=False):
+    """استرجع الإعداد والطابور وطلبات العملاء من نسخة `backup` (zip).
+
+    أمان إلزامي: (1) كل مدخل يُفحص قبل أي كتابة — لا أسرار أبدًا
+    (توكن يوتيوب/client_secrets/.env/مفاتيح تُرفض وتُلغي العملية
+    كلها)؛ (2) نسخة احتياطية من الحالة الحالية تُؤخذ أولًا
+    تلقائيًا، وإن تعذّرت أُلغيت الاستعادة؛ (3) تأكيد صريح قبل
+    الكتابة فوق الملفات ما لم يُمرَّر --yes. --dry-run يعرض
+    الخطة فقط بلا كتابة وبلا نسخة أمان.
+    """
+    try:
+        from lib.paths import resolve_inside
+        path = resolve_inside(STUDIO_DIR, expand(backup_file),
+                              "ملف النسخة الاحتياطية")
+    except ValueError as e:
+        print("ملف نسخة غير صالح: %s" % e)
+        return 1
+    try:
+        plan = update_backup.plan_user_restore(path, STUDIO_DIR)
+    except update_backup.UpdateError as e:
+        print("فشلت الاستعادة: %s" % e)
+        return 1
+    print("ستُستعاد %d ملفًا من %s:" % (len(plan["restorable"]), path))
+    for name in plan["restorable"]:
+        print("  %s" % name)
+    if plan["skipped"]:
+        print("تُتخطى (%d): %s" % (len(plan["skipped"]),
+                                    ", ".join(plan["skipped"])))
+    if dry_run:
+        print("وضع تجريبي — لم يُكتب شيء، ولم تُؤخذ نسخة احتياطية")
+        return 0
+    if not yes:
+        answer = input("ستُكتب فوق الملفات الحالية. اكتب «نعم» "
+                       "للتأكيد: ").strip().lower()
+        if answer not in ("نعم", "yes", "y"):
+            print("أُلغيت الاستعادة — لم يتغير شيء")
+            return 1
+    try:
+        safety, _inc, _miss = update_backup.make_backup(STUDIO_DIR, cfg)
+    except update_backup.UpdateError as e:
+        print("تعذّرت نسخة الأمان من الحالة الحالية — أُلغيت "
+              "الاستعادة: %s" % e)
+        return 1
+    print("نسخة أمان من الحالة الحالية: %s" % safety)
+    try:
+        restored = update_backup.apply_user_restore(
+            path, STUDIO_DIR, plan)
+    except (update_backup.UpdateError, OSError) as e:
+        print("فشلت الاستعادة أثناء الكتابة: %s" % e)
+        print("الحالة السابقة محفوظة في: %s" % safety)
+        return 1
+    print("استُعيد %d ملفًا:" % len(restored))
+    for name in restored:
+        print("  %s" % name)
+    print("نسخة الأمان: %s" % safety)
     return 0
 
 
@@ -2055,9 +2332,30 @@ def cmd_backup(cfg, out_dir=None):
 
 # ----------------------------------------------------------------- balance
 def cmd_balance(cfg, balance=None, renew=None, cost_min=None,
-                cost_max=None):
+                cost_max=None, record=None, video=None, clips=None,
+                history_flag=False):
     """توقع رصيد Veo بالأيام — من الرصيد المسجَّل في الإعداد
-    (ليس حيًا من API)."""
+    (ليس حيًا من API).
+
+    --record N --video NAME يسجّل إنفاقًا فعليًا بعد توليد في
+    Flow في runs/cost-ledger.jsonl؛ و--history يعرض السجل.
+    """
+    if record is not None:
+        from lib import cost_ledger
+        try:
+            entry = cost_ledger.record(STUDIO_DIR, record, video,
+                                       clips=clips)
+        except ValueError as e:
+            print("سجل التكاليف: %s" % e)
+            return 2
+        print("سُجّل إنفاق %d وحدة — %s (%s)"
+              % (entry["units"], entry["video"], entry["date"]))
+        return 0
+    if history_flag:
+        from lib import cost_ledger
+        print(cost_ledger.format_history(
+            cost_ledger.history(STUDIO_DIR)))
+        return 0
     veo = cfg.get("veo") or {}
     bal = (balance if balance is not None
            else veo.get("balance_units", balance_lib.DEFAULT_BALANCE))
@@ -2075,6 +2373,33 @@ def cmd_balance(cfg, balance=None, renew=None, cost_min=None,
     return 0
 
 
+def cmd_preview(cfg, video, caption=None, first_comment=None,
+                out_dir=None, title=None):
+    """صفحة معاينة HTML لفيديو قبل النشر (إطارات + صوت + فحص
+    جودة + كابشن + أول تعليق). يرجع 0 عند النجاح."""
+    from lib import preview as preview_lib
+    try:
+        out, result = preview_lib.build_preview(
+            video, caption=caption, first_comment=first_comment,
+            out_dir=expand(out_dir) if out_dir else None, title=title)
+    except check_lib.CheckError as e:
+        print("تعذرت المعاينة: %s" % e)
+        return 1
+    print("صفحة المعاينة: %s" % out)
+    print(check_lib.format_report(result))
+    return 0
+
+
+def cmd_logs(cfg, today=True, limit=20):
+    """آخر التشغيلات من runs/ ونتائجها بالعربي (اليوم افتراضيًا)."""
+    from lib import runlog as runlog_lib
+    runs_dir = expand(cfg["paths"]["runs_dir"])
+    entries = runlog_lib.collect_runs(runs_dir, today_only=today,
+                                      limit=limit)
+    print(runlog_lib.format_runs(entries))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="studio",
                                  description="خط إنتاج موحد لفيديوهات "
@@ -2087,6 +2412,9 @@ def main():
     p = sub.add_parser("doctor", help="فحص بيئة studio (PASS/FAIL صادق)")
     p.add_argument("--fix", action="store_true",
                    help="أنشئ config.yaml من المثال إن غاب")
+    p.add_argument("--accounts", action="store_true",
+                   help="أضف فحوصات الحسابات: فيسبوك/يوتيوب/Veo "
+                        "(قراءة فقط)")
     p = sub.add_parser("check", help="فحص جودة فيديو قبل النشر (PASS/FAIL)")
     p.add_argument("--video", required=True, help="ملف الفيديو mp4")
     p.add_argument("--long", action="store_true",
@@ -2125,6 +2453,9 @@ def main():
                    help="اطبع الحمولة الدقيقة دون نشر أي شيء")
     p.add_argument("--skip-check", action="store_true",
                    help="تجاوز فحص الجودة المسبق (غير مستحسن)")
+    p.add_argument("--skip-caption-check", action="store_true",
+                   help="تجاوز فحص امتثال الكابشن (غير مستحسن — "
+                        "بوابة المتابعة/التعليق ممنوعة)")
     p = sub.add_parser("youtube-auth",
                        help="تبادل OAuth ليوتيوب لمرة واحدة (يفتح المتصفح)")
     p.add_argument("--client-secrets",
@@ -2290,9 +2621,10 @@ def main():
     p.add_argument("--queue-file",
                    help="ملف طابور بديل (الافتراضي من config.yaml) — "
                         "مع --auto-week")
-    p.add_argument("--voice", default="piper", choices=["piper", "gtts"],
-                   help="صوت السرد: piper (الراوي الرجل، الافتراضي) "
-                        "أو gtts (صوت ثانٍ اختياري)")
+    p.add_argument("--voice", default=None, choices=["piper", "gtts"],
+                   help="صوت السرد: piper (الراوي الرجل) أو gtts "
+                        "(صوت ثانٍ اختياري) — الافتراضي من الإعداد "
+                        "(narration.voice)")
     p.add_argument("--atempo", type=float, default=1.0,
                    help="سرعة السرد (1.0 افتراضيًا؛ 1.25 لإيقاع Kwai)")
     p.add_argument("--no-watermark", action="store_true",
@@ -2306,9 +2638,10 @@ def main():
                    help="فاصل الصمت بين الجمل بالثواني (0.35)")
     p.add_argument("--atempo", type=float, default=1.0,
                    help="سرعة السرد (1.0 افتراضيًا؛ 1.25 لإيقاع Kwai)")
-    p.add_argument("--voice", default="piper", choices=["piper", "gtts"],
-                   help="صوت السرد: piper (الراوي الرجل، الافتراضي) "
-                        "أو gtts (صوت ثانٍ اختياري)")
+    p.add_argument("--voice", default=None, choices=["piper", "gtts"],
+                   help="صوت السرد: piper (الراوي الرجل) أو gtts "
+                        "(صوت ثانٍ اختياري) — الافتراضي من الإعداد "
+                        "(narration.voice)")
     p = sub.add_parser("quote-cards",
                        help="توليد بطاقات الاقتباس الثلاث 720×1280")
     p.add_argument("--ibra", required=True, help="نص العبرة")
@@ -2354,6 +2687,16 @@ def main():
     qa.add_argument("--note", help="ملاحظة قصيرة تُلحق بمدخل الطابور")
     qa.add_argument("--queue-file",
                     help="ملف طابور بديل (الافتراضي من config.yaml)")
+    qi = qp.add_parser("import",
+                       help="استيراد قصة طويلة من ملف نصي — تقسيم "
+                            "لأجزاء 40–60 ثانية سردًا")
+    qi.add_argument("--file", required=True, help="ملف نص القصة")
+    qi.add_argument("--title", required=True, help="عنوان القصة")
+    qi.add_argument("--queue-file",
+                    help="ملف طابور بديل (الافتراضي من config.yaml)")
+    qi.add_argument("--start",
+                    help="تاريخ بداية المواعيد المقترحة (YYYY-MM-DD — "
+                         "الافتراضي: اليوم)")
     p = sub.add_parser("client-run",
                        help="تنفيذ طلب فيديو عميل واحد (client-orders)")
     p.add_argument("--order", required=True, help="رقم الطلب")
@@ -2408,11 +2751,41 @@ def main():
                    help="المستودع (افتراضي aalhdydy550-ui/qisas-studio)")
     p.add_argument("--branch", default="main",
                    help="الفرع (افتراضي main)")
+    p = sub.add_parser("restore",
+                       help="استعادة الإعداد والطابور وطلبات العملاء "
+                            "من نسخة backup (أو تراجع من تحديث فاسد)")
+    p.add_argument("--backup",
+                   help="ملف zip النسخة (من `studio.py backup`) — "
+                        "يسترجع الإعداد والطابور وطلبات العملاء فقط")
+    p.add_argument("--file",
+                   help="ملف zip نسخة «قبل التحديث» (تراجع من "
+                        "تحديث فاسد — لا يسترجع ملفات محمية)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="اعرض خطة الاستعادة دون كتابة (مع --backup)")
+    p.add_argument("--yes", action="store_true",
+                   help="تجاوز سؤال التأكيد (غير تفاعلي)")
     p = sub.add_parser("backup",
                        help="نسخة احتياطية zip للإعداد والطابور "
                             "والطلبات والسجلات")
     p.add_argument("--out-dir", default=None,
                    help="مجلد النسخ (افتراضي backups/)")
+    p = sub.add_parser("preview",
+                       help="صفحة معاينة HTML لفيديو قبل النشر "
+                            "(إطارات + صوت + فحص جودة + كابشن)")
+    p.add_argument("--video", required=True, help="ملف الفيديو mp4")
+    p.add_argument("--caption", help="نص الكابشن")
+    p.add_argument("--first-comment", help="نص أول تعليق")
+    p.add_argument("--out-dir",
+                   help="مجلد حفظ الصفحة (افتراضي: بجانب الفيديو)")
+    p.add_argument("--title", help="عنوان الصفحة (افتراضي: اسم الفيديو)")
+    p = sub.add_parser("logs",
+                       help="آخر التشغيلات من runs/ ونتائجها بالعربي")
+    p.add_argument("--today", action="store_true",
+                   help="اليوم فقط (الافتراضي)")
+    p.add_argument("--all", dest="all_logs", action="store_true",
+                   help="كل الأيام بدل اليوم فقط")
+    p.add_argument("--limit", type=int, default=20,
+                   help="أقصى عدد تشغيلات (افتراضي 20)")
     p = sub.add_parser("balance",
                        help="توقع رصيد Veo بالأيام (مسجَّل لا حي)")
     p.add_argument("--balance", type=int, default=None,
@@ -2423,6 +2796,15 @@ def main():
                    help="أقل تكلفة فيديو يومي (وحدة)")
     p.add_argument("--cost-max", type=int, default=None,
                    help="أعلى تكلفة فيديو يومي (وحدة)")
+    p.add_argument("--record", type=int, default=None,
+                   help="سجّل إنفاقًا فعليًا بعد توليد في Flow (وحدة) "
+                        "— مع --video")
+    p.add_argument("--video", default=None,
+                   help="اسم الفيديو للإنفاق المسجَّل (مع --record)")
+    p.add_argument("--clips", type=int, default=None,
+                   help="عدد مقاطع التوليد (مع --record)")
+    p.add_argument("--history", action="store_true",
+                   help="اعرض سجل التكاليف المسجَّلة")
     args = ap.parse_args()
     cfg = load_config()
     # خيار --size (في run/assemble): يبدّل مقاس الفيديو لهذا التشغيل
@@ -2473,7 +2855,7 @@ def main():
         _ensure_environment()  # إصلاح ذاتي: أعد الأدوات/الخدمة إن غابتا
 
     if args.cmd == "doctor":
-        return cmd_doctor(cfg, fix=args.fix)
+        return cmd_doctor(cfg, fix=args.fix, accounts_flag=args.accounts)
     if args.cmd == "check":
         return cmd_check(cfg, args.video, long_mode=args.long,
                          as_json=args.json)
@@ -2709,7 +3091,8 @@ def main():
                            page_id=args.page_id, schedule=args.schedule,
                            privacy=args.privacy, tags=tags,
                            dry_run=args.dry_run,
-                           skip_check=args.skip_check)
+                           skip_check=args.skip_check,
+                           skip_caption_check=args.skip_caption_check)
     if args.cmd == "youtube-auth":
         return cmd_youtube_auth(cfg, args.client_secrets, args.token)
     if args.cmd == "long-video":
@@ -2729,6 +3112,10 @@ def main():
             return cmd_queue_add(cfg, args.title, args.text_file,
                                  parts=args.parts, note=args.note,
                                  queue_file=args.queue_file)
+        if args.queue_cmd == "import":
+            return cmd_queue_import(cfg, args.file, args.title,
+                                    queue_file=args.queue_file,
+                                    start=args.start)
         return 2
     if args.cmd == "analyze":
         return cmd_analyze(cfg, page_id=args.page_id,
@@ -2737,7 +3124,7 @@ def main():
         try:
             cmd_long_narration(cfg, args.text, args.text_file,
                                args.out, args.gap, args.atempo,
-                               voice=args.voice)
+                               voice=args.voice or _default_voice(cfg))
         except long_narration.LongNarrationError as e:
             print("فشل السرد الطويل: %s" % e)
             return 1
@@ -2786,12 +3173,33 @@ def main():
     if args.cmd == "update":
         return cmd_update(cfg, dry_run=args.dry_run, repo=args.repo,
                           branch=args.branch)
+    if args.cmd == "restore":
+        if args.backup and args.file:
+            print("حدد إما --backup أو --file، لا كليهما")
+            return 1
+        if args.backup:
+            return cmd_restore_backup(cfg, args.backup,
+                                      dry_run=args.dry_run, yes=args.yes)
+        if args.file:
+            return cmd_restore(cfg, args.file)
+        print("حدد ملف النسخة: --backup <ملف.zip> أو --file <ملف.zip>")
+        return 1
     if args.cmd == "backup":
         return cmd_backup(cfg, args.out_dir)
+    if args.cmd == "preview":
+        return cmd_preview(cfg, args.video, caption=args.caption,
+                           first_comment=args.first_comment,
+                           out_dir=args.out_dir, title=args.title)
+    if args.cmd == "logs":
+        return cmd_logs(cfg, today=not args.all_logs,
+                        limit=args.limit)
     if args.cmd == "balance":
         return cmd_balance(cfg, balance=args.balance, renew=args.renew,
                            cost_min=args.cost_min,
-                           cost_max=args.cost_max)
+                           cost_max=args.cost_max,
+                           record=args.record, video=args.video,
+                           clips=args.clips,
+                           history_flag=args.history)
     return 0
 
 
