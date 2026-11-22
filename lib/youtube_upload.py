@@ -13,15 +13,44 @@
       # {"video_id": ..., "url": ...} — بلا أي نص آخر على stdout.
       # --publish-at يفرض privacyStatus=private تلقائيًا (شرط
       # YouTube API للفيديو المجدول: خاص حتى موعده ثم يُنشر).
+  python youtube_upload.py preflight --token FILE --title T
+      --description D [--tags a,b] --video-size BYTES
+      # فحص ما قبل النشر (الجولة 8 — `studio.py publish
+      # --preflight`): يتحقق من التوكن أولًا (بلا شبكة)، ثم
+      # ينشئ جلسة رفع قابلة للاستئناف (resumable session) بلا
+      # إرسال أي بايت من الفيديو وبلا نشر أي شيء. النجاح يعني
+      # «المسار يعمل من الـVM»؛ وفشل SSL (WRONG_VERSION_NUMBER
+      # — بروكسي الخروج) يطبع رسالة الرفع اليدوي الجاهزة.
 
 لا يُنشر شيء وهمي: أي فشل يخرج برمز غير صفري ورسالة على stderr.
 """
 import argparse
 import json
 import os
+import ssl
 import sys
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+YT_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+UPLOAD_SESSION_URL = ("https://www.googleapis.com/upload/youtube/v3/"
+                      "videos?uploadType=resumable&part=snippet,status")
+
+# رسالة الرفع اليدوي الجاهزة عند فشل SSL (بروكسي الـVM يمنع
+# الاتصال المباشر بـ youtube.googleapis.com — الجولة 6/8).
+SSL_MANUAL_UPLOAD_MESSAGE = (
+    "فشل الاتصال بـ YouTube API من هذه الـVM "
+    "(SSL: WRONG_VERSION_NUMBER — بروكسي الشبكة يمنع الاتصال "
+    "المباشر بـ youtube.googleapis.com) — الرفع التلقائي غير "
+    "متاح من هنا. الحل: ارفع الفيديو يدويًا من YouTube Studio "
+    "(https://studio.youtube.com ← «إنشاء» ← «تحميل فيديو») "
+    "بالعنوان والوصف نفسيهما؛ وحزمة الرفع اليدوي تُبنى بـ "
+    "`studio.py publish --video <الملف> --title <العنوان> "
+    "--dry-run` لطباعة العنوان والوصف. لم يُرسَل أي بايت من "
+    "الفيديو ولم يُنشر شيء.")
+
+
+class PreflightError(Exception):
+    """خطأ في فحص ما قبل النشر (رسالته عربية)."""
 
 
 def _import_google():
@@ -140,6 +169,115 @@ def upload_video(service, video, title, description, tags,
             "url": "https://www.youtube.com/watch?v=%s" % video_id}
 
 
+def token_file_status(token_path):
+    """فحص ثابت لملف التوكن (بلا أي شبكة): يرجع
+    ("ok"|"missing"|"invalid", تفصيل عربي).
+
+    «غير صالح» = ملف تالف أو بلا refresh_token أو بلا نطاق
+    الرفع. التوكن المنتهي زمنيًا (access token) بلا refresh
+    فاشل يُجدَّد تلقائيًا في load_credentials — فانتهاؤه وحده
+    ليس «غير صالح» هنا؛ وإن فشل التجديد يرجع load_credentials
+    ‏None فيُبلَّغ «منتهٍ أو غير صالح» قبل أي محاولة إلى
+    YouTube API.
+    """
+    if not os.path.isfile(token_path):
+        return "missing", "غير موجود (%s)" % token_path
+    try:
+        with open(token_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (ValueError, OSError) as e:
+        return "invalid", "تالف أو غير مقروء: %s" % e
+    if not isinstance(data, dict) or not data.get("refresh_token"):
+        return "invalid", "بلا refresh_token — لا يمكن تجديده"
+    scopes = data.get("scopes") or []
+    if scopes and YT_UPLOAD_SCOPE not in scopes:
+        return "invalid", "بلا نطاق youtube.upload — الرفع سيفشل"
+    return "ok", "صالح (فيه refresh_token ونطاق الرفع)"
+
+
+def _is_ssl_error(exc):
+    """هل هذا الخطأ فشل SSL المعروف لبروكسي الخروج؟"""
+    if isinstance(exc, ssl.SSLError):
+        return True
+    return "WRONG_VERSION_NUMBER" in str(exc)
+
+
+def create_resumable_session(creds, body, video_size, http_post=None):
+    """أنشئ جلسة رفع قابلة للاستئناف بلا إرسال أي بايت من
+    الفيديو: POST واحد إلى نقطة uploadType=resumable بهدف
+    إنشاء الجلسة فقط (الترويسات تعلن نوع المحتوى وحجمه)؛
+    والرد 200 يرجع رابط الجلسة في ترويسة Location — يُرجع
+    الرابط ويُترك الرفع نفسه (لا يُرسَل أي مقطع بعده).
+
+    http_post: دالة قابلة للحقن http_post(url, headers, data)
+    -> رد فيه status_code وheaders — للاختبار بلا شبكة؛
+    والافتراضي AuthorizedSession من بيانات الاعتماد.
+    يرفع PreflightError برسالة عربية عند أي فشل.
+    """
+    if http_post is None:
+        from google.auth.transport.requests import AuthorizedSession
+        http_post = AuthorizedSession(creds).post
+    headers = {
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Type": "video/mp4",
+        "X-Upload-Content-Length": str(int(video_size)),
+    }
+    try:
+        response = http_post(UPLOAD_SESSION_URL, headers=headers,
+                             data=json.dumps(body, ensure_ascii=False))
+    except Exception as e:
+        if _is_ssl_error(e):
+            raise PreflightError(SSL_MANUAL_UPLOAD_MESSAGE)
+        raise PreflightError("تعذر الاتصال بـ YouTube API: %s" % e)
+    status = getattr(response, "status_code", None)
+    if status in (401, 403):
+        raise PreflightError(
+            "رفض YouTube API إنشاء جلسة الرفع (رمز %s) — التوكن بلا "
+            "صلاحية رفع على الأرجح؛ أعد الموافقة عبر "
+            "`studio.py youtube-reauth`" % status)
+    if status != 200:
+        raise PreflightError(
+            "رفض YouTube API إنشاء جلسة الرفع (رمز HTTP %s)"
+            % status)
+    headers_out = getattr(response, "headers", {}) or {}
+    location = (headers_out.get("Location")
+                or headers_out.get("location"))
+    if not location:
+        raise PreflightError(
+            "أنشأ YouTube API الجلسة بلا رابط استئناف (بلا ترويسة "
+            "Location) — لا يمكن تأكيد المسار")
+    return location
+
+
+def run_preflight(token_path, title, description, tags, video_size,
+                  http_post=None):
+    """فحص ما قبل النشر: صلاحية التوكن أولًا (بلا شبكة)، ثم
+    إنشاء جلسة رفع قابلة للاستئناف (بلا أي بايت وبلا نشر).
+
+    يرجع {"ok": True, "session_uri": ..., "video_size": ...}.
+    يرفع PreflightError برسالة عربية: توكن منتهٍ/غير صالح
+    (قبل أي محاولة إلى YouTube API)، أو فشل SSL (رسالة الرفع
+    اليدوي الجاهزة)، أو رفض API.
+    """
+    status, detail = token_file_status(token_path)
+    if status != "ok":
+        raise PreflightError(
+            "توكن يوتيوب %s — أعد الموافقة عبر "
+            "`studio.py youtube-reauth` قبل أي محاولة رفع؛ ولم "
+            "تُجرَ أي محاولة شبكة إلى YouTube API." % detail)
+    creds = load_credentials(token_path)
+    if not creds:
+        raise PreflightError(
+            "توكن يوتيوب منتهٍ أو غير صالح — أعد الموافقة عبر "
+            "`studio.py youtube-reauth` قبل أي محاولة رفع؛ ولم "
+            "تُجرَ أي محاولة شبكة إلى YouTube API.")
+    body = build_upload_body(title, description, tags, "private")
+    session_uri = create_resumable_session(
+        creds, body, video_size, http_post=http_post)
+    return {"ok": True, "session_uri": session_uri,
+            "video_size": int(video_size)}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="youtube_upload",
                                  description="رفع يوتيوب عبر Data API v3")
@@ -158,10 +296,36 @@ def main(argv=None):
     p.add_argument("--category-id", default="24")
     p.add_argument("--thumbnail", default=None)
     p.add_argument("--token", required=True)
+    p = sub.add_parser("preflight",
+                       help="فحص ما قبل النشر: جلسة رفع بلا بايتات "
+                            "وبلا نشر")
+    p.add_argument("--token", required=True)
+    p.add_argument("--title", required=True)
+    p.add_argument("--description", default="")
+    p.add_argument("--tags", default="")
+    p.add_argument("--video-size", type=int, required=True)
     args = ap.parse_args(argv)
     if args.cmd == "auth":
         return run_auth(os.path.expanduser(args.client_secrets),
                         os.path.expanduser(args.token))
+    if args.cmd == "preflight":
+        try:
+            result = run_preflight(
+                os.path.expanduser(args.token), args.title,
+                args.description,
+                [t.strip() for t in args.tags.split(",")
+                 if t.strip()],
+                args.video_size)
+        except PreflightError as e:
+            print("فحص ما قبل النشر على يوتيوب: فشل — %s" % e,
+                  file=sys.stderr)
+            return 1
+        print("فحص ما قبل النشر على يوتيوب: المسار يعمل من الـVM — "
+              "أُنشئت جلسة رفع قابلة للاستئناف (بلا إرسال أي بايت "
+              "من الفيديو وبلا نشر).")
+        print("حجم الفيديو المعلن للجلسة: %d بايت"
+              % result["video_size"])
+        return 0
     creds = load_credentials(os.path.expanduser(args.token))
     if not creds:
         print("توكن يوتيوب غير صالح أو غائب: %s — أكمل "
