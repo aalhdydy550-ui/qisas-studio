@@ -15,6 +15,11 @@
   studio.py run --demo       # القصة التجريبية المدمجة (مسار مجاني فقط)
   studio.py publish --video F --title T [--caption C] [--dry-run]
       # نشر فيديو على صفحة فيسبوك (Reel) ويوتيوب (Data API v3)
+  studio.py publish --preflight --video F --title T
+      # فحص ما قبل النشر على يوتيوب فقط: التوكن + جلسة رفع
+      # قابلة للاستئناف بلا إرسال أي بايت وبلا نشر
+  studio.py version
+      # إصدار studio + حالة البعيد من سجل المزامنة المحلي
   studio.py youtube-auth     # تبادل OAuth ليوتيوب لمرة واحدة
   studio.py script   --story NAME [--allow-fallback]
   studio.py produce  --project NAME [--run RUN_ID]
@@ -142,8 +147,52 @@ def _print_translated(prefix, exc, context):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.32"
+VERSION = "0.1.33"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
+# سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
+# مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،
+# بلا شبكة إجبارية).
+SYNC_LOG_PATH = os.path.join(os.path.dirname(STUDIO_DIR),
+                             "studio.muse-github-snapshot-sync.json")
+
+
+def remote_status_line(sync_log=None):
+    """سطر حالة البعيد من سجل المزامنة المحلي (بلا شبكة).
+
+    يرجع نصًا عربيًا: آخر إدخال مزامنة (المستودع/الفرع + أول
+    8 أحرف من الالتزام + عدد الإدخالات)، أو «غير معروفة» إن
+    غاب السجل أو فسد — ولا يفشل أبدًا.
+    """
+    path = sync_log or SYNC_LOG_PATH
+    try:
+        with open(path, encoding="utf-8") as f:
+            entries = json.load(f)
+        if not isinstance(entries, list) or not entries:
+            raise ValueError("سجل مزامنة فارغ")
+        # إدخالات الالتزام «dddd…» قطع اختبار وهمية يكتبها تشغيل
+        # مجموعة الاختبارات في السجل — تُتخطى، وآخر إدخال حقيقي
+        # هو المرجع.
+        real = [e for e in entries
+                if isinstance(e, dict) and e.get("commit_sha")
+                and set(str(e["commit_sha"])) != {"d"}]
+        if not real:
+            raise ValueError("سجل مزامنة بلا إدخالات حقيقية")
+        last = real[-1]
+        return ("البعيد: آخر مزامنة محفوظة %s/%s@%s (%d إدخالًا "
+                "حقيقيًا في السجل المحلي — بلا شبكة)"
+                % (last.get("owner"), last.get("repo"),
+                   str(last.get("commit_sha") or "?")[:8],
+                   len(real)))
+    except (OSError, ValueError, TypeError, KeyError):
+        return ("حالة البعيد: غير معروفة (بلا شبكة — سجل المزامنة "
+                "المحلي غير متاح)")
+
+
+def cmd_version():
+    """اطبع إصدار studio + حالة البعيد (بلا شبكة). يرجع 0."""
+    print("studio %s" % VERSION)
+    print(remote_status_line())
+    return 0
 # الموسيقى الخلفية المدمجة (شوبان — ملكية عامة، assets/music/).
 DEFAULT_MUSIC = os.path.join(
     STUDIO_DIR, "assets", "music", "calm-piano-chopin-nocturne-20.mp3")
@@ -1372,6 +1421,44 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     return 0 if ok else 1
 
 
+def cmd_publish_preflight(cfg, video, title, caption, tags=None):
+    """`publish --preflight`: فحص مسار يوتيوب فقط — صلاحية
+    التوكن ثم إنشاء جلسة رفع قابلة للاستئناف، بلا إرسال أي
+    بايت من الفيديو وبلا نشر أي شيء. يرجع 0 إن كان المسار
+    يعمل من الـVM، و1 مع رسالة عربية (يدوي من YouTube Studio)
+    عند فشل SSL أو التوكن."""
+    video = expand(video)
+    if not os.path.isfile(video):
+        print("ملف الفيديو غير موجود: %s" % video)
+        return 1
+    token = expand(cfg.get("publish", {}).get("youtube_token") or
+                   "~/workspace/studio/youtube-token.json")
+    try:
+        yt_title = publish.build_youtube_title(title)
+        yt_desc = publish.build_youtube_description(title, caption)
+    except publish.PublishError as e:
+        print("خطأ في بيانات النشر: %s" % e)
+        return 1
+    tag_list = ([t.strip() for t in tags.split(",") if t.strip()]
+                if isinstance(tags, str) else (tags or []))
+    try:
+        result = publish.youtube_preflight(
+            token, yt_title, yt_desc, tag_list,
+            os.path.getsize(video))
+    except publish.PublishError as e:
+        # رسالة الرافع نفسه تبدأ بـ«فحص ما قبل النشر…» أصلًا
+        # (فشل SSL/توكن) — تُطبع كما هي بلا بادئة مكررة.
+        msg = str(e)
+        if "فحص ما قبل النشر" in msg:
+            print(msg)
+        else:
+            print("فحص ما قبل النشر على يوتيوب: فشل — %s" % msg)
+        return 1
+    print(result.get("report")
+          or "فحص ما قبل النشر على يوتيوب: المسار يعمل من الـVM.")
+    return 0
+
+
 def cmd_youtube_auth(cfg, client_secrets=None, token=None):
     """تبادل OAuth ليوتيوب لمرة واحدة (يفتح المتصفح)."""
     venv_python = publish.youtube_venv_python()
@@ -2341,7 +2428,8 @@ def cmd_daily(cfg, slot="morning", execute=False, video=None,
     try:
         rc, _result = daily.execute_daily(
             cfg, plan, produce_fn, check_fn, thumbnail_fn, publish_fn,
-            expand(cfg["paths"]["runs_dir"]), auto_approve=auto_approve)
+            expand(cfg["paths"]["runs_dir"]), auto_approve=auto_approve,
+            record_spend_fn=_record_veo_spend)
     except check_lib.CheckError as e:
         print("تعذر فحص الجودة: %s" % e)
         return 1
@@ -2384,7 +2472,8 @@ def cmd_batch(cfg, count=1, source="openmontage", execute=False,
         rc, _result = batch_lib.execute_batch(
             cfg, plan, produce_fn, check_fn, thumbnail_fn,
             expand(cfg["paths"]["runs_dir"]),
-            continue_on_error=continue_on_error)
+            continue_on_error=continue_on_error,
+            record_spend_fn=_record_veo_spend)
     except check_lib.CheckError as e:
         print("تعذر فحص الجودة: %s" % e)
         return 1
@@ -2703,6 +2792,27 @@ def cmd_backup(cfg, out_dir=None, keep=None):
 
 
 # ----------------------------------------------------------------- balance
+def _record_veo_spend(units):
+    """سجّل إنفاق Veo فعليًا: اخصم من config.yaml واختم الوقت
+    (الجولة 8). تحذير فقط عند التعذر — لا يُفشل التشغيل.
+    يرجع الرصيد الجديد أو None."""
+    config_path = os.path.join(STUDIO_DIR, "config.yaml")
+    try:
+        new_balance = balance_lib.record_veo_spend(config_path, units)
+    except (ValueError, OSError) as e:
+        print("تحذير: تعذر تسجيل إنفاق Veo (%d وحدة): %s"
+              % (units, e))
+        return None
+    if new_balance is None:
+        print("تحذير: لا رصيد مسجَّل في config.yaml — لم يُخصم "
+              "إنفاق Veo (%d وحدة)؛ حدّث الرصيد بـ "
+              "`balance --set N`." % units)
+    else:
+        print("سُجّل إنفاق Veo: %d وحدة — الرصيد المسجَّل الآن "
+              "%d وحدة." % (units, new_balance))
+    return new_balance
+
+
 def _save_veo_balance(balance_units, stamp):
     """احفظ رصيد Veo + وقت تحديثه في config.yaml بتعديل نصي.
 
@@ -2743,7 +2853,8 @@ def _save_veo_balance(balance_units, stamp):
 
 def cmd_balance(cfg, balance=None, renew=None, cost_min=None,
                 cost_max=None, record=None, video=None, clips=None,
-                history_flag=False, cap=None, config_path=None):
+                history_flag=False, cap=None, config_path=None,
+                set_balance=None):
     """توقع رصيد Veo بالأيام — من الرصيد المسجَّل في الإعداد
     (ليس حيًا من API).
 
@@ -2751,6 +2862,8 @@ def cmd_balance(cfg, balance=None, renew=None, cost_min=None,
     Flow في runs/cost-ledger.jsonl؛ و--history يعرض السجل.
     --cap N يضبط سقف الإنفاق لكل توليد Veo (فيديو واحد) في
     config.yaml؛ و--cap 0 يلغي السقف.
+    --set N (الجولة 8) يضبط الرصيد المسجَّل مع ختم وقت التحديث
+    بتوقيت القاهرة الآن.
     """
     if cap is not None:
         if isinstance(cap, bool) or not isinstance(cap, int) \
@@ -2810,6 +2923,29 @@ def cmd_balance(cfg, balance=None, renew=None, cost_min=None,
         veo["updated_at"] = stamp
         print("حُفظ الرصيد الجديد (%d وحدة) في config.yaml مع وقت "
               "التحديث." % balance)
+    if set_balance is not None:
+        # الجولة 8: ضبط الرصيد المسجَّل + ختم وقت القاهرة الآن.
+        if isinstance(set_balance, bool) \
+                or not isinstance(set_balance, int) or set_balance < 0:
+            print("رصيد غير صالح: %s (المسموح: عدد صحيح ≥ 0)"
+                  % (set_balance,))
+            return 2
+        path = config_path or os.path.join(STUDIO_DIR, "config.yaml")
+        try:
+            stamp = balance_lib.now_iso_cairo()
+            balance_lib.save_veo_value("balance_units", set_balance,
+                                       path)
+            balance_lib.save_veo_value("updated_at", stamp, path)
+        except (ValueError, OSError) as e:
+            print("فشل حفظ الرصيد: %s" % e)
+            return 1
+        veo = dict(veo)
+        veo["balance_units"] = set_balance
+        veo["updated_at"] = stamp
+        bal = set_balance
+        print("حُفظ الرصيد الجديد (%d وحدة) في config.yaml مع وقت "
+              "التحديث بتوقيت القاهرة (%s)."
+              % (set_balance, stamp))
     try:
         result = balance_lib.forecast(bal, ren, cmin, cmax,
                                       updated_at=veo.get("updated_at"),
@@ -2854,8 +2990,16 @@ def main():
                                              "القصص",
                                  epilog="للمساعدة بالعربية: "
                                         "python3 studio.py help-ar")
+    # الجولة 8: --version يطبع الإصدار + حالة البعيد من سجل
+    # المزامنة المحلي (بلا شبكة)؛ ونصه يُبنى قبل التحليل لأن
+    # argparse يطبعه ويخرج فورًا.
+    ap.add_argument("--version", action="version",
+                    version="studio %s\n%s"
+                    % (VERSION, remote_status_line()))
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="فحص حالة الطبقات الثلاث")
+    sub.add_parser("version",
+                   help="اطبع إصدار studio وحالة البعيد (بلا شبكة)")
     sub.add_parser("help-ar", help="مساعدة عربية — كل أمر ووظيفته ومثال عليه")
     p = sub.add_parser("doctor", help="فحص بيئة studio (PASS/FAIL صادق)")
     p.add_argument("--fix", action="store_true",
@@ -2901,8 +3045,16 @@ def main():
                    help="نص الكابشن (تُضاف الهاشتاجات تلقائيًا)")
     p.add_argument("--thumbnail", help="ملف الصورة المصغرة")
     p.add_argument("--platforms", default="facebook,youtube",
-                   help="منصات مفصولة بفاصلة: facebook,youtube "
-                        "(الافتراضي: كلاهما)")
+                   help="منصات مفصولة بفاصلة — المقبول: facebook, "
+                        "youtube, tiktok, instagram (الافتراضي: "
+                        "facebook,youtube)؛ وللربط: أمري tiktok-auth "
+                        "و instagram-auth")
+    p.add_argument("--preflight", action="store_true",
+                   help="فحص ما قبل النشر على يوتيوب فقط: صلاحية "
+                        "التوكن + إنشاء جلسة رفع قابلة للاستئناف بلا "
+                        "إرسال أي بايت من الفيديو وبلا نشر — فإن فشل "
+                        "بخطأ SSL (بروكسي الـVM) يطبع رسالة الرفع "
+                        "اليدوي من YouTube Studio")
     p.add_argument("--page-id", help="معرّف صفحة فيسبوك (أو من config.yaml)")
     p.add_argument("--schedule",
                    help="موعد النشر المجدول بصيغة YYYY-MM-DD HH:MM "
@@ -3350,6 +3502,9 @@ def main():
                    help="سقف الإنفاق: حد أقصى لوحدات Veo لكل توليد "
                         "(فيديو واحد) — يُحفظ في config.yaml؛ و0 "
                         "يلغي السقف")
+    p.add_argument("--set", dest="set_balance", type=int, default=None,
+                   help="اضبط الرصيد المسجَّل (وحدة) مع ختم وقت "
+                        "التحديث بتوقيت القاهرة الآن")
     args = ap.parse_args()
     cfg = load_config()
     # خيار --size (في run/assemble): يبدّل مقاس الفيديو لهذا التشغيل
@@ -3621,7 +3776,12 @@ def main():
                        args.allow_fallback, args.dry_run, args.backend,
                        not args.no_watermark,
                        expand(args.cards_dir) if args.cards_dir else None)
+    if args.cmd == "version":
+        return cmd_version()
     if args.cmd == "publish":
+        if args.preflight:
+            return cmd_publish_preflight(cfg, args.video, args.title,
+                                         args.caption, tags=args.tags)
         platforms = [pl.strip() for pl in args.platforms.split(",")
                      if pl.strip()]
         bad = [pl for pl in platforms
@@ -3787,7 +3947,8 @@ def main():
                            record=args.record, video=args.video,
                            clips=args.clips,
                            history_flag=args.history,
-                           cap=args.cap)
+                           cap=args.cap,
+                           set_balance=args.set_balance)
     return 0
 
 
