@@ -105,6 +105,7 @@ from lib import autoweek
 from lib import analyze
 from lib import help_ar
 from lib import check as check_lib
+from lib import fix_audio as fix_audio_lib
 from lib import init_wizard
 from lib import ideas
 from lib import daily
@@ -112,7 +113,21 @@ from lib import ab as ab_lib
 from lib import update_backup
 from lib import balance as balance_lib
 
-VERSION = "0.1.29"
+
+def _print_translated(prefix, exc, context):
+    """اطبع خطأً مترجمًا للعربية؛ وإن لم تُعرف فئته اطبع الأصل."""
+    from lib import errors as errors_lib
+    text = str(exc)
+    if "ماذا حدث:" in text:
+        print("%s: %s" % (prefix, text))  # مترجم أصلًا في lib/ — لا تكرر
+        return
+    explained = errors_lib.explain_error(exc, context)
+    if explained["category"] == "unknown":
+        print("%s: %s" % (prefix, text))
+    else:
+        print(errors_lib.format_error(explained))
+
+VERSION = "0.1.30"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # الموسيقى الخلفية المدمجة (شوبان — ملكية عامة، assets/music/).
 DEFAULT_MUSIC = os.path.join(
@@ -712,6 +727,22 @@ def _finish_video(out_path, watermark_on=True, cards_dir=None):
         os.replace(tmp, out)
         print("أُلحقت %d بطاقات اقتباس ختامية (%.0f ثانية)"
               % (len(cards), time.time() - t0))
+    # إصلاح تلقائي لفجوات الصمت (الجولة 6 بند 3): إن فشل فحص
+    # الصمت فقط، امزج ضجيجًا ورديًا خافتًا وأعد الفحص؛ أي فشل
+    # آخر (مدة/مقاس/شعار) يُترك كما هو. الفشل هنا لا يفشل
+    # التجميع — يُطبع تحذير ويُترك الفيديو الأصلي.
+    try:
+        result = check_lib.run_checks(out)
+        silence = next(c for c in result["checks"]
+                       if c["name"] == "الصمت عند الفواصل")
+        if not silence["ok"]:
+            fixed = fix_audio_lib.fix_silence_gaps(
+                out, min_seconds=4.0 if result["long"] else 1.0)
+            print(fix_audio_lib.format_report(fixed))
+            out = fixed["output"]
+    except Exception as e:
+        print("تعذر الإصلاح التلقائي للصمت (%s) — يُترك الفيديو "
+              "كما هو" % e)
     return out
 
 
@@ -978,7 +1009,7 @@ def cmd_run(cfg, story, project, out_path, allow_fallback, dry_run=False,
     except Exception as e:
         log["status"] = "failed"
         log["error"] = str(e)
-        print("فشل خط الإنتاج: %s" % e)
+        _print_translated("فشل خط الإنتاج", e, "run")
         write_log(run_dir, log)
         return 1
     write_log(run_dir, log)
@@ -994,13 +1025,30 @@ def cmd_check(cfg, video, long_mode=False, as_json=False):
     try:
         result = check_lib.run_checks(expand(video), long_mode=long_mode)
     except check_lib.CheckError as e:
-        print("تعذر فحص الفيديو: %s" % e)
+        _print_translated("تعذر فحص الفيديو", e, "check")
         return 1
     if as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(check_lib.format_report(result))
     return 0 if result["passed"] else 1
+
+
+def cmd_fix_audio(cfg, video, scene_audio=None, out_path=None):
+    """إصلاح فجوات الصمت في فيديو (ضجيج وردي + صوت المشاهد).
+
+    يرجع 0 إن نجح الإصلاح أو كان الفيديو سليمًا أصلًا، و1 عند
+    أي فشل (ملف مفقود أو تعذر المزج).
+    """
+    try:
+        result = fix_audio_lib.fix_silence_gaps(
+            expand(video), scene_audio_paths=scene_audio,
+            out_path=expand(out_path) if out_path else None)
+    except fix_audio_lib.FixAudioError as e:
+        print("فشل إصلاح الصوت: %s" % e)
+        return 1
+    print(fix_audio_lib.format_report(result))
+    return 0
 
 
 def cmd_init(cfg, args):
@@ -1017,14 +1065,18 @@ def cmd_init(cfg, args):
                       ("voice", "voice"),
                       ("morning", "morning"),
                       ("evening", "evening"),
-                      ("queue_file", "queue_file")):
+                      ("queue_file", "queue_file"),
+                      ("page_name", "page_name"),
+                      ("logo_file", "logo_file"),
+                      ("payment_number", "payment_number")):
         value = getattr(args, attr, None)
         if value is not None:
             flags[key] = value
     if not flags:
         flags = None
     return init_wizard.run_wizard(cfg, config_path, flags=flags,
-                                  force=args.force)
+                                  force=args.force,
+                                  check_only=args.check_only)
 
 
 def cmd_doctor(cfg, fix=False, accounts_flag=False):
@@ -1140,7 +1192,7 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
         try:
             result = check_lib.run_checks(video)
         except check_lib.CheckError as e:
-            print("تعذر فحص الجودة قبل النشر: %s" % e)
+            _print_translated("تعذر فحص الجودة قبل النشر", e, "check")
             print("أصلح الفيديو أو استخدم --skip-check للتجاوز")
             return 1
         print(check_lib.format_report(result))
@@ -1160,6 +1212,9 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
             import shlex
             print("-- فيسبوك (Reel على الصفحة %s):" % (page_id or "?"))
             print("   " + " ".join(shlex.quote(a) for a in argv))
+            if schedule:
+                print("   موعد النشر المجدول: %s"
+                      % publish.format_schedule(schedule))
             print("   الكابشن (%d حرفًا):" % len(fb_caption))
             print("   " + fb_caption.replace("\n", "\n   "))
         if "youtube" in platforms:
@@ -1177,6 +1232,9 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
             print("فيسبوك: %s (post_id=%s)"
                   % ("مجدول" if res["state"] == "scheduled" else "نُشر",
                      res["post_id"]))
+            if schedule:
+                print("   موعد النشر المجدول: %s"
+                      % publish.format_schedule(schedule))
         except publish.PublishError as e:
             print("فيسبوك: فشل — %s" % e)
             ok = False
@@ -1189,6 +1247,9 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
                     video, yt_title, yt_desc, tags, privacy, schedule,
                     thumbnail=thumb, token=token)
                 print("يوتيوب: رُفع — %s" % res["url"])
+                if schedule:
+                    print("   موعد النشر المجدول: %s"
+                          % publish.format_schedule(schedule))
             except publish.PublishError as e:
                 print("يوتيوب: فشل — %s" % e)
                 ok = False
@@ -1237,6 +1298,24 @@ def cmd_youtube_auth(cfg, client_secrets=None, token=None):
               "والمتصفح مفتوح")
         return 1
     return proc.returncode
+
+
+def cmd_youtube_reauth(cfg, client_secrets=None, token=None):
+    """إعادة الموافقة على يوتيوب — نفس تبادل OAuth في
+    `youtube-auth`، بأمر موجَّه يطبع الرابط والخطوات.
+
+    لا ينشر التطبيق Production ولا يغيّر مشروع Google Cloud —
+    يعيد الموافقة فقط على نفس التطبيق في وضع الاختبار (7 أيام).
+    """
+    print("إعادة الموافقة على يوتيوب:")
+    print("1. سيُفتح المتصفح لتسجيل الدخول بحساب يوتيوب.")
+    print("2. وافق على نطاق الرفع (youtube.upload).")
+    print("3. التوكن الجديد صالح 7 أيام (وضع الاختبار) — أعد "
+          "الموافقة قبل انتهائها بيومين.")
+    print("ملاحظة: نشر التطبيق Production خيار منفصل — انظر README "
+          "(قسم «توكن يوتيوب: وضع الاختبار») قبل أن تقرره.")
+    return cmd_youtube_auth(cfg, client_secrets=client_secrets,
+                            token=token)
 
 
 # ---------------------------------------------------------- long-narration
@@ -2311,13 +2390,15 @@ def cmd_restore_backup(cfg, backup_file, dry_run=False, yes=False):
     return 0
 
 
-def cmd_backup(cfg, out_dir=None):
+def cmd_backup(cfg, out_dir=None, keep=None):
     """نسخة احتياطية zip: الإعداد + الطابور + طلبات العملاء +
     سجلات التشغيل."""
     try:
         zip_path, included, missing = update_backup.make_backup(
             STUDIO_DIR, cfg,
-            out_dir=expand(out_dir) if out_dir else None)
+            out_dir=expand(out_dir) if out_dir else None,
+            keep=(keep if keep is not None
+                  else update_backup.BACKUP_KEEP))
     except update_backup.UpdateError as e:
         print("فشل النسخ الاحتياطي: %s" % e)
         return 1
@@ -2331,6 +2412,44 @@ def cmd_backup(cfg, out_dir=None):
 
 
 # ----------------------------------------------------------------- balance
+def _save_veo_balance(balance_units, stamp):
+    """احفظ رصيد Veo + وقت تحديثه في config.yaml بتعديل نصي.
+
+    تعديل نصي (لا إعادة كتابة YAML) حتى تبقى تعليقات الملف.
+    يرجع True عند النجاح.
+    """
+    import re
+    config_path = os.path.join(STUDIO_DIR, "config.yaml")
+    with open(config_path, encoding="utf-8") as f:
+        text = f.read()
+    bal_line = "  balance_units: %d" % balance_units
+    stamp_line = "  updated_at: %s" % stamp
+    m = re.search(r"(?m)^veo:\n((?:  .*\n)*)", text)
+    if not m or not m.group(1):
+        if m:
+            text = text[:m.end()] + bal_line + "\n" + stamp_line + "\n" \
+                + text[m.end():]
+        else:
+            text = text.rstrip("\n") + "\n\nveo:\n" + bal_line + \
+                "\n" + stamp_line + "\n"
+    else:
+        section = m.group(1)
+        section = re.sub(r"(?m)^  balance_units:.*$",
+                         bal_line, section)
+        if "balance_units:" not in section:
+            section = bal_line + "\n" + section
+        section = re.sub(r"(?m)^  updated_at:.*$",
+                         stamp_line, section)
+        if "updated_at:" not in section:
+            section += stamp_line + "\n"
+        text = text[:m.start(1)] + section + text[m.end(1):]
+    tmp = config_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, config_path)
+    return True
+
+
 def cmd_balance(cfg, balance=None, renew=None, cost_min=None,
                 cost_max=None, record=None, video=None, clips=None,
                 history_flag=False):
@@ -2364,8 +2483,18 @@ def cmd_balance(cfg, balance=None, renew=None, cost_min=None,
             else veo.get("daily_cost_min", balance_lib.DEFAULT_COST_MIN))
     cmax = (cost_max if cost_max is not None
             else veo.get("daily_cost_max", balance_lib.DEFAULT_COST_MAX))
+    if balance is not None:
+        # الجولة 6: احفظ الرصيد الجديد + وقت تحديثه في config.yaml.
+        stamp = balance_lib.now_iso()
+        _save_veo_balance(balance, stamp)
+        veo = dict(veo)
+        veo["balance_units"] = balance
+        veo["updated_at"] = stamp
+        print("حُفظ الرصيد الجديد (%d وحدة) في config.yaml مع وقت "
+              "التحديث." % balance)
     try:
-        result = balance_lib.forecast(bal, ren, cmin, cmax)
+        result = balance_lib.forecast(bal, ren, cmin, cmax,
+                                      updated_at=veo.get("updated_at"))
     except (ValueError, TypeError) as e:
         print("قيم غير صالحة: %s" % e)
         return 2
@@ -2421,6 +2550,14 @@ def main():
                    help="فيديو طويل أفقي 1280×720 (8–12 دقيقة)")
     p.add_argument("--json", action="store_true",
                    help="اطبع التقرير JSON بدل النص العربي")
+    p = sub.add_parser("fix-audio",
+                       help="إصلاح فجوات الصمت في فيديو (ضجيج وردي + "
+                            "صوت المشاهد الأصلي)")
+    p.add_argument("--video", required=True, help="ملف الفيديو mp4")
+    p.add_argument("--scene-audio", action="append", default=[],
+                   help="ملف صوت مشهد أصلي (يُكرَّر، تُدمج بالترتيب)")
+    p.add_argument("--out", help="ملف الفيديو الناتج (الافتراضي: "
+                                 "<الاسم>-fixed.mp4 بجانب الأصلي)")
     p = sub.add_parser("init", help="معالج إعداد تفاعلي — يكتب config.yaml")
     p.add_argument("--page-id", help="معرّف صفحة فيسبوك")
     p.add_argument("--channel-id", help="معرّف قناة يوتيوب")
@@ -2433,6 +2570,11 @@ def main():
                    help="مسار config.yaml (الافتراضي: مجلد studio)")
     p.add_argument("--force", action="store_true",
                    help="اكتب فوق config.yaml موجود بلا سؤال")
+    p.add_argument("--page-name", help="اسم الصفحة (يُحفظ في identity.page_name)")
+    p.add_argument("--logo-file", help="ملف الشعار PNG (يُنسخ إلى assets/qisas-logo-badge.png)")
+    p.add_argument("--payment-number", help="رقم الدفع فودافون كاش (11 رقمًا يبدأ بـ 01)")
+    p.add_argument("--check-only", action="store_true",
+                   help="تحقق من الربط فقط بلا كتابة أي ملف")
     p = sub.add_parser("publish", help="نشر فيديو على فيسبوك ويوتيوب")
     p.add_argument("--video", required=True, help="ملف الفيديو mp4")
     p.add_argument("--title", required=True, help="عنوان الفيديو")
@@ -2443,8 +2585,11 @@ def main():
                    help="منصات مفصولة بفاصلة: facebook,youtube "
                         "(الافتراضي: كلاهما)")
     p.add_argument("--page-id", help="معرّف صفحة فيسبوك (أو من config.yaml)")
-    p.add_argument("--schedule", type=int,
-                   help="موعد النشر Unix (ثوانٍ) — للجدولة بدل النشر الآن")
+    p.add_argument("--schedule",
+                   help="موعد النشر المجدول بصيغة YYYY-MM-DD HH:MM "
+                        "بتوقيت Africa/Cairo (مثال: 2026-11-23 19:00)؛ "
+                        "أو Unix (ثوانٍ) للتوافق مع القديم — للجدولة "
+                        "بدل النشر الآن")
     p.add_argument("--privacy", choices=["public", "unlisted", "private"],
                    help="خصوصية يوتيوب (الافتراضي من الإعداد: public)")
     p.add_argument("--tags",
@@ -2458,6 +2603,13 @@ def main():
                         "بوابة المتابعة/التعليق ممنوعة)")
     p = sub.add_parser("youtube-auth",
                        help="تبادل OAuth ليوتيوب لمرة واحدة (يفتح المتصفح)")
+    p.add_argument("--client-secrets",
+                   help="ملف client_secrets.json (أو من config.yaml)")
+    p.add_argument("--token",
+                   help="مسار حفظ التوكن (أو من config.yaml)")
+    p = sub.add_parser("youtube-reauth",
+                       help="إعادة الموافقة على يوتيوب (التوكن في وضع "
+                            "الاختبار ينتهي بعد 7 أيام)")
     p.add_argument("--client-secrets",
                    help="ملف client_secrets.json (أو من config.yaml)")
     p.add_argument("--token",
@@ -2702,6 +2854,22 @@ def main():
     p.add_argument("--order", required=True, help="رقم الطلب")
     sub.add_parser("process-queue",
                    help="تنفيذ كل طلبات العملاء الجديدة (client-orders)")
+    p = sub.add_parser("orders",
+                       help="إدارة طلبات العملاء (تأكيد دفع/عرض)")
+    op = p.add_subparsers(dest="orders_cmd", required=True)
+    oc = op.add_parser("confirm",
+                       help="تأكيد دفع طلب بعد التحقق من التحويل يدويًا")
+    oc.add_argument("order_id", help="رقم الطلب (مثال QS-123456)")
+    oc.add_argument("--by", default="owner",
+                    help="من أكّد الدفع (افتراضي owner)")
+    ol = op.add_parser("list",
+                       help="عرض الطلبات (اختياريًا بحالة معينة)")
+    ol.add_argument("--status", default=None,
+                    help="تصفية بحالة (مثال awaiting_payment)")
+    ot = op.add_parser("trial",
+                       help="حالة التجربة المجانية لعميل (كم فيديو "
+                            "مجاني بقي له)")
+    ot.add_argument("whatsapp", help="رقم واتساب العميل")
     p = sub.add_parser("ideas", help="مولّد أفكار قصص بأسلوب الصفحة")
     p.add_argument("--count", type=int, default=5,
                    help="عدد الأفكار (افتراضي 5)")
@@ -2769,6 +2937,8 @@ def main():
                             "والطلبات والسجلات")
     p.add_argument("--out-dir", default=None,
                    help="مجلد النسخ (افتراضي backups/)")
+    p.add_argument("--keep", type=int, default=None,
+                   help="عدد النسخ المحتفَظ بها (افتراضي 7)")
     p = sub.add_parser("preview",
                        help="صفحة معاينة HTML لفيديو قبل النشر "
                             "(إطارات + صوت + فحص جودة + كابشن)")
@@ -2859,6 +3029,10 @@ def main():
     if args.cmd == "check":
         return cmd_check(cfg, args.video, long_mode=args.long,
                          as_json=args.json)
+    if args.cmd == "fix-audio":
+        return cmd_fix_audio(cfg, args.video,
+                             scene_audio=args.scene_audio or None,
+                             out_path=args.out)
     if args.cmd == "init":
         return cmd_init(cfg, args)
     if args.cmd == "status":
@@ -2920,7 +3094,7 @@ def main():
                              expand(args.cards_dir)
                              if args.cards_dir else None)
         except concat_mcp.ConcatError as e:
-            print("فشل التجميع: %s" % e)
+            _print_translated("فشل التجميع", e, "assemble")
             return 1
         except headless_stage.HeadlessError as e:
             print("فشل التجميع عبر headless-editor: %s" % e)
@@ -3086,15 +3260,24 @@ def main():
             return 2
         tags = ([t.strip() for t in args.tags.split(",") if t.strip()]
                 if args.tags else None)
+        schedule = None
+        if args.schedule:
+            try:
+                schedule = publish.parse_schedule(args.schedule)
+            except publish.PublishError as e:
+                print("خطأ في موعد الجدولة: %s" % e)
+                return 2
         return cmd_publish(cfg, args.video, args.title, args.caption,
                            thumbnail=args.thumbnail, platforms=platforms,
-                           page_id=args.page_id, schedule=args.schedule,
+                           page_id=args.page_id, schedule=schedule,
                            privacy=args.privacy, tags=tags,
                            dry_run=args.dry_run,
                            skip_check=args.skip_check,
                            skip_caption_check=args.skip_caption_check)
     if args.cmd == "youtube-auth":
         return cmd_youtube_auth(cfg, args.client_secrets, args.token)
+    if args.cmd == "youtube-reauth":
+        return cmd_youtube_reauth(cfg, args.client_secrets, args.token)
     if args.cmd == "long-video":
         try:
             return cmd_long_video(cfg, args)
@@ -3156,6 +3339,15 @@ def main():
     if args.cmd == "process-queue":
         import client_orders
         return client_orders.cmd_process_queue(cfg)
+    if args.cmd == "orders":
+        import client_orders
+        if args.orders_cmd == "confirm":
+            return client_orders.cmd_confirm_payment(cfg, args.order_id,
+                                                     confirmed_by=args.by)
+        if args.orders_cmd == "list":
+            return client_orders.cmd_list_orders(status=args.status)
+        if args.orders_cmd == "trial":
+            return client_orders.cmd_trial_status(args.whatsapp)
     if args.cmd == "ideas":
         return cmd_ideas(cfg, count=args.count, theme=args.theme,
                          add=args.add, queue_file=args.queue_file)
@@ -3185,7 +3377,7 @@ def main():
         print("حدد ملف النسخة: --backup <ملف.zip> أو --file <ملف.zip>")
         return 1
     if args.cmd == "backup":
-        return cmd_backup(cfg, args.out_dir)
+        return cmd_backup(cfg, args.out_dir, keep=args.keep)
     if args.cmd == "preview":
         return cmd_preview(cfg, args.video, caption=args.caption,
                            first_comment=args.first_comment,
