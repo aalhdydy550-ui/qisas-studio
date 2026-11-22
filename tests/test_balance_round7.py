@@ -36,6 +36,15 @@ class TestCheckCap(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("ضمن", reason)
 
+    def test_no_cap_no_balance_honest_message(self):
+        # انحدار (الجولة 9): بلا سقف مضبوط ولا رصيد مسجَّل لم
+        # يُفحص شيء أصلًا — فالرسالة القديمة «ضمن السقف
+        # والرصيد» كانت تدّعي فحصًا لم يحدث.
+        ok, reason = balance_lib.check_cap(120, {})
+        self.assertTrue(ok)
+        self.assertIn("لم يُفحص", reason)
+        self.assertNotIn("ضمن السقف والرصيد", reason)
+
     def test_under_cap_ok(self):
         ok, _ = balance_lib.check_cap(
             120, {"balance_units": 680, "cap_units": 200})
