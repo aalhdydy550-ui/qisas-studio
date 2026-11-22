@@ -57,6 +57,16 @@ PROTECTED_DIRS = {
 }
 MAX_RUN_FILES = 200
 
+# الجولة 6 (2026-11-22): احتفاظ النسخ الاحتياطية — آخر N نسخة
+# فقط في مجلد النسخ، والأقدم تُحذف تلقائيًا بعد كل نسخة ناجحة
+# (يُستدعى من make_backup، فيستفيد منه `studio.py backup` بلا
+# تعديل في studio.py نفسه).
+BACKUP_KEEP = 7
+# ما يُعدّ نسخة احتياطية لغرض الاحتفاظ: ملفات backup-*.zip فقط.
+# نسخ «قبل التحديث» (pre-update-*.zip) لا تُمسّ — هي تراجع
+# التحديثات ولا تُحذف تلقائيًا؛ وأي ملف آخر في المجلد لا يُمسّ.
+BACKUP_FILE_GLOB = "backup-*.zip"
+
 
 class UpdateError(Exception):
     """خطأ في التحديث أو النسخ الاحتياطي (رسالته عربية)."""
@@ -564,13 +574,51 @@ def apply_user_restore(zip_path, local_root, plan):
     return restored
 
 
-def make_backup(studio_dir, cfg, out_dir=None):
+def prune_old_backups(out_dir, keep=BACKUP_KEEP):
+    """احذف نسخ backup-*.zip الأقدم فوق حد الاحتفاظ.
+
+    يبقي أحدث `keep` نسخة (الترتيب بزمن التعديل ثم الاسم).
+    لا يحذف أبدًا أحدث نسخة، ولا ملفات ليست نسخًا احتياطية
+    (pre-update-*.zip وأي ملف آخر في المجلد)، ولا الروابط
+    الرمزية. `keep` أقل من 1 يُعامل كـ 1 — أحدث نسخة محمية
+    دائمًا. فشل حذف ملف واحد لا يوقف الباقي ولا يرفع خطأ.
+    يرجع قائمة مسارات المحذوفة (فارغة إن لم يُحذف شيء).
+    """
+    keep = max(1, int(keep))
+    if not os.path.isdir(out_dir):
+        return []
+    candidates = []
+    for name in os.listdir(out_dir):
+        if not fnmatch.fnmatch(name, BACKUP_FILE_GLOB):
+            continue
+        full = os.path.join(out_dir, name)
+        if not os.path.isfile(full) or os.path.islink(full):
+            continue
+        candidates.append((os.stat(full).st_mtime_ns, name, full))
+    candidates.sort()
+    excess = candidates[:-keep] if len(candidates) > keep else []
+    deleted = []
+    for _mtime, _name, full in excess:
+        try:
+            os.unlink(full)
+            deleted.append(full)
+        except OSError:
+            continue
+    return deleted
+
+
+def make_backup(studio_dir, cfg, out_dir=None, keep=BACKUP_KEEP):
     """أنشئ نسخة احتياطية zip مؤرخة. يرجع (مسار الzip،
     قائمة الملفات المضمّنة، قائمة المفقودة).
 
     إصلاح اختبار اختراق 2026-11-22 (M7/L7): الاسم الآن فريد
     (طابع + PID + عشوائي) تحت قفل flock، والكتابة ذرية
     (مؤقت + os.replace) وبأذونات 600.
+
+    الجولة 6 (2026-11-22): بعد كل نسخة ناجحة يُطبَّق الاحتفاظ
+    (prune_old_backups) — آخر `keep` نسخة فقط (افتراضي 7)،
+    والأقدم تُحذف. النسخة الجديدة نفسها هي الأحدث فلا تُحذف
+    أبدًا. فشل الحذف لا يُفشل النسخة.
     """
     out_dir = out_dir or os.path.join(studio_dir, "backups")
     found, missing = collect_backup_files(studio_dir, cfg)
@@ -585,4 +633,5 @@ def make_backup(studio_dir, cfg, out_dir=None):
             manifest.append("\nمفقود (لم يُضمَّن):")
             manifest.extend(missing)
         zip_path = _write_zip_atomic(out_dir, zip_name, found, manifest)
+        prune_old_backups(out_dir, keep=keep)
     return zip_path, [a for a, _ in found], missing
