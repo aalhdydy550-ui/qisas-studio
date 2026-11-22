@@ -94,10 +94,13 @@ class TestYoutubeTokenRound6(unittest.TestCase):
 
 class TestVeoBalanceAgeRound6(unittest.TestCase):
     def test_balance_without_updated_at_is_unknown_age(self):
-        # رصيد بلا updated_at → «غير معروف العمر» بلا تحذير قدم.
+        # رصيد بلا updated_at → «غير معروف العمر» مع تحذير صريح
+        # (الجولة 8: العمر المجهول يُحذَّر منه — كان «بلا تحذير
+        # قدم» في الجولة 6؛ السلوك الجديد مقصود).
         c = accounts.check_veo_balance(_veo_cfg(), today=TODAY,
                                        now=NOW)
-        self.assertTrue(c["ok"])
+        self.assertFalse(c["ok"])
+        self.assertEqual(c["level"], "warn")
         self.assertIn("غير معروف العمر", c["detail"])
         self.assertNotIn("قديم", c["detail"])
 
