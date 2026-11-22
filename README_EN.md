@@ -50,6 +50,20 @@ silence, word density), `balance --cap N` (Veo spend cap, refused in Arabic
 before any spend), `scene-plan --story N` (scene plan printed and saved
 before spending any credits).
 
+Batches: `batch --count N` is the current batch path — it checks the
+Veo balance (120 units per video) and the spend cap before planning,
+and is dry-run by default (real run only with `--execute`). `run-queue`
+is a legacy compatibility command kept working as-is: it runs ready
+stories straight from the queue file, with no balance or cap check.
+
+Platforms: built for Linux (Ubuntu). On Windows, use WSL2 + Ubuntu —
+the supported way. On macOS it generally works, but the auto-restore
+layer (`setup-env.sh`) is Linux-only: it installs apt packages (such as
+ffmpeg, mesa-vulkan-drivers, melt and xvfb) and restores `/usr/local/bin`
+links, so on macOS install their equivalents manually (e.g. via Homebrew)
+and the auto-restore does not run; `setup.sh` itself has no OS check,
+and its python3-missing hint suggests `apt-get` (Debian/Ubuntu).
+
 ## Known limits (verified 2026-11-20)
 
 - Concat does not generate video; Veo clips still come from Google Flow.
