@@ -336,6 +336,63 @@ def youtube_venv_python(studio_dir=None):
     return path if os.path.isfile(path) else None
 
 
+def youtube_preflight(token, title, description, tags, video_size,
+                      studio_dir=None, runner=None):
+    """فحص ما قبل النشر على يوتيوب (الجولة 8 — بلا إرسال أي بايت
+    من الفيديو وبلا نشر).
+
+    ينفذ lib/youtube_upload.py preflight بمفسّر .venv-youtube:
+    صلاحية التوكن أولًا، ثم إنشاء جلسة رفع قابلة للاستئناف.
+    يرجع {"ok": True, "report": ...} عند النجاح. يرفع
+    PublishError برسالة عربية عند فشل التوكن أو فشل SSL
+    (بروكسي الـVM — رسالة الرفع اليدوي الجاهزة). runner:
+    دالة قابلة للحقن runner(argv) -> (returncode, stdout,
+    stderr) — للاختبار بلا عملية فرعية.
+    """
+    venv_python = youtube_venv_python(studio_dir)
+    if not venv_python:
+        raise PublishError("بيئة YouTube غير موجودة (.venv-youtube) — "
+                           "شغّل setup.sh أولًا")
+    token = os.path.expanduser(token) if token else None
+    if not token or not os.path.isfile(token):
+        raise PublishError("لا يوجد توكن يوتيوب (%s) — أكمل إعداد "
+                           "OAuth لمرة واحدة (studio.py youtube-auth)؛ "
+                           "ولم تُجرَ أي محاولة شبكة"
+                           % (token or "youtube-token.json"))
+    # «-I» (معزول) إلزامي: بدونه يضيف بايثون مجلد lib/ إلى
+    # sys.path فيظلّل lib/queue.py وحدة stdlib ‏queue فينكسر
+    # urllib3 (AttributeError: module 'queue' has no attribute
+    # 'LifoQueue') قبل أي شبكة — وهو نفس الخلل الكامن في مسار
+    # الرفع الحقيقي upload_youtube. -I يبقي site-packages
+    # البيئة ويستبعد مجلد السكربت.
+    uploader = os.path.join(studio_dir or STUDIO_DIR, "lib",
+                            "youtube_upload.py")
+    cmd = [venv_python, "-I", uploader, "preflight",
+           "--token", token,
+           "--title", build_youtube_title(title),
+           "--description", description or "",
+           "--tags", ",".join(tags or []),
+           "--video-size", str(int(video_size))]
+    if runner is None:
+        proc = _run(cmd, "فحص ما قبل النشر على يوتيوب", timeout=120)
+        returncode, out, err = (proc.returncode, proc.stdout or "",
+                                proc.stderr or "")
+    else:
+        returncode, out, err = runner(cmd)
+    report = (out or "").strip()
+    if returncode != 0:
+        raw = (err or out or "").strip()
+        if "WRONG_VERSION_NUMBER" in raw or "الرفع اليدوي" in raw \
+                or "YouTube Studio" in raw:
+            # رسالة الرافع نفسه عربية جاهزة (فشل SSL) — تُمرَّر
+            # كما هي بلا تغليف إضافي.
+            raise PublishError(raw)
+        raise PublishError(
+            "فشل فحص ما قبل النشر على يوتيوب (رمز الخروج %d): %s"
+            % (returncode, raw[-800:] if raw else "بلا تفاصيل"))
+    return {"ok": True, "report": report}
+
+
 def upload_youtube(video, title, description, tags, privacy="public",
                    schedule=None, category_id=None, thumbnail=None,
                    client_secrets=None, token=None, studio_dir=None,
@@ -357,7 +414,7 @@ def upload_youtube(video, title, description, tags, privacy="public",
                            % (token or "youtube-token.json"))
     uploader = os.path.join(studio_dir or STUDIO_DIR, "lib",
                             "youtube_upload.py")
-    cmd = [venv_python, uploader, "upload",
+    cmd = [venv_python, "-I", uploader, "upload",
            "--video", os.path.abspath(video),
            "--title", build_youtube_title(title),
            "--description", description,
