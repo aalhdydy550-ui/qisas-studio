@@ -156,9 +156,12 @@ class TestCmdPublishDryRun(unittest.TestCase):
                             return_value="facebook-cli"):
                 buf = io.StringIO()
                 with mock.patch("sys.stdout", buf):
+                    # فيديو وهمي (بايتات عشوائية) — فحص الجودة
+                    # المسبق يُتجاوز هنا؛ بوابته تُختبر وحدها أدناه.
                     rc = studio.cmd_publish(
                         cfg, video, "عنوان التجربة", "كابشن تجريبي",
-                        platforms=("facebook", "youtube"), dry_run=True)
+                        platforms=("facebook", "youtube"), dry_run=True,
+                        skip_check=True)
             self.assertEqual(rc, 0)
             out = buf.getvalue()
             self.assertIn("وضع تجريبي", out)
@@ -182,9 +185,12 @@ class TestCmdPublishDryRun(unittest.TestCase):
                             return_value=proc):
                 buf = io.StringIO()
                 with mock.patch("sys.stdout", buf):
+                    # فيديو وهمي — فحص الجودة يُتجاوز؛ المقصود هنا
+                    # مسار حزمة يوتيوب اليدوية عند غياب التوكن.
                     rc = studio.cmd_publish(
                         cfg, video, "عنوان", "كابشن",
-                        platforms=("facebook", "youtube"))
+                        platforms=("facebook", "youtube"),
+                        skip_check=True)
             # فيسبوك نُشر لكن يوتيوب بلا توكن → حزمة يدوية + رجوع 1
             self.assertEqual(rc, 1)
             out = buf.getvalue()
@@ -193,6 +199,80 @@ class TestCmdPublishDryRun(unittest.TestCase):
             bundles = [d for d in os.listdir(td)
                        if d.startswith("publish-") and d.endswith("-youtube")]
             self.assertEqual(len(bundles), 1)
+
+
+class TestPublishQualityGate(unittest.TestCase):
+    """بوابة فحص الجودة المسبق في cmd_publish (فحص مُحاكى).
+
+    فيديو وهمي + فحص مُحاكى: الفشل يمنع النشر، والنجاح يمرّره،
+    و--skip-check يتجاوز البوابة دون استدعاء الفحص أصلًا.
+    """
+
+    def _cfg(self, td):
+        return {"publish": {"page_id": "1048148471706586",
+                            "youtube_token": os.path.join(td, "t.json"),
+                            "youtube_privacy": "public"},
+                "paths": {"videos_dir": td}}
+
+    def _result(self, passed):
+        return {"path": "/tmp/v.mp4", "long": False, "duration": 45.0,
+                "width": 720, "height": 1280,
+                "checks": [{"name": "المدة", "ok": passed,
+                            "detail": "المدة 45.0 ثانية"}],
+                "passed": passed}
+
+    def test_failed_check_blocks_publish(self):
+        with tempfile.TemporaryDirectory() as td:
+            video = os.path.join(td, "v.mp4")
+            Path(video).write_bytes(b"fake")
+            with mock.patch("studio.check_lib.run_checks",
+                            return_value=self._result(False)), \
+                 mock.patch("lib.publish.post_facebook",
+                            side_effect=AssertionError(
+                                "لا نشر بعد فشل الفحص")):
+                buf = io.StringIO()
+                with mock.patch("sys.stdout", buf):
+                    rc = studio.cmd_publish(
+                        self._cfg(td), video, "عنوان", "كابشن",
+                        platforms=("facebook",), dry_run=True)
+            self.assertEqual(rc, 1)
+            self.assertIn("فشل فحص الجودة", buf.getvalue())
+
+    def test_passed_check_allows_dry_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            video = os.path.join(td, "v.mp4")
+            Path(video).write_bytes(b"fake")
+            with mock.patch("studio.check_lib.run_checks",
+                            return_value=self._result(True)), \
+                 mock.patch("lib.publish.find_facebook_bin",
+                            return_value="facebook-cli"):
+                buf = io.StringIO()
+                with mock.patch("sys.stdout", buf):
+                    rc = studio.cmd_publish(
+                        self._cfg(td), video, "عنوان", "كابشن",
+                        platforms=("facebook",), dry_run=True)
+            self.assertEqual(rc, 0)
+            out = buf.getvalue()
+            self.assertIn("وضع تجريبي", out)
+            self.assertIn("[PASS]", out)
+
+    def test_skip_check_never_calls_the_gate(self):
+        with tempfile.TemporaryDirectory() as td:
+            video = os.path.join(td, "v.mp4")
+            Path(video).write_bytes(b"fake")
+            with mock.patch("studio.check_lib.run_checks",
+                            side_effect=AssertionError(
+                                "البوابة استُدعيت رغم --skip-check")), \
+                 mock.patch("lib.publish.find_facebook_bin",
+                            return_value="facebook-cli"):
+                buf = io.StringIO()
+                with mock.patch("sys.stdout", buf):
+                    rc = studio.cmd_publish(
+                        self._cfg(td), video, "عنوان", "كابشن",
+                        platforms=("facebook",), dry_run=True,
+                        skip_check=True)
+            self.assertEqual(rc, 0)
+            self.assertNotIn("فحص جودة", buf.getvalue())
 
 
 if __name__ == "__main__":
