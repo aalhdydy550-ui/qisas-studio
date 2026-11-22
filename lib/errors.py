@@ -476,7 +476,7 @@ def explain_error(exc_or_text, context=None):
                   "steps": [_UNKNOWN_DO,
                             "شغّل: python3 studio.py doctor — "
                             "للتأكد أن بيئة studio سليمة قبل إعادة المحاولة."],
-                  "original": original[:300]}
+                  "original": original[:4000]}
     else:
         rule = _RULE_BY_CATEGORY[category]
         result = {"category": rule["category"],
@@ -484,7 +484,7 @@ def explain_error(exc_or_text, context=None):
                   "what_happened": rule["what_happened"],
                   "what_to_do": rule["what_to_do"],
                   "steps": list(rule["steps"]),
-                  "original": original[:300]}
+                  "original": original[:4000]}
     result["ماذا حدث"] = result["what_happened"]
     result["ماذا تفعل"] = result["what_to_do"]
     return result
@@ -503,10 +503,43 @@ def format_error(explained):
             lines.append("  %d) %s" % (i, step))
     original = (explained.get("original") or "").strip()
     if original:
-        lines.append("الخطأ الأصلي: %s" % original)
+        lines.append("الخطأ الأصلي: %s" % clip_output(original))
     return "\n".join(lines)
 
 
 def explain_error_text(exc_or_text, context=None):
     """اختصار: ترجمة + تنسيق في استدعاء واحد — يرجع نصًا."""
     return format_error(explain_error(exc_or_text, context))
+
+
+# --- قصّ المخرجات الطويلة (جولة v0.1.37 — مقترح tinker رقم 12) ---
+# مخرجات طويلة (مسارات ملفات، مخرجات أدوات، رسائل خطأ) تُقصّ
+# إلى رأس + ذيل مع إعلان عدد الأسطر المحذوفة، حتى تبقى
+# التقارير والسجلات قابلة للقراءة.
+
+_CLIP_HEAD_LINES = 8
+_CLIP_TAIL_LINES = 8
+
+
+def clip_output(text, head_lines=_CLIP_HEAD_LINES,
+                tail_lines=_CLIP_TAIL_LINES):
+    """قصّ نص طويل إلى رأسه وذيله.
+
+    النص القصير (أقل من أو يساوي رأس+ذيل) يُرجَع كما هو.
+    النص الطويل يُرجَع كـ:
+        <أول head_lines سطرًا>
+        ... (حُذفت N سطرًا) ...
+        <آخر tail_lines سطرًا>
+    """
+    if text is None:
+        return ""
+    text = str(text)
+    lines = text.splitlines()
+    limit = head_lines + tail_lines
+    if len(lines) <= limit:
+        return text
+    head = lines[:head_lines]
+    tail = lines[-tail_lines:] if tail_lines > 0 else []
+    omitted = len(lines) - head_lines - tail_lines
+    return "\n".join(
+        head + ["... (حُذفت %d سطرًا) ..." % omitted] + tail)
