@@ -275,5 +275,78 @@ class TestPublishQualityGate(unittest.TestCase):
             self.assertNotIn("فحص جودة", buf.getvalue())
 
 
+class TestCaptionComplianceGate(unittest.TestCase):
+    """بوابة امتثال الكابشن في cmd_publish (فحص مُحاكى للجودة).
+
+    كابشن محظور يرفض النشر قبل أي حمولة؛ والدعوة اللطيفة
+    وسطر «ابعت قصتك» يمرّان؛ و--skip-caption-check يتجاوز
+    البوابة صراحةً.
+    """
+
+    GATE = ("لو عايز الجزء الثاني اعمل متابعة واكتب في التعليقات: "
+            "الجزء الثاني")
+    GENTLE = ("الجزء الثاني بكرة 7 مساءً — اعمل متابعة عشان يوصلك "
+              "أول ما ينزل")
+
+    def _cfg(self, td):
+        return {"publish": {"page_id": "1048148471706586",
+                            "youtube_token": os.path.join(td, "t.json"),
+                            "youtube_privacy": "public"},
+                "paths": {"videos_dir": td}}
+
+    def _run(self, td, video, title, caption, **kw):
+        with mock.patch("lib.publish.find_facebook_bin",
+                        return_value="facebook-cli"), \
+             mock.patch("lib.publish.post_facebook",
+                        side_effect=AssertionError(
+                            "لا نشر بعد رفض الكابشن")):
+            buf = io.StringIO()
+            with mock.patch("sys.stdout", buf):
+                rc = studio.cmd_publish(
+                    self._cfg(td), video, title, caption,
+                    platforms=("facebook",), dry_run=True,
+                    skip_check=True, **kw)
+        return rc, buf.getvalue()
+
+    def test_banned_caption_blocks_publish(self):
+        with tempfile.TemporaryDirectory() as td:
+            video = os.path.join(td, "v.mp4")
+            Path(video).write_bytes(b"fake")
+            rc, out = self._run(td, video, "عنوان", self.GATE)
+            self.assertEqual(rc, 1)
+            self.assertIn("مرفوض", out)
+            self.assertIn("الكابشن المقترح", out)
+            self.assertIn("بكرة 7 مساء", out)
+            self.assertNotIn("وضع تجريبي", out)
+
+    def test_skip_caption_check_allows_banned(self):
+        with tempfile.TemporaryDirectory() as td:
+            video = os.path.join(td, "v.mp4")
+            Path(video).write_bytes(b"fake")
+            rc, out = self._run(td, video, "عنوان", self.GATE,
+                                skip_caption_check=True)
+            self.assertEqual(rc, 0)
+            self.assertIn("وضع تجريبي", out)
+            self.assertIn("متخطَّى", out)
+
+    def test_gentle_invite_passes_and_caption_shown(self):
+        with tempfile.TemporaryDirectory() as td:
+            video = os.path.join(td, "v.mp4")
+            Path(video).write_bytes(b"fake")
+            rc, out = self._run(td, video, "عنوان", self.GENTLE)
+            self.assertEqual(rc, 0)
+            self.assertIn("الكابشن النهائي", out)
+            self.assertIn("بكرة 7 مساء", out)
+            self.assertNotIn("مرفوض", out)
+
+    def test_gate_in_title_needs_full_rewrite(self):
+        with tempfile.TemporaryDirectory() as td:
+            video = os.path.join(td, "v.mp4")
+            Path(video).write_bytes(b"fake")
+            rc, out = self._run(td, video, self.GATE, "كابشن عادي")
+            self.assertEqual(rc, 1)
+            self.assertIn("أعد كتابة", out)
+
+
 if __name__ == "__main__":
     unittest.main()
