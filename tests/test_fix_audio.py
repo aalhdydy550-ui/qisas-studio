@@ -175,5 +175,81 @@ class TestFixAudio(unittest.TestCase):
         self.assertEqual(fix_lib.middle_gaps([(4.0, 4.5, 0.5)], 10), [])
 
 
+def _mean_volume(path):
+    """متوسط مستوى الصوت (ديسيبل) عبر volumedetect — أو None."""
+    proc = subprocess.run(
+        ["ffmpeg", "-v", "info", "-i", path, "-af", "volumedetect",
+         "-f", "null", "-"],
+        capture_output=True, text=True, timeout=300)
+    mean = re.search(r"mean_volume: (-?[0-9.]+|-inf) dB",
+                     proc.stderr or "")
+    if not mean or mean.group(1) == "-inf":
+        return None
+    return float(mean.group(1))
+
+
+class TestAudioPasses(unittest.TestCase):
+    """مرورا الصوت الجديدان: afftdn وloudnorm (v0.1.36)."""
+
+    def setUp(self):
+        self.td = tempfile.mkdtemp(prefix="fix-audio-pass-")
+        # نغمة هادئة جدًا (حجم 0.05) + ضجيج أبيض خافت — للضجيج
+        # والجهارة معًا.
+        self.quiet = os.path.join(self.td, "quiet.mp4")
+        _ffmpeg("-f", "lavfi", "-i",
+                "color=c=0x2a2a2a:s=720x1280:r=30:d=6",
+                "-f", "lavfi", "-i",
+                "sine=frequency=440:sample_rate=48000:duration=6",
+                "-f", "lavfi", "-i",
+                "anoisesrc=color=white:duration=6:sample_rate=48000:"
+                "amplitude=0.02",
+                "-filter_complex",
+                "[1:a]volume=0.05[tone];"
+                "[tone][2:a]amix=inputs=2:normalize=0[mixed]",
+                "-map", "0:v:0", "-map", "[mixed]",
+                "-t", "6", "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "28", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", self.quiet)
+
+    def test_denoise_keeps_duration_and_audio(self):
+        out = os.path.join(self.td, "denoised.mp4")
+        result = fix_lib.denoise_audio(self.quiet, out)
+        self.assertTrue(os.path.isfile(out))
+        self.assertEqual(result["action"], "إزالة ضجيج")
+        self.assertIn("afftdn", result["filter"])
+        self.assertAlmostEqual(result["duration_before"], 6.0, delta=0.2)
+        self.assertAlmostEqual(result["duration_after"], 6.0, delta=0.2)
+        self.assertTrue(check_lib.probe(out)["has_audio"])
+
+    def test_loudnorm_raises_quiet_to_target(self):
+        before = _mean_volume(self.quiet)
+        self.assertIsNotNone(before)
+        out = os.path.join(self.td, "loud.mp4")
+        result = fix_lib.normalize_loudness(self.quiet, out)
+        self.assertTrue(os.path.isfile(out))
+        self.assertEqual(result["action"], "تطبيع جهارة")
+        self.assertIn("loudnorm", result["filter"])
+        after = _mean_volume(out)
+        self.assertIsNotNone(after)
+        # الهدف -16 LUFS: المتوسط بعد التطبيع أعلى من قبله
+        # بوضوح (وأقرب إلى -16 من الأصل الهادئ).
+        self.assertGreater(after, before + 3,
+                           "جهارة بعد التطبيع (%s) لم ترتفع عن قبل (%s)"
+                           % (after, before))
+        self.assertAlmostEqual(result["duration_after"], 6.0, delta=0.2)
+
+    def test_passes_reject_no_audio(self):
+        no_audio = os.path.join(self.td, "silent.mp4")
+        _make_video(no_audio, duration=3, audio=False)
+        with self.assertRaises(fix_lib.FixAudioError):
+            fix_lib.normalize_loudness(no_audio)
+        with self.assertRaises(fix_lib.FixAudioError):
+            fix_lib.denoise_audio(no_audio)
+
+    def test_passes_reject_missing_file(self):
+        with self.assertRaises(fix_lib.FixAudioError):
+            fix_lib.denoise_audio(os.path.join(self.td, "no.mp4"))
+
+
 if __name__ == "__main__":
     unittest.main()
