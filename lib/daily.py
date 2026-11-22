@@ -231,7 +231,8 @@ def format_plan(plan):
 
 
 def execute_daily(cfg, plan, produce_fn, check_fn, thumbnail_fn,
-                  publish_fn, runs_dir, auto_approve=False):
+                  publish_fn, runs_dir, auto_approve=False,
+                  record_spend_fn=None):
     """نفّذ الخطة اليومية (بعد --execute الصريح).
 
     الدوال المحقونة (قابلة للاختبار بلا تنفيذ حقيقي):
@@ -239,6 +240,10 @@ def execute_daily(cfg, plan, produce_fn, check_fn, thumbnail_fn,
       check_fn(video) -> قاموس run_checks (فيه "passed")
       thumbnail_fn(video, hook, out_path) -> مسار المصغرة
       publish_fn(cfg, video, title, caption, thumbnail) -> 0/1
+      record_spend_fn(units) -> الرصيد الجديد أو None: تُستدعى
+        عند الإنفاق الفعلي فقط (الجولة 8) — بعد الموافقة على
+        خطة المشاهد، أو عند نشر فيديو Veo جاهز بنجاح؛ ولا
+        تُستدعى أبدًا في وضع تجريبي (التخطيط وحده لا يخصم).
     الجولة 7: مسار Veo بلا فيديو جاهز يحفظ خطة المشاهد أولًا
     ثم يطلب الموافقة على الإنفاق (تفاعليًا إلا مع auto_approve
     أو في تشغيل غير تفاعلي كالكرون) قبل أي إشارة لتوليد Flow.
@@ -263,6 +268,14 @@ def execute_daily(cfg, plan, produce_fn, check_fn, thumbnail_fn,
             result["steps"]["scene_plan"]["approved"] = approved
             if not approved:
                 return 1, result
+            # الجولة 8: الموافقة على الخطة = إنفاق فعلي قادم في
+            # Flow — يُخصم الآن من الرصيد المسجَّل ويُختم الوقت
+            # (لا خصم قبل الموافقة، ولا خصم في وضع تجريبي).
+            if record_spend_fn is not None:
+                spent = plan["scene_plan"]["total_units"]
+                result["steps"]["scene_plan"]["spent_units"] = spent
+                result["steps"]["scene_plan"]["new_balance"] = \
+                    record_spend_fn(spent)
         print("مسار Veo بلا فيديو جاهز — أنتج المشاهد في Google Flow "
               "أولًا ثم أعد الأمر مع --video <الملف>.")
         result["steps"]["produce"] = {"status": "needs-flow",
@@ -311,6 +324,17 @@ def execute_daily(cfg, plan, produce_fn, check_fn, thumbnail_fn,
         "note": "يُنسخ ويُنشر من المتصفح (بطاقة موافقة) — "
                 "الأمر يجهّز النص فقط",
     }
+    # الجولة 8: فيديو Veo جاهز نُشر بنجاح — إنفاقه حدث في Flow
+    # قبل هذا التشغيل (بلا موافقة خطة هنا)، فيُخصم الآن مرة
+    # واحدة من الرصيد المسجَّل. (فرع الموافقة أعلاه يرجع مبكرًا،
+    # فلا خصم مزدوج.)
+    if plan["path"] == "veo" and plan.get("scene_plan") \
+            and record_spend_fn is not None:
+        spent = plan["scene_plan"]["total_units"]
+        result["steps"]["veo_spend"] = {
+            "spent_units": spent,
+            "new_balance": record_spend_fn(spent),
+        }
     print("5) نص أول تعليق (انسخه من المتصفح):")
     print(plan["first_comment"])
     os.makedirs(runs_dir, exist_ok=True)
