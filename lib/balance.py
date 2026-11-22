@@ -25,6 +25,11 @@ DEFAULT_COST_MAX = 140
 # رصيد أقدم من هذا يُعتبر قديمًا (الجولة 6): آخر توليد في Flow
 # قد يكون غيّره، فلا يُعتمد عليه بلا تحديث.
 VEO_STALE_HOURS = 24
+# الجولة 8: رصيد أقدم من 7 أيام (أو مجهول العمر) يُحذَّر منه
+# صراحةً في `balance` و`doctor --accounts` — الرقم غير موثوق
+# إطلاقًا بعد أسبوع بلا تحديث.
+VEO_AGE_WARN_DAYS = 7
+VEO_AGE_WARN_HOURS = VEO_AGE_WARN_DAYS * 24
 UNKNOWN_AGE_LABEL = "غير معروف العمر"
 # سقوف عقلانية تمنع انهيار الحساب (timedelta ينفجر فوق ~2.7 مليون
 # سنة): رصيد فوق 100 مليون وحدة أو تكلفة فوق مليون وحدة للفيديو
@@ -174,6 +179,81 @@ def now_iso(now=None):
     elif now.tzinfo is None:
         now = now.astimezone()
     return now.isoformat()
+
+
+def now_iso_cairo(now=None):
+    """الآن بصيغة ISO بتوقيت القاهرة (للتسجيل في config).
+
+    الجولة 8: `balance --set` والخصم التلقائي يختمان بتوقيت
+    القاهرة صراحةً (+02:00 شتاءً / +03:00 صيفًا) لا بتوقيت
+    نظام الـVM.
+    """
+    from zoneinfo import ZoneInfo
+    cairo = ZoneInfo("Africa/Cairo")
+    if now is None:
+        now = datetime.datetime.now(tz=cairo)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=cairo)
+    else:
+        now = now.astimezone(cairo)
+    return now.isoformat()
+
+
+def balance_age_warnings(updated_at, now=None):
+    """تحذيرات عمر الرصيد الصريحة (الجولة 8): عمر مجهول (بلا
+    `updated_at`) أو أقدم من 7 أيام. يرجع قائمة تحذيرات عربية
+    (فارغة إن كان العمر معروفًا وأحدث من 7 أيام). تحذير الـ24
+    ساعة («قديم») باقٍ منفصلًا في format_forecast وaccounts —
+    هذه القائمة لا تكرره، وصياغة «مجهول العمر» بلا كلمة «قديم».
+    """
+    parsed = parse_updated_at(updated_at)
+    if parsed is None:
+        return ["عمر الرصيد غير معروف (لا يوجد updated_at في "
+                "الإعداد) — حدّث الرصيد قبل الاعتماد عليه."]
+    if now is None:
+        now = datetime.datetime.now().astimezone()
+    elif now.tzinfo is None:
+        now = now.astimezone()
+    hours = (now - parsed).total_seconds() / 3600.0
+    if hours > VEO_AGE_WARN_HOURS:
+        label, _, _ = balance_age(updated_at, now=now)
+        return ["الرصيد أقدم من 7 أيام (%s بلا تحديث) — الرقم غير "
+                "موثوق إطلاقًا؛ حدّثه من Flow قبل أي توليد جديد"
+                % label]
+    return []
+
+
+def record_veo_spend(config_path, units, now=None):
+    """اخصم إنفاق Veo فعليًا من الرصيد المسجَّل في config.yaml
+    واختم وقت الخصم بتوقيت القاهرة (الجولة 8).
+
+    يقرأ `veo.balance_units` من نص الملف (بلا إعادة كتابة YAML
+    حتى تبقى التعليقات)، ويخصم الوحدات (بحد أدنى صفر)، ويكتب
+    الرصيد الجديد + `updated_at`. يرجع الرصيد الجديد، أو None
+    إن لم يكن رصيد مسجَّل أصلًا أو كانت قيمته غير صالحة (لا
+    خصم ممكن). يرفع ValueError عند وحدات غير صالحة.
+    """
+    import os
+    import re
+    units = _as_int(units, "الإنفاق")
+    if units <= 0:
+        raise ValueError("الإنفاق يجب أن يكون أكبر من صفر: %s" % units)
+    with open(config_path, encoding="utf-8") as f:
+        text = f.read()
+    m = re.search(r"(?m)^veo:\n((?:  .*\n)*)", text)
+    if not m or not m.group(1):
+        return None
+    bm = re.search(r"(?m)^  balance_units:\s*(.+?)\s*$", m.group(1))
+    if not bm:
+        return None
+    try:
+        balance = _as_int(bm.group(1), "الرصيد")
+    except ValueError:
+        return None
+    new_balance = max(0, balance - units)
+    save_veo_value("balance_units", new_balance, config_path)
+    save_veo_value("updated_at", now_iso_cairo(now), config_path)
+    return new_balance
 
 
 def parse_updated_at(value):
@@ -347,6 +427,9 @@ def format_forecast(result):
             "تحذير: الرصيد قديم (أكثر من 24 ساعة بلا تحديث) — "
             "قد يكون تغيّر بعد آخر توليد في Flow؛ حدّث "
             "veo.balance_units في config.yaml قبل الاعتماد عليه.")
+    # الجولة 8: تحذير صريح لعمر مجهول أو أقدم من 7 أيام.
+    for warning in balance_age_warnings(result.get("updated_at")):
+        lines.append("تحذير: %s" % warning)
     lines += [
         "تكلفة فيديو Veo اليومي: %d–%d وحدة (متوسط %.0f)"
         % (result["cost_min"], result["cost_max"],
