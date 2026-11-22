@@ -29,6 +29,39 @@ AB_NOTE = ("تنبيه: فيسبوك ويوتيوب بلا اختبار A/B أص
 
 _LOCAL_HOOK_B_SUFFIX = " — النهاية هتصدمك"
 
+# لواحق محلية مميزة للبديل عند فشل النموذج (كلها تمرّ
+# valid_hook مع العنوان؛ تُستخدم بالترتيب حتى n هوك).
+_LOCAL_HOOK_SUFFIXES = (
+    " — النهاية هتصدمك",
+    " — والنهاية غير متوقعة",
+    " — ليه عمل كده؟",
+    " — الحقيقة انكشفت فجأة!",
+    " — مستحيل تتوقع اللي حصل",
+)
+
+
+def _local_hooks(title, n):
+    """بديل محلي: العنوان نفسه + العنوان بلواحق مميزة.
+    يرجع حتى n هوكًا مميزًا صالحًا (بلا تكرار)."""
+    title = _norm(title)
+    base = title[:130] if len(title) > 130 else title
+    out = []
+    for cand in [title] + [base + s for s in _LOCAL_HOOK_SUFFIXES]:
+        if cand and cand not in out and ideas_lib.valid_hook(cand):
+            out.append(cand)
+        if len(out) >= n:
+            break
+    # عنوان غير صالح أصلًا (يبدأ برقم مثلًا): بدائل عامة.
+    generic = ["قصة صادمة — النهاية هتصدمك",
+               "ليه حصل كده؟ الحقيقة انكشفت فجأة!",
+               "ظلم وغدر — والنهاية غير متوقعة"]
+    for cand in generic:
+        if len(out) >= n:
+            break
+        if cand not in out and ideas_lib.valid_hook(cand):
+            out.append(cand)
+    return out[:n]
+
 
 def _norm(text):
     return re.sub(r"\s+", " ", (text or "").strip())
@@ -57,6 +90,152 @@ def suggest_hooks(title, chat_fn=None):
         except Exception:
             pass
     return title, title + _LOCAL_HOOK_B_SUFFIX, "local"
+
+
+def suggest_hooks_n(title, chat_fn=None, n=3):
+    """اقترح n هوكًا مميزًا صالحًا للعنوان (افتراضي 3).
+
+    نفس برومبت suggest_hooks ونفس قواعد ideas_lib.valid_hook،
+    لكن يطلب من النموذج n هوكًا في n أسطر. عند فشل النموذج
+    أو قلة الصالح منها يُكمَّل بالبديل المحلي (العنوان نفسه +
+    لواحق مميزة). يرجع (قائمة الهوكات، المصدر)؛ المصدر
+    "omniroute" إن جاءت كلها من النموذج، و"local" إن دخل
+    البديل المحلي في أي منها، و"mixed" إن اختلطا.
+    """
+    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+        raise ValueError("عدد الهوكات يجب أن يكون عددًا صحيحًا ≥ 1 "
+                         "(وصل: %s)" % (n,))
+    title = _norm(title)
+    hooks = []
+    src = "local"
+    if chat_fn is not None:
+        prompt = (
+            "لصفحة فيسبوك «قصص وعبر» باللهجة المصرية: اقترح %d "
+            "هوكات مختلفة لفيديو قصة بعنوان «%s». كل هوك جملة "
+            "واحدة صادمة تُقال في أول ثانيتين ولا تبدأ برقم أبدًا. "
+            "اكتب الهوكات في %d أسطر فقط، سطر لكل هوك، بلا أي نص "
+            "آخر." % (n, title, n))
+        try:
+            text = chat_fn(prompt)
+            lines = [l.strip() for l in text.splitlines()
+                     if l.strip()]
+            for line in lines:
+                if line not in hooks and ideas_lib.valid_hook(line):
+                    hooks.append(line)
+                if len(hooks) >= n:
+                    break
+            if len(hooks) >= n:
+                return hooks[:n], "omniroute"
+            src = "mixed" if hooks else "local"
+        except Exception:
+            hooks = []
+            src = "local"
+    for cand in _local_hooks(title, n):
+        if cand not in hooks:
+            hooks.append(cand)
+        if len(hooks) >= n:
+            break
+    return hooks[:n], src
+
+
+def score_hooks(hooks, story_text=None):
+    """درجة DNA لكل هوك عبر dna.score_hook الموجود (جدول
+    maquina 0–10). يرجع قائمة قواميس score_hook بنفس ترتيب
+    الإدخال؛ كل قاموس فيه hook/total/max/breakdown/verdict."""
+    from lib import dna
+    return [dna.score_hook(h, story_text=story_text)
+            for h in (hooks or [])]
+
+
+def create_ab_variants(video, hooks, out_dir, title=None,
+                       cost_per_video=0, thumbnail_fn=None,
+                       duration_fn=None, story_text=None):
+    """ولّد مصغرة لكل نسخة من n هوكًا وسجّلها في ab-<وقت>.json.
+
+    أوقات المصغرات موزعة بالتساوي بين 35% و65% من المدة
+    (عند نسختين تطابق create_ab تمامًا: 35% و65%). يرجع
+    السجل: variants مرتبة تنازليًا بدرجة DNA، وbest = الأعلى،
+    مع بقاء hook_a/hook_b (أول نسختين) وcost_estimate_units
+    (لكل نسخة + المجموع) للتوافق مع ab-results.
+    cost_per_video: تقدير وحدات Veo لإنتاج كل بديل من جديد
+    (الافتراضي 0 — نفس الفيديو، هوك+مصغرة فقط بلا توليد جديد).
+    """
+    video = os.path.abspath(os.path.expanduser(video))
+    if not os.path.isfile(video):
+        raise ValueError("ملف الفيديو غير موجود: %s" % video)
+    hooks = [_norm(h) for h in (hooks or [])]
+    if len(hooks) < 2:
+        raise ValueError("اختبار A/B يحتاج هوكين مختلفين على الأقل "
+                         "(وصل: %d)" % len(hooks))
+    if any(not h for h in hooks):
+        raise ValueError("الهوكات مطلوبة (لا هوك فارغ)")
+    if any(not ideas_lib.valid_hook(h) for h in hooks):
+        raise ValueError("كل هوك يجب أن يكون جملة واحدة صادمة بلا "
+                         "رقم في البداية وبلا وسوم (≤140 حرفًا)")
+    if len(set(hooks)) != len(hooks):
+        raise ValueError("الهوكات متكررة — اختبار A/B يحتاج هوكات "
+                         "مختلفة")
+    if isinstance(cost_per_video, bool) \
+            or not isinstance(cost_per_video, int) \
+            or cost_per_video < 0:
+        raise ValueError("تقدير تكلفة البديل يجب أن يكون عددًا صحيحًا "
+                         "≥ 0 (وصل: %s)" % (cost_per_video,))
+    duration_fn = duration_fn or thumbnail.video_duration
+    thumbnail_fn = thumbnail_fn or thumbnail.make_thumbnail
+    duration = duration_fn(video)
+    scores = score_hooks(hooks, story_text=story_text)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    ab_dir = os.path.join(out_dir, "ab-%s" % ts)
+    os.makedirs(ab_dir, exist_ok=True)
+    count = len(hooks)
+    variants = []
+    for i, (hook, score) in enumerate(zip(hooks, scores)):
+        frac = 0.35 if count == 1 else 0.35 + 0.30 * i / (count - 1)
+        thumb = os.path.join(ab_dir, "thumb-%d.jpg" % (i + 1))
+        thumbnail_fn(video, hook, thumb,
+                     at_seconds=round(duration * frac, 1))
+        variants.append({
+            "hook": hook,
+            "thumb": thumb,
+            "dna_score": score["total"],
+            "dna_max": score["max"],
+            "dna_verdict": score["verdict"],
+            "dna_breakdown": score["breakdown"],
+            "cost": cost_per_video,
+        })
+    variants.sort(key=lambda v: v["dna_score"], reverse=True)
+    best = variants[0]["hook"]
+    cost_block = {
+        "variant_%d" % (i + 1): cost_per_video
+        for i in range(count)}
+    cost_block["variant_a"] = cost_per_video
+    cost_block["variant_b"] = cost_per_video
+    cost_block["total"] = count * cost_per_video
+    cost_block["note"] = ("نفس الفيديو — هوك ومصغرة فقط بلا توليد "
+                          "جديد" if cost_per_video == 0
+                          else "تقدير توليد كل بديل من جديد "
+                               "(6 مقاطع Veo × 20 وحدة)")
+    record = {
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "video": video,
+        "title": title or "",
+        "duration": round(duration, 1),
+        "hook_a": hooks[0],
+        "hook_b": hooks[1],
+        "thumb_a": os.path.join(ab_dir, "thumb-1.jpg"),
+        "thumb_b": os.path.join(ab_dir, "thumb-2.jpg"),
+        "publish_title_a": hooks[0],
+        "publish_title_b": hooks[1],
+        "variants": variants,
+        "best": best,
+        "cost_estimate_units": cost_block,
+        "note": AB_NOTE,
+    }
+    record_path = os.path.join(ab_dir, "ab-%s.json" % ts)
+    with open(record_path, "w", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=2)
+    record["record_path"] = record_path
+    return record
 
 
 def create_ab(video, hook_a, hook_b, out_dir, title=None,
