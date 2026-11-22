@@ -166,6 +166,23 @@ python3 studio.py publish --video ~/workspace/videos/demo-*.mp4 \
 # النشر الحقيقي (بدون --dry-run): فيسبوك يُنشر فورًا عبر facebook-cli،
 # ويوتيوب يحتاج إعداد OAuth لمرة واحدة (انظر «النشر على يوتيوب» أدناه).
 
+# الجولة 7 (0.1.31) — دفعات + نشر أوسع + تحليل DNA + سقف Veo:
+# دفعة جماعية من الطابور (تجريبي افتراضي يطبع الخطة؛ التنفيذ فقط مع --execute):
+python3 studio.py batch --count 3 --source openmontage
+python3 studio.py batch --count 2 --source veo --execute
+# نشر TikTok/Instagram (تجريبي افتراضي؛ الرفع الحقيقي غير مختبَر — لا حسابات مربوطة):
+python3 studio.py publish --video ~/workspace/videos/demo-*.mp4 \
+    --title "عنوان الفيديو" --platforms tiktok,instagram --dry-run
+# خطوات الربط اليدوي (تطبع الخطوات وتحفظ أي توكن في ملف 600):
+python3 studio.py tiktok-auth
+python3 studio.py instagram-auth
+# تحليل DNA الفيروسي لفيديو (هوك 0–10 + إيقاع + صمت + كثافة كلمات + حكم):
+python3 studio.py analyze --dna --video ~/workspace/videos/najjar-full.mp4
+# سقف إنفاق Veo بالوحدات (الرفض فوق السقف برسالة عربية قبل أي إنفاق):
+python3 studio.py balance --cap 600
+# خطة مشاهد قصة قبل إنفاق أي رصيد (تُطبع وتُحفظ؛ توقف تفاعلي للموافقة أو --auto-approve):
+python3 studio.py scene-plan --story 4
+
 # دفعة جماعية من ملف الطابور (القصص الجاهزة فقط — بلا مشروع تُتخطى)
 python3 studio.py run-queue --limit 2 --dry-run
 python3 studio.py run-queue --limit 2 --allow-fallback
@@ -364,6 +381,12 @@ Issue في هذا المستودع وأرفق لقطة شاشة للتحويل �
 > ملحوظة: الأدوات الثلاث (OmniRoute وOpenMontage وConcat) مشاريع
 > مستقلة برخصها الخاصة (انظر جدول «المعمارية» أعلاه)، ولا تشملها
 > رخصة هذا المستودع.
+>
+> الأدوات المنسَّقة (OpenMontage وConcat) يُستخدمان دون تعديل كما
+> أصدرهما أصحابهما، ويحصل عليهما المشتري بنفسه من مصدريهما تحت
+> AGPL-3.0 بكل حقوقها (الاستخدام والدراسة والتعديل والمشاركة):
+> [OpenMontage](https://github.com/OpenMontageInc/OpenMontage) و
+> [Concat](https://github.com/jub0t/Concat).
 
 ## اختبار الشمول (smoke test)
 
