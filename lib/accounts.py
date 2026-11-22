@@ -10,10 +10,16 @@
 2. توكن يوتيوب: الملف موجود وصالح وفيه refresh_token والنطاق
    youtube.upload. وضع الاختبار (Testing) يُنهي صلاحية التوكن
    بعد 7 أيام من الموافقة — التقدير من تاريخ إنشاء الملف،
-   والتحذير عند 3 أيام أو أقل، والخطأ عند الانتهاء.
+   والتحذير عند 3 أيام، والخطأ عند يومين أو أقل (الجولة 6:
+   يومان لا يكفيان للانتظار — أعد الموافقة فورًا)، والخطأ
+   عند الانتهاء. إعادة الموافقة عبر `studio.py youtube-reauth`
+   (نفس تبادل OAuth في `youtube-auth`).
 3. رصيد Veo المسجَّل: من قسم `veo` في الإعداد (ليس حيًا من API)
    + توقع الأيام من `balance.forecast`؛ والتحذير عند رصيد أقل
-   من فيديو Veo واحد (120 وحدة).
+   من فيديو Veo واحد (120 وحدة)، وعندما يكون الرصيد قديمًا
+   (أكثر من 24 ساعة بلا تحديث — الجولة 6)؛ وعمر الرقم يُعرض
+   دائمًا. رصيد بلا `updated_at` يُعامل كـ«غير معروف العمر»
+   لا كخطأ.
 
 لا يكتب شيئًا ولا ينشر شيئًا — قراءة ملفات واستدعاء قراءة واحد.
 """
@@ -27,6 +33,9 @@ from lib import publish as publish_lib
 
 TESTING_TOKEN_DAYS = 7
 TOKEN_WARN_DAYS = 3
+# الجولة 6: يومان أو أقل على الانتهاء = خطأ لا تنبيهًا — لا
+# وقت للانتظار قبل أن يتوقف الرفع على يوتيوب.
+TOKEN_ERROR_DAYS = 2
 VEO_ONE_VIDEO_UNITS = 120
 YT_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 DEFAULT_TOKEN_PATH = "~/workspace/studio/youtube-token.json"
@@ -80,23 +89,23 @@ def check_youtube_token(cfg, today=None):
     if not os.path.isfile(token_path):
         return _check(name, False, "warn",
                       "لا يوجد توكن يوتيوب — النشر على يوتيوب يدوي",
-                      "أكمل `studio.py youtube-auth` مرة واحدة")
+                      "أكمل `studio.py youtube-reauth` مرة واحدة")
     try:
         with open(token_path, encoding="utf-8") as f:
             data = json.load(f)
     except (ValueError, OSError) as e:
         return _check(name, False, "error",
                       "ملف التوكن تالف أو غير مقروء: %s" % e,
-                      "احذفه وأعد `studio.py youtube-auth`")
+                      "احذفه وأعد `studio.py youtube-reauth`")
     if not isinstance(data, dict) or not data.get("refresh_token"):
         return _check(name, False, "error",
                       "التوكن بلا refresh_token — لا يمكن تجديده",
-                      "أعد `studio.py youtube-auth`")
+                      "أعد `studio.py youtube-reauth`")
     scopes = data.get("scopes") or []
     if YT_UPLOAD_SCOPE not in scopes:
         return _check(name, False, "warn",
                       "التوكن بلا نطاق youtube.upload — الرفع سيفشل",
-                      "أعد `studio.py youtube-auth` بنطاق الرفع")
+                      "أعد `studio.py youtube-reauth` بنطاق الرفع")
     # وضع الاختبار: صلاحية التوكن 7 أيام من الموافقة (تاريخ إنشاء
     # الملف هو أقرب تقدير للموافقة — لا حقل تاريخ في الملف).
     mtime = datetime.datetime.fromtimestamp(
@@ -107,22 +116,38 @@ def check_youtube_token(cfg, today=None):
         return _check(name, False, "error",
                       "انتهت صلاحية توكن يوتيوب (وضع الاختبار: 7 أيام "
                       "من %s)" % mtime.isoformat(),
-                      "أعد الموافقة عبر `studio.py youtube-auth`")
+                      "أعد الموافقة عبر `studio.py youtube-reauth`")
+    if days_left <= TOKEN_ERROR_DAYS:
+        # الجولة 6: يومان أو أقل = خطأ — أعد الموافقة فورًا قبل
+        # أن يتوقف الرفع على يوتيوب.
+        return _check(name, False, "error",
+                      "توكن يوتيوب ينتهي خلال %d %s (حوالي %s) — "
+                      "أعد الموافقة فورًا قبل توقف الرفع"
+                      % (days_left, "يوم" if days_left == 1 else "يومين",
+                         expires.isoformat()),
+                      "أعد الموافقة الآن عبر "
+                      "`studio.py youtube-reauth` (نفس خطوات "
+                      "`youtube-auth`)")
     if days_left <= TOKEN_WARN_DAYS:
         return _check(name, False, "warn",
                       "توكن يوتيوب ينتهي خلال %d %s (حوالي %s) — "
                       "أعد الموافقة قريبًا"
                       % (days_left, "يوم" if days_left == 1 else "أيام",
                          expires.isoformat()),
-                      "أعد الموافقة عبر `studio.py youtube-auth`")
+                      "أعد الموافقة عبر `studio.py youtube-reauth`")
     return _check(name, True, "error",
                   "توكن يوتيوب ساري — ينتهي خلال %d أيام (حوالي %s؛ "
                   "التقدير من تاريخ إنشاء الملف)"
                   % (days_left, expires.isoformat()))
 
 
-def check_veo_balance(cfg, today=None):
-    """رصيد Veo المسجَّل + توقع الأيام."""
+def check_veo_balance(cfg, today=None, now=None):
+    """رصيد Veo المسجَّل + توقع الأيام + عمر الرقم.
+
+    now: لحظة «الآن» (datetime) لحساب عمر الرصيد — للاختبار؛
+    الافتراضي: الآن. رصيد بلا `updated_at` يُعرض «غير معروف
+    العمر» بلا تحذير قدم؛ ورصيد أقدم من 24 ساعة يُحذَّر منه.
+    """
     name = "رصيد Veo المسجَّل"
     veo = cfg.get("veo") or {}
     if "balance_units" not in veo:
@@ -136,24 +161,39 @@ def check_veo_balance(cfg, today=None):
             veo.get("renews", balance_lib.DEFAULT_RENEWS),
             veo.get("daily_cost_min", balance_lib.DEFAULT_COST_MIN),
             veo.get("daily_cost_max", balance_lib.DEFAULT_COST_MAX),
-            today=today)
+            today=today, updated_at=veo.get("updated_at"), now=now)
     except (ValueError, TypeError) as e:
         return _check(name, False, "error",
                       "قيم رصيد غير صالحة: %s" % e,
                       "صحّح قسم veo في config.yaml")
     balance = result["balance_units"]
-    detail = ("%d وحدة — تكفي %.1f يومًا في المتوسط؛ التجديد %s"
-              % (balance, result["days_avg"], result["renews"]))
+    age_text = result["age_label"]
+    detail = ("%d وحدة (عمر الرقم: %s) — تكفي %.1f يومًا في "
+              "المتوسط؛ التجديد %s"
+              % (balance, age_text, result["days_avg"],
+                 result["renews"]))
+    problems = []
+    if result["stale"]:
+        problems.append(
+            "الرصيد قديم (%s بلا تحديث) — قد يكون تغيّر بعد "
+            "آخر توليد في Flow؛ حدّثه قبل الاعتماد عليه"
+            % age_text)
     if balance < VEO_ONE_VIDEO_UNITS:
+        problems.append("أقل من فيديو Veo واحد (120 وحدة)")
+    if problems:
         return _check(name, False, "warn",
-                      detail + " — أقل من فيديو Veo واحد (120 وحدة)",
-                      "فيديوهات الغد عبر OpenMontage بلا رصيد حتى "
-                      "التجديد")
+                      detail + " — " + "؛ ".join(problems),
+                      "حدّث veo.balance_units في config.yaml بعد "
+                      "آخر توليد في Flow؛ وفيديوهات الغد عبر "
+                      "OpenMontage بلا رصيد حتى التجديد" if balance
+                      < VEO_ONE_VIDEO_UNITS else
+                      "حدّث veo.balance_units في config.yaml بعد "
+                      "آخر توليد في Flow")
     return _check(name, True, "error", detail)
 
 
-def run_account_checks(cfg, runner=None, today=None):
+def run_account_checks(cfg, runner=None, today=None, now=None):
     """شغّل فحوصات الحسابات الثلاثة. يرجع قائمة قواميس doctor."""
     return [check_facebook_page(cfg, runner=runner),
             check_youtube_token(cfg, today=today),
-            check_veo_balance(cfg, today=today)]
+            check_veo_balance(cfg, today=today, now=now)]
