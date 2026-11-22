@@ -20,6 +20,14 @@ import subprocess
 import sys
 import time
 
+from lib import errors as errors_lib
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+CAIRO_TZ = ZoneInfo("Africa/Cairo")
+CAIRO_TZ_NAME = "Africa/Cairo"
+SCHEDULE_FORMAT = "%Y-%m-%d %H:%M"
+
 STUDIO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 HASHTAGS = ["#قصص_وعبر", "#قصص_واقعية", "#قصص_مؤثرة", "#حكايات"]
@@ -36,6 +44,51 @@ FACEBOOK_BIN_CANDIDATES = ("facebook-cli",
 
 class PublishError(Exception):
     """خطأ في بناء النشر أو تنفيذه (رسالته عربية)."""
+
+
+def parse_schedule(value, now=None):
+    """حوّل موعد جدولة إلى Unix (ثوانٍ).
+
+    يقبل نصًا بصيغة "YYYY-MM-DD HH:MM" بتوقيت Africa/Cairo
+    (الجولة 6: `studio.py publish --schedule "2026-11-23 19:00"`)،
+    أو عددًا/نصًا رقميًا Unix جاهزًا (توافق مع --schedule القديم).
+    يرفع PublishError عند صيغة خاطئة أو موعد في الماضي.
+    """
+    if value is None:
+        raise PublishError("موعد الجدولة مفقود")
+    if isinstance(value, (int, float)):
+        epoch = int(value)
+    elif isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        epoch = int(value.strip())
+    elif isinstance(value, str):
+        text = value.strip()
+        try:
+            naive = datetime.strptime(text, SCHEDULE_FORMAT)
+        except ValueError:
+            raise PublishError(
+                "صيغة موعد الجدولة خاطئة: «%s» — الصيغة المطلوبة "
+                "YYYY-MM-DD HH:MM بتوقيت %s (مثال: 2026-11-23 19:00)"
+                % (text, CAIRO_TZ_NAME))
+        epoch = int(naive.replace(tzinfo=CAIRO_TZ).timestamp())
+    else:
+        raise PublishError("موعد الجدولة غير صالح: %r" % (value,))
+    ref = int(time.time()) if now is None else int(now)
+    if epoch <= ref:
+        raise PublishError(
+            "موعد الجدولة في الماضي (%s بتوقيت %s) — يجب أن يكون "
+            "في المستقبل" % (format_schedule(epoch), CAIRO_TZ_NAME))
+    return epoch
+
+
+def format_schedule(epoch):
+    """صِغ Unix كوقت قاهرة مقروء: "YYYY-MM-DD HH:MM Africa/Cairo"."""
+    dt = datetime.fromtimestamp(int(epoch), tz=CAIRO_TZ)
+    return "%s %s" % (dt.strftime(SCHEDULE_FORMAT), CAIRO_TZ_NAME)
+
+
+def schedule_publish_at(epoch):
+    """صِغ Unix كـ publishAt يوتيوب (RFC 3339 UTC بلا أجزاء ثانية)."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(epoch)))
 
 
 def find_facebook_bin():
@@ -143,9 +196,14 @@ def post_facebook(page_id, video, caption, schedule=None):
     proc = _run(argv, "النشر على فيسبوك")
     out = (proc.stdout or "").strip()
     if proc.returncode != 0:
-        raise PublishError("فشل النشر على فيسبوك (رمز الخروج %d): %s"
-                           % (proc.returncode,
-                              (proc.stderr or out)[-500:]))
+        raw = (proc.stderr or out)[-500:]
+        msg = ("فشل النشر على فيسبوك (رمز الخروج %d): %s"
+               % (proc.returncode, raw))
+        if raw.strip():
+            # الخطأ الخام من facebook-cli إنجليزي غالبًا — ألحق
+            # ترجمته العربية (lib.errors) دون حذف الأصل.
+            msg += "\n" + errors_lib.explain_error_text(raw, "facebook")
+        raise PublishError(msg)
     try:
         data = json.loads(out)
     except ValueError:
@@ -167,7 +225,13 @@ def post_facebook(page_id, video, caption, schedule=None):
 
 def youtube_request_body(title, description, tags, privacy="public",
                          schedule=None, category_id=None):
-    """جسم طلب YouTube videos.insert (كما يُرسل للـAPI)."""
+    """جسم طلب YouTube videos.insert (كما يُرسل للـAPI).
+
+    ملاحظة API: `publishAt` لا يقبله يوتيوب إلا مع
+    `privacyStatus=private` — الفيديو المجدول يُنشأ خاصًا
+    ويُنشر تلقائيًا عند موعد publishAt. أي privacy تُمرَّر
+    مع جدولة تُستبدل بـ private هنا وفي youtube_upload.py.
+    """
     tags = [t.strip() for t in (tags or []) if t and t.strip()]
     tags_text = ",".join(tags)
     if len(tags_text) > YT_TAGS_LIMIT:
@@ -175,8 +239,8 @@ def youtube_request_body(title, description, tags, privacy="public",
                            % len(tags_text))
     status = {"privacyStatus": privacy or "public"}
     if schedule:
-        status["publishAt"] = time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(schedule)))
+        status["privacyStatus"] = "private"
+        status["publishAt"] = schedule_publish_at(schedule)
     return {
         "snippet": {
             "title": build_youtube_title(title),
@@ -190,8 +254,12 @@ def youtube_request_body(title, description, tags, privacy="public",
 
 def youtube_payload(title, description, tags, privacy="public",
                     schedule=None, category_id=None, thumbnail=None):
-    """حمولة يوتيوب الكاملة للطباعة في --dry-run (بلا رفع)."""
-    return {
+    """حمولة يوتيوب الكاملة للطباعة في --dry-run (بلا رفع).
+
+    مفتاح "schedule" (عند الجدولة فقط) بيانات عرض لا تُرسل
+    للـAPI: وقت القاهرة + المنطقة الزمنية + publishAt + Unix.
+    """
+    payload = {
         "method": "youtube.videos.insert",
         "part": "snippet,status",
         "body": youtube_request_body(title, description, tags, privacy,
@@ -199,6 +267,14 @@ def youtube_payload(title, description, tags, privacy="public",
         "thumbnail": thumbnail or None,
         "upload": "resumable",
     }
+    if schedule:
+        payload["schedule"] = {
+            "cairo": format_schedule(schedule),
+            "timezone": CAIRO_TZ_NAME,
+            "publishAt": schedule_publish_at(schedule),
+            "unix": int(schedule),
+        }
+    return payload
 
 
 def write_youtube_bundle(bundle_dir, video, title, description, tags,
@@ -238,9 +314,15 @@ def write_youtube_bundle(bundle_dir, video, title, description, tags,
         "3) الصق العنوان من title.txt والوصف من description.txt.\n"
         "4) ارفع الصورة المصغرة من thumbnail.* إن وُجدت (زر «تحميل ملف»).\n"
         "5) الرؤية: %s — ثم «نشر».\n"
+        "%s"
         "للرفع التلقائي لاحقًا: أكمل إعداد OAuth لمرة واحدة (انظر\n"
         "قسم YouTube في README) ثم أعد الأمر نفسه بلا --dry-run.\n"
-        % (privacy or "public"))
+        % (("private (مجدول — يُنشر تلقائيًا %s)"
+            % format_schedule(schedule)) if schedule
+           else (privacy or "public"),
+           ("موعد النشر المجدول: %s (publishAt ‏%s).\n"
+            % (format_schedule(schedule),
+               schedule_publish_at(schedule))) if schedule else ""))
     with open(os.path.join(bundle_dir, "steps.txt"), "w",
               encoding="utf-8") as f:
         f.write(steps)
@@ -283,8 +365,7 @@ def upload_youtube(video, title, description, tags, privacy="public",
            "--privacy", privacy or "public",
            "--token", token]
     if schedule:
-        cmd += ["--publish-at", time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(schedule)))]
+        cmd += ["--publish-at", schedule_publish_at(schedule)]
     if category_id:
         cmd += ["--category-id", category_id]
     if thumbnail:
@@ -292,9 +373,14 @@ def upload_youtube(video, title, description, tags, privacy="public",
     proc = _run(cmd, "الرفع على يوتيوب", timeout=timeout)
     out = (proc.stdout or "").strip()
     if proc.returncode != 0:
-        raise PublishError("فشل الرفع على يوتيوب (رمز الخروج %d): %s"
-                           % (proc.returncode,
-                              (proc.stderr or out)[-500:]))
+        raw = (proc.stderr or out)[-500:]
+        msg = ("فشل الرفع على يوتيوب (رمز الخروج %d): %s"
+               % (proc.returncode, raw))
+        if raw.strip():
+            # الخطأ الخام من رافع يوتيوب إنجليزي غالبًا — ألحق
+            # ترجمته العربية (lib.errors) دون حذف الأصل.
+            msg += "\n" + errors_lib.explain_error_text(raw, "youtube")
+        raise PublishError(msg)
     try:
         data = json.loads(out)
     except ValueError:
