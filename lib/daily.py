@@ -41,11 +41,24 @@ class DailyError(Exception):
 def story_parts(note):
     """عدد الأجزاء من ملاحظة الطابور: «تحتاج/يحتاج N أجزاء»
     أو «تحتاج جزأين» (صيغة المثنى بالكلمات لا بالأرقام) أو
-    «منشور واحد» (1)."""
+    «منشور واحد» (1).
+
+    إصلاح اختبار اختراق 2026-11-22 (L4): عدد بأكثر من 4300 رقم
+    كان يرفع ValueError خامًا من int() — الأرقام تُحدّ بـ6 خانات
+    وأي تحويل فاشل يرفع DailyError برسالة عربية.
+    """
     note = note or ""
     m = re.search(r"[تي]حتاج\s+(\d+)\s+أجزاء", note)
     if m:
-        return max(1, int(m.group(1)))
+        digits = m.group(1)
+        if len(digits) > 6:
+            raise DailyError("عدد الأجزاء في الملاحظة غير صالح "
+                             "(أكثر من 6 أرقام)")
+        try:
+            return max(1, int(digits))
+        except ValueError:
+            raise DailyError("عدد الأجزاء في الملاحظة غير صالح: %s"
+                             % digits)
     if re.search(r"[تي]حتاج\s+جز[أء](ين|ان)", note):
         return 2
     return 1
@@ -59,6 +72,16 @@ def decide_path(slot, balance_units):
         return "openmontage", "موعد المساء OpenMontage بلا رصيد دائمًا"
     if balance_units is None:
         return "openmontage", "الرصيد غير مسجَّل — البديل OpenMontage"
+    # إصلاح اختبار اختراق 2026-11-22 (L3): رصيد نصي أو لانهائي
+    # كان يتعطل (TypeError/OverflowError خام) — يُعاد استخدام
+    # balance._as_int، والقيمة غير الصالحة تعني مسار OpenMontage
+    # مع سبب واضح بدل التعطل.
+    from lib.balance import _as_int
+    try:
+        balance_units = _as_int(balance_units, "الرصيد")
+    except ValueError:
+        return "openmontage", ("الرصيد غير صالح (%s) — البديل OpenMontage"
+                               % (balance_units,))
     if balance_units >= VEO_MIN_BALANCE:
         return "veo", ("الرصيد %d وحدة (≥%d) — مسار Veo"
                        % (balance_units, VEO_MIN_BALANCE))
