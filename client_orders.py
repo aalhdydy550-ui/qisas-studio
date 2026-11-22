@@ -9,6 +9,19 @@ OmniRoute → سرد Piper (كريم، رجل) → صور Wikimedia Commons →
 الأوامر:
   client_orders.py client-run --order CO-...   # طلب واحد من orders.jsonl
   client_orders.py process-queue               # كل الطلبات الجديدة
+  client_orders.py orders confirm <order-id>   # تأكيد دفع طلب
+  client_orders.py orders list [--status S]    # عرض الطلبات
+
+بوابة الدفع + فترة التجربة (قرار المستخدم 2026-11-22 11:10، يلغي
+تصميم «أول طلب مجاني» 11:08): أول 10 طلبات لكل عميل (يُعرَّف برقم
+الواتساب) تجربة مجانية — تُنتَج تلقائيًا بلا تأكيد دفع. ومن الطلب
+الـ11 لنفس العميل فصاعدًا لا يُنتَج الفيديو إلا بعد تأكيد دفع
+صاحبه: يبدأ `awaiting_payment` ويصير `paid` عبر `orders confirm`
+بعد أن يتحقق صاحب الاستوديو من التحويل يدويًا (فودافون كاش)،
+ثم يكمل مساره الطبيعي. العدّ لكل رقم واتساب على حدة من سجل
+الطلبات الموجود؛ الطلب الفاشل لم يصل العميلَ منه فيديو فلا
+يستهلك من التجربة. لا مبلغ هنا — البوابة تأكيد فقط،
+ولا يوجد سعر معتمد للفيديو.
 
 لا يمس طابور القصص ولا كرونات النشر ولا منشورات فيسبوك. لا يستخدم
 Veo (الإنتاج OpenMontage فقط). لا يخترع أسعارًا.
@@ -76,6 +89,19 @@ def _normalize_size(size):
 
 
 # ---------------------------------------------------------------- orders
+# بوابة الدفع + فترة التجربة (قرار المستخدم 2026-11-22 11:10).
+#   new:              أول 10 طلبات لكل عميل (برقم الواتساب) — تجربة
+#                     مجانية، تُنتَج تلقائيًا بلا تأكيد دفع.
+#   awaiting_payment: الطلب الـ11 فصاعدًا لنفس العميل — بانتظار
+#                     تأكيد الدفع، لا إنتاج له قبل `orders confirm`.
+#   paid:             تأكد الدفع — جاهز للإنتاج.
+#   processing/done/failed: كما هي من قبل، بلا أي تغيير.
+# العدّ من سجل الطلبات الموجود؛ الطلب الفاشل لا يستهلك من التجربة.
+FREE_TRIAL_ORDERS = 10
+PAYMENT_PENDING = "awaiting_payment"
+PAYMENT_CONFIRMED = "paid"
+PRODUCIBLE_STATUSES = ("paid", "new")
+CONFIRMABLE_STATUSES = ("awaiting_payment", "new")
 def load_orders():
     """اقرأ الطابور متسامحًا: سطر تالف واحد لا يُسقط الملف كله.
 
@@ -211,6 +237,54 @@ def validate_whatsapp(number):
     return n
 
 
+def _canonical_whatsapp(number):
+    """رقم الواتساب في صورته القانونية: 10 أرقام تبدأ بـ 1.
+
+    `010...` و`+2010...` هما نفس العميل — يُزال البادئ `+20` أو `0`.
+    يرفع ClientOrderError إن كان الرقم غير صالح (عبر التحقق نفسه).
+    """
+    n = validate_whatsapp(number)
+    if n.startswith("+20"):
+        n = n[3:]
+    elif n.startswith("0"):
+        n = n[1:]
+    return n
+
+
+def _count_client_orders(orders, whatsapp):
+    """عدد طلبات هذا العميل السابقة (بأي حالة عدا `failed`).
+
+    الطلب الفاشل لم يصل العميلَ منه فيديو، فلا يستهلك من التجربة
+    المجانية. المقارنة بالرقم القانوني فلا يفلت عميل بتغيير الصيغة.
+    """
+    if not whatsapp:
+        return 0
+    try:
+        canon = _canonical_whatsapp(whatsapp)
+    except ClientOrderError:
+        return 0
+    n = 0
+    for o in orders:
+        prev = o.get("whatsapp") or o.get("contact") or ""
+        if not prev:
+            continue
+        try:
+            prev_canon = _canonical_whatsapp(prev)
+        except ClientOrderError:
+            continue
+        if prev_canon == canon and o.get("status") != "failed":
+            n += 1
+    return n
+
+
+def free_trial_remaining(whatsapp, orders=None):
+    """كم فيديو مجاني بقي لهذا العميل (0–10)."""
+    if orders is None:
+        orders = load_orders()
+    return max(0, FREE_TRIAL_ORDERS - _count_client_orders(orders,
+                                                           whatsapp))
+
+
 def update_order(order_id, **fields):
     with _orders_locked():
         orders = load_orders()
@@ -232,13 +306,128 @@ def update_order(order_id, **fields):
 def append_order(order):
     if order.get("whatsapp"):
         validate_whatsapp(order["whatsapp"])
+    # بوابة الدفع + فترة التجربة (قرار 2026-11-22 11:10): أول 10
+    # طلبات لكل عميل (برقم الواتساب) تجربة مجانية — حالتها `new`
+    # وتُنتَج تلقائيًا. ومن الطلب الـ11 لنفس العميل تبدأ الحالة
+    # `awaiting_payment` ولا يُنتَج له فيديو قبل `orders confirm`.
+    # حالة `new` الواردة من مسار قديم تُعامَل بنفس القاعدة. الطلبات
+    # القديمة بحالة done لا تمر من هنا أبدًا ولا تُمس.
     with _orders_locked():
         orders = load_orders()
+        if not order.get("status") or order.get("status") == "new":
+            prior = _count_client_orders(orders,
+                                         order.get("whatsapp") or "")
+            order["status"] = ("new" if prior < FREE_TRIAL_ORDERS
+                               else PAYMENT_PENDING)
         if any(o.get("id") == order.get("id") for o in orders):
             raise ClientOrderError("طلب بنفس الرقم موجود بالفعل: %s"
                                    % order.get("id"))
         orders.append(order)
         save_orders(orders)
+
+
+def confirm_payment(order_id, confirmed_by="owner"):
+    """أكّد دفع طلب: awaiting_payment (أو new قديم) → paid.
+
+    يسجّل confirmed_by (من أكّد — افتراضيًا صاحب الاستوديو)
+    وconfirmed_at (وقت التأكيد). التأكيد نفسه يتم يدويًا بعد أن
+    يتحقق صاحب الاستوديو من التحويل — هذه الدالة تسجيل فقط،
+    بلا مبلغ وبلا رقم دفع (لا يوجد سعر معتمد للفيديو).
+
+    يرفع ClientOrderError برسالة عربية واضحة إن كان الطلب غير
+    موجود، أو سبق تأكيد دفعه، أو حالته لا تقبل التأكيد (done /
+    processing / failed). تأكيد ثانٍ مرفوض بلا أي تغيير في
+    السجل — لا أثر جانبي إطلاقًا.
+    """
+    if not confirmed_by:
+        confirmed_by = "owner"
+    with _orders_locked():
+        orders = load_orders()
+        for o in orders:
+            if o.get("id") == order_id:
+                status = o.get("status")
+                if status == PAYMENT_CONFIRMED:
+                    raise ClientOrderError(
+                        "الدفع مؤكَّد بالفعل للطلب %s (أكّده %s في %s) — "
+                        "لا تأكيد ثانٍ"
+                        % (order_id, o.get("confirmed_by") or "؟",
+                           o.get("confirmed_at") or "وقت غير مسجّل"))
+                if status not in CONFIRMABLE_STATUSES:
+                    raise ClientOrderError(
+                        "لا يمكن تأكيد دفع الطلب %s: حالته الحالية «%s»"
+                        % (order_id, status))
+                now = time.strftime("%Y-%m-%dT%H:%M:%S")
+                o["status"] = PAYMENT_CONFIRMED
+                o["confirmed_by"] = confirmed_by
+                o["confirmed_at"] = now
+                o["updated_at"] = now
+                save_orders(orders)
+                return o
+        raise ClientOrderError("الطلب غير موجود في %s: %s"
+                               % (ORDERS_FILE, order_id))
+
+
+def cmd_confirm_payment(cfg, order_id, confirmed_by="owner"):
+    """غلاف CLI لتأكيد الدفع: 0 نجاح، 1 الطلب غير موجود، 2 حالة
+    لا تقبل التأكيد (سبق تأكيده / مكتمل / قيد التنفيذ / فاشل)."""
+    if get_order(order_id) is None:
+        print("تعذّر تأكيد الدفع: الطلب غير موجود: %s" % order_id)
+        return 1
+    try:
+        order = confirm_payment(order_id, confirmed_by=confirmed_by)
+    except ClientOrderError as e:
+        print("تعذّر تأكيد الدفع: %s" % e)
+        return 2
+    print("تم تأكيد دفع الطلب %s (بواسطة %s في %s) — صار جاهزًا للإنتاج"
+          % (order_id, order["confirmed_by"], order["confirmed_at"]))
+    return 0
+
+
+def cmd_trial_status(whatsapp):
+    """اعرض حالة التجربة المجانية لعميل: كم طلب سبق وكم بقي مجانيًا.
+
+    مثال: orders trial 01023468196
+    """
+    try:
+        validate_whatsapp(whatsapp)
+    except ClientOrderError as e:
+        print("رقم غير صالح: %s" % e)
+        return 2
+    orders = load_orders()
+    used = _count_client_orders(orders, whatsapp)
+    remaining = max(0, FREE_TRIAL_ORDERS - used)
+    print("العميل %s: طلبات سابقة %d من %d — فيديوهات مجانية باقية: %d"
+          % (whatsapp, used, FREE_TRIAL_ORDERS, remaining))
+    if remaining == 0:
+        print("انتهت التجربة المجانية — الطلب التالي يحتاج تأكيد دفع "
+              "قبل الإنتاج (orders confirm).")
+    return 0
+
+
+def cmd_list_orders(status=None):
+    """اعرض طلبات العملاء، اختياريًا بحالة معينة.
+
+    مثال: list --status awaiting_payment يعرض قائمة انتظار الدفع
+    لصاحب الاستوديو (من يحتاج التحقق من تحويله وتأكيده).
+    """
+    orders = load_orders()
+    if status:
+        orders = [o for o in orders if o.get("status") == status]
+    if not orders:
+        if status:
+            print("لا توجد طلبات بالحالة «%s»" % status)
+        else:
+            print("لا توجد طلبات عملاء")
+        return 0
+    for o in orders:
+        print("%s | %s | %s | %s"
+              % (o.get("id"), o.get("status"),
+                 o.get("client_name") or o.get("customer_name") or "",
+                 o.get("contact") or o.get("whatsapp") or ""))
+    print("الإجمالي: %d طلب%s"
+          % (len(orders),
+             " بالحالة «%s»" % status if status else ""))
+    return 0
 
 
 # ------------------------------------------------------- story expansion
@@ -659,6 +848,13 @@ def cmd_client_run(cfg, order_id):
         print("الطلب مكتمل بالفعل: %s → %s"
               % (order_id, order.get("video_path") or ""))
         return 0
+    if order.get("status") == PAYMENT_PENDING:
+        # بوابة الدفع (2026-11-22): بلا تأكيد دفع لا إنتاج — حتى
+        # بأمر مباشر، وإلا كان الطابور قابلًا للتجاوز.
+        print("الطلب %s بانتظار تأكيد الدفع — لن يُنتَج له فيديو قبل "
+              "التأكيد (python3 studio.py orders confirm %s)"
+              % (order_id, order_id))
+        return 4
     slug = "client-" + _safe_slug(order_id)
     try:
         studio.validate_run_component(slug, "اسم طلب العميل")
@@ -746,16 +942,38 @@ def cmd_client_run(cfg, order_id):
 
 
 def cmd_process_queue(cfg):
-    """نفّذ الطلبات الجديدة في الطابور بالتتابع (حد الدفعة 20).
+    """نفّذ الطلبات الجاهزة في الطابور بالتتابع (حد الدفعة 20).
+
+    بوابة الدفع + فترة التجربة (قرار 2026-11-22 11:10): الطلبات
+    الأولى لكل عميل (حالته `new` — ضمن أول 10 طلبات) تجربة مجانية
+    فتُنتَج تلقائيًا، والطلبات بانتظار تأكيد الدفع (awaiting_payment
+    — الطلب الـ11 فصاعدًا لنفس العميل) تُتخطى تمامًا — لا يُنتَج
+    لها فيديو — وتُطبع في قائمة انتظار الدفع. الجاهز للإنتاج هو
+    المدفوع (paid) plus صفوف `new` (تجربة أولى أو قديمة).
 
     إصلاح اختبار اختراق 2026-11-21: بلا حد كانت الدفعة تنفّذ أي
     عدد من الطلبات (إغراق الطابور يحرق الحوسبة بلا سقف).
     """
     orders = load_orders()
-    new = [o for o in orders if o.get("status") == "new"]
-    if not new:
-        print("لا توجد طلبات جديدة")
+    awaiting = [o for o in orders
+                if o.get("status") == PAYMENT_PENDING]
+    ready = [o for o in orders
+             if o.get("status") in PRODUCIBLE_STATUSES]
+    if awaiting:
+        print("طلبات بانتظار تأكيد الدفع (%d) — لن يُنتَج لها فيديو:"
+              % len(awaiting))
+        for o in awaiting:
+            print("  - %s | %s | %s"
+                  % (o.get("id"),
+                     o.get("client_name") or o.get("customer_name") or "",
+                     o.get("created_at") or ""))
+        print("  للتأكيد بعد التحقق من التحويل: "
+              "python3 studio.py orders confirm <رقم الطلب>")
+    if not ready:
+        if not awaiting:
+            print("لا توجد طلبات جديدة")
         return 0
+    new = ready
     if len(new) > MAX_BATCH_ORDERS:
         print("طلبات جديدة: %d — تُنفَّذ أول %d فقط في هذه الدفعة"
               % (len(new), MAX_BATCH_ORDERS))
@@ -779,6 +997,16 @@ def main():
     p = sub.add_parser("client-run", help="تنفيذ طلب عميل واحد")
     p.add_argument("--order", required=True, help="رقم الطلب")
     sub.add_parser("process-queue", help="تنفيذ كل الطلبات الجديدة")
+    op = sub.add_parser("orders", help="إدارة طلبات العملاء (تأكيد دفع/عرض)")
+    osp = op.add_subparsers(dest="orders_cmd", required=True)
+    oc = osp.add_parser("confirm",
+                        help="تأكيد دفع طلب بعد التحقق من التحويل يدويًا")
+    oc.add_argument("order_id", help="رقم الطلب (مثال QS-123456)")
+    oc.add_argument("--by", default="owner",
+                    help="من أكّد الدفع (افتراضي owner)")
+    ol = osp.add_parser("list", help="عرض الطلبات (اختياريًا بحالة معينة)")
+    ol.add_argument("--status", default=None,
+                    help="تصفية بحالة (مثال awaiting_payment)")
     args = ap.parse_args()
     cfg = studio.load_config()
     studio._ensure_environment()
@@ -786,6 +1014,12 @@ def main():
         return cmd_client_run(cfg, args.order)
     if args.cmd == "process-queue":
         return cmd_process_queue(cfg)
+    if args.cmd == "orders":
+        if args.orders_cmd == "confirm":
+            return cmd_confirm_payment(cfg, args.order_id,
+                                       confirmed_by=args.by)
+        if args.orders_cmd == "list":
+            return cmd_list_orders(status=args.status)
     return 0
 
 
