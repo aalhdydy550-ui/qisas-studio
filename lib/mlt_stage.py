@@ -2,8 +2,8 @@
 """خلفية تجميع بديلة عبر MLT/melt — تايم لاين XML حقيقي.
 
 يبني ملف `.mlt` من بيان studio (نفس مدخلات headless_stage):
-صور التسلسل مقاطع 5 ثوانٍ، السرد مسارًا صوتيًا، الهوك نصًا أعلى
-الشاشة أول 4 ثوانٍ، والعبارات نصوصًا أسفل الشاشة — ثم يريندر
+صور التسلسل مقاطع 5 ثوانٍ، السرد مسارًا صوتيًا، الهوك نصًا أسفل
+الشاشة فوق العبارات أول 4 ثوانٍ، والعبارات نصوصًا أسفل الشاشة — ثم يريندر
 عبر `melt` (إطار الوسائط الذي تقوم عليه Kdenlive وShotcut).
 
 النصوص عبر مرشح `dynamictext` (pango — يشكّل العربية).
@@ -16,6 +16,7 @@ Concat يبقى الافتراضي؛ هذه الخلفية اختيارية عب
 `assemble --backend mlt` أو `run --backend mlt`.
 """
 import os
+import signal
 import subprocess
 import time
 import xml.etree.ElementTree as ET
@@ -29,10 +30,12 @@ class MltError(Exception):
 HOOK_DURATION_SECONDS = 4.0
 HOOK_FONTSIZE = 58
 CAPTION_FONTSIZE = 44
-# عرض يُحجز أعلى اليمين لشارة الشعار (110px + هامش 20px + 10px
-# أمان) فلا يصل نص الهوك إلى الشارة — إصلاح 2026-11-21 (كان نص
-# الهوك بعرض الإطار كاملًا فيصطدم بالشارة في العمودي والأفقي).
-LOGO_RESERVE_PX = 140
+# قاعدة دائمة 2026-11-22: كل نصوص الشاشة أسفل فقط، ولا نص أعلى
+# أبدًا. صندوق الهوك يجلس فوق صندوق العبارات مباشرة (عبارات:
+# y=height-230 وارتفاع 170): y=height-420 وارتفاع 150 يترك فجوة
+# ~40px بين سطر الهوك الأخير وأول سطر عبارة (هوك سطران ~144px).
+# (أُلغي LOGO_RESERVE_PX مع نقل الهوك للأسفل — كان يحجز منطقة
+# الشارة أعلى اليمين للهوك حين كان أعلى الشاشة.)
 # qimage (Qt) للصور وdynamictext (Qt) للنصوص — كلاهما يحتاج
 # جلسة X11، فيُشغَّل melt تحت `xvfb-run -a` (Xvfb مثبّت على
 # الـVM). البديل pixbuf لا ينفع هنا: حزمة gdk-pixbuf في هذه
@@ -233,15 +236,15 @@ def build_mlt(manifest, title, assets_dir, video_cfg, images_dir=None):
         _prop(trans, "mlt_service", "mix")
         _prop(trans, "always_active", 1)
         _prop(trans, "sum", 1)
-    # النصوص (هوك + عبارات) — صندوق الهوك متمركز بإزاحتين
-    # متماثلتين (LOGO_RESERVE_PX/2 يمينًا ويسارًا) فيبقى نصه في
-    # منتصف الإطار دون أن يصل إلى الشارة أعلى اليمين.
+    # النصوص (هوك + عبارات) — الهوك أسفل الشاشة فوق العبارات
+    # مباشرة (قاعدة دائمة 2026-11-22: لا نص أعلى الشاشة أبدًا):
+    # صندوقه بعرض الإطار كاملًا (أقل سطورًا) وحافته السفلى فوق
+    # صندوق العبارات بفجوة ~40px.
     if title:
         _text_filter(tractor, "filter-hook", title,
                      format_timecode(0),
                      format_timecode(HOOK_DURATION_SECONDS - 1.0 / fps),
-                     HOOK_FONTSIZE, 90, 130, width - LOGO_RESERVE_PX,
-                     LOGO_RESERVE_PX // 2)
+                     HOOK_FONTSIZE, height - 420, 150, width, 0)
     for i, p in enumerate(manifest.get("phrases", [])):
         _text_filter(tractor, "filter-phrase%d" % i, p["text"],
                      format_timecode(float(p["start"])),
@@ -290,18 +293,32 @@ def render_mlt(mlt_path, out_path, timeout=900):
     out_dir = os.path.dirname(os.path.abspath(out_path))
     os.makedirs(out_dir, exist_ok=True)
     t0 = time.time()
+    # Popen في جلسة عمليات خاصة: عند انتهاء المهلة يجب قتل
+    # مجموعة العمليات كلها — subprocess.run يقتل xvfb-run فقط
+    # ويترك melt يتيمًا يريندر للأبد (شوهد حيًا 2026-11-22
+    # بعد مهلة 900ث، بلا ملف خرج، ويستهلك 120% CPU).
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True,
-                                timeout=timeout)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                start_new_session=True)
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
         raise MltError("انتهت مهلة ريندر melt (%d ثانية) — أعد المحاولة "
                        "والجهاز فاضٍ" % timeout)
     except OSError as e:
         raise MltError("تعذر تشغيل melt: %s" % e)
-    if result.returncode != 0:
-        tail = ((result.stderr or "") + (result.stdout or ""))[-1200:]
+    if proc.returncode != 0:
+        tail = ((stderr or "") + (stdout or ""))[-1200:]
         raise MltError("فشل ريندر melt (رمز الخروج %d):\n%s"
-                       % (result.returncode, tail))
+                       % (proc.returncode, tail))
     if not os.path.isfile(out_path):
         raise MltError("انتهى ريندر melt دون إنشاء ملف الخرج: %s"
                        % out_path)
