@@ -148,6 +148,46 @@ class TestPlanBatch(unittest.TestCase):
             self.assertIn("جاهزة", text)
             self.assertIn("تُتخطى", text)
 
+    def test_format_plan_veo_shows_required_units_and_cap_status(self):
+        """انحدار (الجولة 9): خطة Veo كانت تطبع الرصيد والسقف
+        والمجموع في سطر مدمج واحد بلا سطر صريح لـ«الرصيد
+        المطلوب» ولا لحكم «حالة السقف»."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = batch.plan_batch(_cfg(td, cap=200), 1,
+                                    source="veo", ready_fn=_ready)
+            text = batch.format_plan(plan)
+            self.assertIn(
+                "الرصيد المطلوب: 120 وحدة "
+                "(الرصيد المسجَّل: 680 وحدة — ضمن الرصيد)", text)
+            self.assertIn(
+                "حالة السقف: ضمن السقف (المتوقع للفيديو 120 وحدة "
+                "≤ سقف 200 وحدة)", text)
+
+    def test_format_plan_veo_without_cap_shows_no_cap_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            plan = batch.plan_batch(_cfg(td), 1,
+                                    source="veo", ready_fn=_ready)
+            text = batch.format_plan(plan)
+            self.assertIn("الرصيد المطلوب: 120 وحدة", text)
+            self.assertIn(
+                "حالة السقف: بلا سقف مضبوط (المتوقع للفيديو "
+                "120 وحدة — يُفحص الرصيد فقط)", text)
+
+    def test_format_plan_openmontage_shows_zero_units_and_cap_status(self):
+        """انحدار (الجولة 9): خطة OpenMontage كانت بلا أي سطر
+        رصيد/سقف إطلاقًا — فلوحة التحكم تعرض الخطة حرفيًا
+        كانت تبقى بلا هذين السطرين."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = batch.plan_batch(_cfg(td), 2, source="openmontage",
+                                    ready_fn=_ready)
+            text = batch.format_plan(plan)
+            self.assertIn(
+                "الرصيد المطلوب: 0 وحدة (OpenMontage بلا رصيد)",
+                text)
+            self.assertIn(
+                "حالة السقف: لا ينطبق "
+                "(OpenMontage بلا رصيد ولا سقف)", text)
+
 
 class TestExecuteBatch(unittest.TestCase):
     def _fns(self, produce_rc=0, check_passed=True):
