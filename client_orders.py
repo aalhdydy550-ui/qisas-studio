@@ -42,6 +42,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import studio  # noqa: E402  (studio.py في نفس المجلد)
+from lib import run_record  # noqa: E402
 from lib.paths import check_size  # noqa: E402
 
 ORDERS_DIR = os.path.join(os.path.expanduser("~"), "workspace", "studio",
@@ -222,11 +223,12 @@ def _short_error(e):
     return text[:200]
 
 
-_WHATSAPP_EG = re.compile(r"^(?:\+20|0)?1[0125][0-9]{8}$")
+_WHATSAPP_EG = re.compile(r"^(?:\+20|0020|0)?1[0125][0-9]{8}$")
 
 
 def validate_whatsapp(number):
-    """رقم واتساب مصري: 01x + 8 أرقام، أو +20 1x + 8 أرقام.
+    """رقم واتساب مصري: 01x + 8 أرقام، أو +20 1x + 8 أرقام،
+    أو 0020 1x + 8 أرقام (بادئة الاتصال الدولي 00 = +).
 
     إصلاح اختبار اختراق 2026-11-21: التعبير القديم
     ^\\+?[0-9\\s-]{10,18}$ كان يقبل 0000000000 وأي 18 رقمًا.
@@ -240,12 +242,15 @@ def validate_whatsapp(number):
 def _canonical_whatsapp(number):
     """رقم الواتساب في صورته القانونية: 10 أرقام تبدأ بـ 1.
 
-    `010...` و`+2010...` هما نفس العميل — يُزال البادئ `+20` أو `0`.
-    يرفع ClientOrderError إن كان الرقم غير صالح (عبر التحقق نفسه).
+    `010...` و`+2010...` و`002010...` هي نفس العميل — يُزال
+    البادئ `+20` أو `0020` أو `0`. يرفع ClientOrderError إن
+    كان الرقم غير صالح (عبر التحقق نفسه).
     """
     n = validate_whatsapp(number)
     if n.startswith("+20"):
         n = n[3:]
+    elif n.startswith("0020"):
+        n = n[4:]
     elif n.startswith("0"):
         n = n[1:]
     return n
@@ -897,6 +902,12 @@ def cmd_client_run(cfg, order_id):
         runs_dir = studio.expand(cfg["paths"]["runs_dir"])
         run_id, run_dir = studio.new_run(runs_dir, slug)
         print("تشغيل: %s" % run_id)
+        # سجل تشغيل (جولة v0.1.37).
+        _settings = run_record.resolve_settings(
+            cfg, {"backend": "openmontage", "story": slug})
+        run_record.print_settings(_settings)
+        _record_path, _ = run_record.begin_record(
+            runs_dir, "client-run", _settings, run_id=run_id)
         manifest = studio.cmd_produce(cfg, proj_name, run_dir)
         print("جُهزت %d صورة، سرد %.1f ثانية، %d عبارة كتابة"
               % (len(manifest["images"]), manifest["narration_duration"],
@@ -926,8 +937,13 @@ def cmd_client_run(cfg, order_id):
                      hook=story["hook"], moral=story["moral"])
         print("اكتمل طلب العميل %s: %s (%.1f ثانية)"
               % (order_id, out, duration))
+        run_record.finish_record(_record_path, "done", outputs=[out])
         return 0
     except Exception as e:
+        try:
+            run_record.finish_record(_record_path, "failed", error=e)
+        except Exception:
+            pass
         # نص الخطأ المخزَّن مختصر وبلا مسارات محلية (إصلاح 2026-11-21).
         update_order(order_id, status="failed",
                      error="%s: %s" % (type(e).__name__, _short_error(e)))
