@@ -17,6 +17,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import studio
+from lib import manifest as manifest_lib
 from lib import publish
 
 
@@ -173,6 +174,18 @@ class TestCmdPublishDryRun(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             video = os.path.join(td, "v.mp4")
             Path(video).write_bytes(b"fake")
+            # بوابة بيان المصدر (v0.1.37): فيديو جديد بلا بيان يُرفض
+            # في النشر الحقيقي — والمسار المختبر هنا (حزمة يوتيوب
+            # اليدوية) يفترض فيديو منتجًا من الاستوديو فله بيان.
+            manifest_lib.write_manifest(video, {
+                "schema_version": manifest_lib.SCHEMA_VERSION,
+                "video": {"file": video,
+                          "sha256": manifest_lib.sha256_file(video)},
+                "title": "عنوان التجربة",
+                "hook": "هوك التجربة",
+                "created_at": manifest_lib.now_cairo_iso(),
+                "source": "test",
+            })
             cfg = {"publish": {"page_id": "1048148471706586",
                                "youtube_token": os.path.join(td, "t.json"),
                                "youtube_privacy": "public"},
