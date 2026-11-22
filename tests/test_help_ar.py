@@ -20,7 +20,7 @@ class TestHelpAr(unittest.TestCase):
         for cmd in ("run", "status", "doctor", "demo", "publish",
                     "queue add", "long-video", "long-narration",
                     "analyze", "thumbnail", "quote-cards", "assemble",
-                    "client-run", "help-ar"):
+                    "client-run", "help-ar", "init", "check"):
             self.assertIn(cmd, text, "الأمر %s غائب من المساعدة" % cmd)
 
     def test_text_is_arabic_and_has_examples(self):
