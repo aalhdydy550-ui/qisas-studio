@@ -62,6 +62,111 @@ def _arabic_count(n, one, two, few, many):
     return "%d %s" % (n, many)
 
 
+def check_cap(expected_units, veo_cfg):
+    """افحص إنفاق Veo متوقعًا مقابل السقف والرصيد المسجَّل.
+
+    السقف (`veo.cap_units`): الحد الأقصى لوحدات Veo المسموح
+    إنفاقها في عملية توليد واحدة (فيديو واحد). بلا سقف مضبوط:
+    يُفحص الرصيد فقط. يرجع (مقبول؟، رسالة عربية).
+    يرفع ValueError عند قيمة سقف/رصيد غير صالحة.
+    """
+    expected = _as_int(expected_units, "الإنفاق المتوقع")
+    if expected <= 0:
+        raise ValueError("الإنفاق المتوقع يجب أن يكون أكبر من صفر: %s"
+                         % expected_units)
+    veo_cfg = veo_cfg or {}
+    cap = veo_cfg.get("cap_units")
+    if cap is not None:
+        cap = _as_int(cap, "سقف الإنفاق")
+        if cap <= 0:
+            raise ValueError("سقف الإنفاق يجب أن يكون أكبر من صفر: %s"
+                             % cap)
+        if expected > cap:
+            return (False,
+                    "التوليد المتوقع (%d وحدة) يتجاوز سقف الإنفاق "
+                    "(%d وحدة) — ارفع السقف بـ `balance --cap N` أو "
+                    "قلّل عدد المقاطع" % (expected, cap))
+    balance = veo_cfg.get("balance_units")
+    if balance is not None:
+        balance = _as_int(balance, "الرصيد")
+        if expected > balance:
+            return (False,
+                    "التوليد المتوقع (%d وحدة) يتجاوز الرصيد المسجَّل "
+                    "(%d وحدة) — حدّث الرصيد أو استخدم OpenMontage"
+                    % (expected, balance))
+    return (True, "الإنفاق المتوقع (%d وحدة) ضمن السقف والرصيد"
+            % expected)
+
+
+def save_veo_value(key, value, config_path):
+    """احفظ قيمة واحدة في قسم `veo` من config.yaml بتعديل نصي
+    (لا إعادة كتابة YAML) حتى تبقى تعليقات الملف.
+
+    key: اسم المفتاح (مثال cap_units) — حروف وأرقام وشرطة سفلية
+    فقط. value: عدد صحيح أو نص بلا أسطر. يكتب ذريًا (ملف مؤقت
+    + os.replace) ويضبط الصلاحية 600. يرجع True عند النجاح،
+    ويرفع ValueError عند مفتاح/قيمة غير صالحة.
+    """
+    import os
+    import re
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key or ""):
+        raise ValueError("اسم مفتاح غير صالح في قسم veo: %r" % (key,))
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError("قيمة غير صالحة للمفتاح %s: %r" % (key, value))
+    if isinstance(value, str):
+        if not value.strip() or "\n" in value or "\r" in value:
+            raise ValueError("قيمة نصية غير صالحة للمفتاح %s" % key)
+        rendered = value.strip()
+    else:
+        rendered = str(value)
+    line = "  %s: %s" % (key, rendered)
+    with open(config_path, encoding="utf-8") as f:
+        text = f.read()
+    m = re.search(r"(?m)^veo:\n((?:  .*\n)*)", text)
+    if not m or not m.group(1):
+        if m:
+            text = (text[:m.end()] + line + "\n" + text[m.end():])
+        else:
+            text = text.rstrip("\n") + "\n\nveo:\n" + line + "\n"
+    else:
+        section = m.group(1)
+        if re.search(r"(?m)^  %s:.*$" % re.escape(key), section):
+            section = re.sub(r"(?m)^  %s:.*$" % re.escape(key),
+                             line, section)
+        else:
+            section = line + "\n" + section
+        text = text[:m.start(1)] + section + text[m.end(1):]
+    tmp = config_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, config_path)
+    return True
+
+
+def remove_veo_key(key, config_path):
+    """أزل مفتاحًا من قسم `veo` في config.yaml (لإلغاء سقف
+    مثلًا). كتابة ذرية مع صلاحية 600. يرجع True عند النجاح
+    (حتى إن لم يوجد المفتاح أصلًا)."""
+    import os
+    import re
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key or ""):
+        raise ValueError("اسم مفتاح غير صالح في قسم veo: %r" % (key,))
+    with open(config_path, encoding="utf-8") as f:
+        text = f.read()
+    m = re.search(r"(?m)^veo:\n((?:  .*\n)*)", text)
+    if m and m.group(1):
+        section = re.sub(r"(?m)^  %s:.*\n?" % re.escape(key), "",
+                         m.group(1))
+        text = text[:m.start(1)] + section + text[m.end(1):]
+    tmp = config_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, config_path)
+    return True
+
+
 def now_iso(now=None):
     """الآن بصيغة ISO مع المنطقة الزمنية (للتسجيل في config)."""
     if now is None:
@@ -150,11 +255,12 @@ def record_balance_update(veo, balance_units=None, now=None):
 
 
 def forecast(balance_units, renews, cost_min, cost_max,
-             today=None, updated_at=None, now=None):
+             today=None, updated_at=None, now=None, cap_units=None):
     """احسب التوقع. today: تاريخ date (الافتراضي: اليوم).
     updated_at: وقت آخر تحديث للرصيد (ISO) — يُحمل في النتيجة
     مع تسمية عمره وعلامة القدم؛ وnow: لحظة «الآن» لحساب العمر
-    (للاختبار؛ الافتراضي: الآن). يرجع قاموسًا بالأيام
+    (للاختبار؛ الافتراضي: الآن). cap_units: سقف الإنفاق لكل
+    توليد (يُعرض فقط — لا يغيّر التوقع). يرجع قاموسًا بالأيام
     (أسوأ/متوسط/أفضل حالة) وتواريخ النفاد والتوصية."""
     balance_units = _as_int(balance_units, "الرصيد")
     cost_min = _as_int(cost_min, "أقل تكلفة")
@@ -200,6 +306,7 @@ def forecast(balance_units, renews, cost_min, cost_max,
         "cost_min": cost_min,
         "cost_max": cost_max,
         "cost_avg": round(avg_cost, 1),
+        "cap_units": cap_units,
         "today": today.isoformat(),
         "days_avg": round(days_avg, 1),
         "days_worst": round(days_worst, 1),
@@ -230,6 +337,11 @@ def format_forecast(result):
            result["days_to_renew"]),
         "عمر الرقم: %s" % age_text,
     ]
+    if result.get("cap_units") is not None:
+        lines.append(
+            "سقف الإنفاق: %d وحدة كحد أقصى لكل توليد Veo (فيديو "
+            "واحد) — أي توليد متوقع فوقه يُرفض تلقائيًا."
+            % result["cap_units"])
     if result.get("stale"):
         lines.append(
             "تحذير: الرصيد قديم (أكثر من 24 ساعة بلا تحديث) — "
