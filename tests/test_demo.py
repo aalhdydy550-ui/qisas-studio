@@ -88,7 +88,12 @@ class TestBuildDemoProject(unittest.TestCase):
         self.assertAlmostEqual(images[-1]["start"] + images[-1]["duration"],
                                info["duration"], places=2)
         texts = [t for t in project["tracks"] if t["type"] == "text"]
-        self.assertTrue(any(t["position"] == "top" for t in texts))
+        # قاعدة دائمة 2026-11-22: لا نص أعلى الشاشة أبدًا — هوك
+        # الديمو أسفل فوق الكابشن ("above")، وكل العبارات أسفل.
+        self.assertFalse(any(t["position"] == "top" for t in texts))
+        hook = [t for t in texts if t["position"] == "above"]
+        self.assertEqual(len(hook), 1)
+        self.assertEqual((hook[0]["start"], hook[0]["end"]), (0, 4.0))
         bottoms = [t for t in texts if t["position"] == "bottom"]
         self.assertEqual(len(bottoms), len(info["chunks"]))
         for t in bottoms:
