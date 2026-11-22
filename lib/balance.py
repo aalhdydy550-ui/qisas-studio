@@ -80,8 +80,10 @@ def check_cap(expected_units, veo_cfg):
         raise ValueError("الإنفاق المتوقع يجب أن يكون أكبر من صفر: %s"
                          % expected_units)
     veo_cfg = veo_cfg or {}
+    checked_anything = False
     cap = veo_cfg.get("cap_units")
     if cap is not None:
+        checked_anything = True
         cap = _as_int(cap, "سقف الإنفاق")
         if cap <= 0:
             raise ValueError("سقف الإنفاق يجب أن يكون أكبر من صفر: %s"
@@ -93,12 +95,23 @@ def check_cap(expected_units, veo_cfg):
                     "قلّل عدد المقاطع" % (expected, cap))
     balance = veo_cfg.get("balance_units")
     if balance is not None:
+        checked_anything = True
         balance = _as_int(balance, "الرصيد")
         if expected > balance:
             return (False,
                     "التوليد المتوقع (%d وحدة) يتجاوز الرصيد المسجَّل "
                     "(%d وحدة) — حدّث الرصيد أو استخدم OpenMontage"
                     % (expected, balance))
+    if not checked_anything:
+        # الجولة 9: بلا سقف مضبوط ولا رصيد مسجَّل لم يُفحص شيء
+        # أصلًا — فالرسالة القديمة «ضمن السقف والرصيد» كانت
+        # تدّعي فحصًا لم يحدث. القبول هنا مقصود (المسارات
+        # الحقيقية تفرض وجود الرصيد قبل الوصول إلى هنا)، لكن
+        # الرسالة صارت صادقة.
+        return (True,
+                "لا سقف مضبوط ولا رصيد مسجَّل — الإنفاق المتوقع "
+                "(%d وحدة) لم يُفحص مقابل شيء؛ سجّل الرصيد بـ "
+                "`balance --set N` قبل الاعتماد عليه" % expected)
     return (True, "الإنفاق المتوقع (%d وحدة) ضمن السقف والرصيد"
             % expected)
 
