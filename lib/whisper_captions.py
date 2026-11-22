@@ -27,6 +27,7 @@
 """
 import array
 import os
+import re
 import subprocess
 import tempfile
 import wave
@@ -101,7 +102,12 @@ def group_words_into_phrases(words, max_words=6, max_gap=0.6,
 
 def _finish_phrase(words):
     return {"start": words[0]["start"], "end": words[-1]["end"],
-            "text": " ".join(w["w"] for w in words)}
+            "text": " ".join(w["w"] for w in words),
+            # توقيتات الكلمات تُحفظ للبيان — فحص حدود المشاهد
+            # (lib/coverage.py) يحكم بها حرفيًا: حد داخل كلمة
+            # → FAIL، وحد بين كلمتين سليم حتى بلا صمت.
+            "words": [{"w": w["w"], "start": w["start"],
+                       "end": w["end"]} for w in words]}
 
 
 def phrases_to_ass(phrases, font_size=52):
@@ -211,3 +217,74 @@ def whisper_ass(audio_path, ass_path, model="small", max_words=6,
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(phrases_to_ass(phrases, font_size=font_size))
     return phrases, text
+
+
+# ---------------------------------------------------------------- SRT
+_SRT_TIME_RE = re.compile(r"^(\d+):(\d{2}):(\d{2})[,.](\d{3})$")
+_SRT_RANGE_RE = re.compile(r"^\s*(\S+)\s+-->\s+(\S+)")
+
+
+def _srt_time(token):
+    """زمن SRT مثل 00:01:23,450 → ثوانٍ عشرية."""
+    m = _SRT_TIME_RE.match(token.strip())
+    if not m:
+        raise WhisperError("زمن SRT غير صالح: %s" % token)
+    h, mnt, s, ms = (int(x) for x in m.groups())
+    return h * 3600 + mnt * 60 + s + ms / 1000.0
+
+
+def parse_srt(text):
+    """نص SRT → (عبارات، عدد الكتل المتخطاة).
+
+    الكتلة: رقم تسلسلي اختياري، ثم سطر النطاق
+    `HH:MM:SS,mmm --> HH:MM:SS,mmm`، ثم سطور النص (تُدمج
+    بمسافة في عبارة واحدة — نفس نمط عبارات subs/).
+    الكتل الفارغة أو ذات الزمن التالف أو النهاية قبل البداية
+    تُتخطى وتُحتسب، لا تُفشل التحويل كله.
+    """
+    blocks = re.split(r"\n\s*\n", text.replace("\r\n", "\n").strip())
+    phrases = []
+    skipped = 0
+    for block in blocks:
+        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        if not lines:
+            continue
+        if lines[0].isdigit():
+            lines = lines[1:]
+        if not lines:
+            skipped += 1
+            continue
+        m = _SRT_RANGE_RE.match(lines[0])
+        if not m:
+            skipped += 1
+            continue
+        try:
+            start = _srt_time(m.group(1))
+            end = _srt_time(m.group(2))
+        except WhisperError:
+            skipped += 1
+            continue
+        phrase_text = " ".join(lines[1:]).strip()
+        if not phrase_text or end <= start:
+            skipped += 1
+            continue
+        phrases.append({"start": start, "end": end, "text": phrase_text})
+    return phrases, skipped
+
+
+def srt_to_ass(srt_path, ass_path, font_size=52):
+    """حوّل ملف SRT إلى ASS بنفس نمط ملفات subs/ الحالية.
+
+    يرجع (عبارات، عدد الكتل المتخطاة). يرفع WhisperError عند
+    ملف مفقود أو بلا أي عبارة صالحة.
+    """
+    if not os.path.isfile(srt_path):
+        raise WhisperError("ملف SRT غير موجود: %s" % srt_path)
+    with open(srt_path, encoding="utf-8-sig") as f:
+        text = f.read()
+    phrases, skipped = parse_srt(text)
+    if not phrases:
+        raise WhisperError("لا عبارات صالحة في ملف SRT: %s" % srt_path)
+    with open(ass_path, "w", encoding="utf-8") as f:
+        f.write(phrases_to_ass(phrases, font_size=font_size))
+    return phrases, skipped
