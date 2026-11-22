@@ -64,6 +64,16 @@ long_video:
   # (شوبان — ملكية عامة، assets/music/)؛ "none" = بلا موسيقى.
   default_music: ""
 
+schedule:
+  # موعدا النشر اليومي (HH:MM، بتوقيت القاهرة) — يكتبهما
+  # `studio.py init`، وتستخدمهما الكرونات المقترحة.
+  morning: "09:00"
+  evening: "19:00"
+
+narration:
+  # صوت الراوي الافتراضي: piper (رجل، الافتراضي) أو gtts (ثانٍ).
+  voice: "piper"
+
 # whisper (خيار تجريبي — معلَّق افتراضيًا؛ التفاصيل في WHISPER-TEST.md):
 # يولّد ASS من word timestamps عبر `studio.py whisper-ass`، ويعمل فقط
 # من بيئة faster-whisper الخاصة بالمشروع (.venv-whisper).
