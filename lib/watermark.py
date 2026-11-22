@@ -43,6 +43,10 @@ def _run(cmd, timeout=600):
 
 
 def probe_duration(path):
+    # إصلاح اختبار اختراق 2026-11-22 (L2): مسار نسبي يبدأ
+    # بشرطة كان يُفسَّر كخيار من ffprobe — المسار المطلق كما في
+    # check.py.
+    path = os.path.abspath(os.path.expanduser(path))
     r = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", path],
@@ -53,6 +57,7 @@ def probe_duration(path):
 
 
 def probe_size(path):
+    path = os.path.abspath(os.path.expanduser(path))
     r = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height,r_frame_rate",
@@ -72,6 +77,9 @@ def apply_watermark(video, out, badge=None, size=LOGO_SIZE,
     Re-encodes video (libx264 crf 20), copies audio untouched.
     """
     badge = badge or BADGE_DEFAULT
+    video = os.path.abspath(os.path.expanduser(video))
+    badge = os.path.abspath(os.path.expanduser(badge))
+    out = os.path.abspath(os.path.expanduser(out))
     if not os.path.isfile(video):
         raise WatermarkError("ملف الفيديو غير موجود: %s" % video)
     if not os.path.isfile(badge):
