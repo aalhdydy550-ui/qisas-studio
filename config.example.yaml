@@ -30,6 +30,13 @@ headless:
   root: "~/workspace/headless-editor"
   editor: "~/workspace/headless-editor/editor.py"
 
+openreel:
+  # الوضع التلقائي لـOpenReel (خلفية تجميع بديلة ثالثة عبر
+  # --backend openreel) — render.py يُستدعى كعملية فرعية،
+  # والكود الأصلي للمحرر لا يُنسخ ولا يُعدَّل
+  root: "~/workspace/openreel-auto"
+  render: "~/workspace/openreel-auto/render.py"
+
 video:
   width: 720
   height: 1280
