@@ -147,7 +147,7 @@ def _print_translated(prefix, exc, context):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.33"
+VERSION = "0.1.34"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
 # مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،
@@ -1147,7 +1147,7 @@ def cmd_doctor(cfg, fix=False, accounts_flag=False):
     """فحص بيئة studio (تقرير PASS/FAIL صادق). --fix ينشئ config.yaml.
 
     --accounts يضيف قسمًا منفصلًا بعدّاده الخاص لفحوصات الحسابات
-    (فيسبوك/يوتيوب/Veo — قراءة فقط).
+    (فيسبوك/يوتيوب/Veo/TikTok/Instagram — قراءة فقط).
     """
     here = os.path.dirname(os.path.abspath(__file__))
     if fix and doctor.ensure_config(here):
@@ -3005,8 +3005,8 @@ def main():
     p.add_argument("--fix", action="store_true",
                    help="أنشئ config.yaml من المثال إن غاب")
     p.add_argument("--accounts", action="store_true",
-                   help="أضف فحوصات الحسابات: فيسبوك/يوتيوب/Veo "
-                        "(قراءة فقط)")
+                   help="أضف فحوصات الحسابات: فيسبوك/يوتيوب/Veo/"
+                        "TikTok/Instagram (قراءة فقط)")
     p = sub.add_parser("check", help="فحص جودة فيديو قبل النشر (PASS/FAIL)")
     p.add_argument("--video", required=True, help="ملف الفيديو mp4")
     p.add_argument("--long", action="store_true",
