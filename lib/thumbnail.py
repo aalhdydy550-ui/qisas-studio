@@ -9,6 +9,7 @@ hamati-thumbnail.jpg): أقوى لقطة من الفيديو (إطار يُست�
 import json
 import os
 import subprocess
+import tempfile
 
 WIDTH = 720
 HEIGHT = 1280
@@ -41,6 +42,9 @@ def _run(cmd, what):
 
 
 def video_duration(video_path):
+    # مسار مطلق: ملف اسمه يبدأ بشرطة (-test.mp4) كان يُفسَّر
+    # كخيار من ffprobe فيفشل الفحص (اختراق 2026-11-22).
+    video_path = os.path.abspath(os.path.expanduser(video_path))
     out = _run(["ffprobe", "-v", "error", "-show_entries",
                 "format=duration", "-of",
                 "default=noprint_wrappers=1:nokey=1", video_path],
@@ -116,6 +120,8 @@ def make_thumbnail(video_path, hook, out_path, at_seconds=None,
     """
     if not os.path.isfile(video_path):
         raise ThumbnailError("ملف الفيديو غير موجود: %s" % video_path)
+    # مسار مطلق لنفس سبب video_duration (ملف يبدأ بشرطة).
+    video_path = os.path.abspath(os.path.expanduser(video_path))
     if not hook or not hook.strip():
         raise ThumbnailError("نص الهوك فارغ")
     duration = video_duration(video_path)
@@ -124,8 +130,10 @@ def make_thumbnail(video_path, hook, out_path, at_seconds=None,
     at_seconds = max(0.0, min(float(at_seconds), max(0.0, duration - 0.1)))
     out_dir = os.path.dirname(os.path.abspath(out_path))
     os.makedirs(out_dir, exist_ok=True)
-    tmpdir = os.path.join(out_dir, ".thumb-tmp")
-    os.makedirs(tmpdir, exist_ok=True)
+    # مجلد مؤقت فريد لكل استدعاء — الاسم الثابت .thumb-tmp كان
+    # يتصادم بين استدعاءين متوازيين لنفس المجلد فيفسد أحدهما
+    # الآخر (أُثبت حيًا: 6 متوازية نجح منها 3 فقط).
+    tmpdir = tempfile.mkdtemp(prefix=".thumb-", dir=out_dir)
     frame = os.path.join(tmpdir, "frame.png")
     ass_path = os.path.join(tmpdir, "hook.ass")
     try:
@@ -137,8 +145,10 @@ def make_thumbnail(video_path, hook, out_path, at_seconds=None,
         lines = write_ass(hook.strip(), ass_path, width=width,
                           height=height, fontsize=fontsize,
                           margin_v=margin_v, max_chars=max_chars)
+        # اقتباس مسار ASS بعلامات مفردة: فاصلة في المسار كانت
+        # تُقسَّم كفلترين فيفشل الحرق (أُثبت حيًا بمسار فيه فاصلة).
         _run(["ffmpeg", "-y", "-v", "error", "-i", frame,
-              "-vf", "subtitles=%s" % _escape_filter_path(ass_path),
+              "-vf", "subtitles='%s'" % _escape_filter_path(ass_path),
               "-frames:v", "1", out_path], "حرق نص الهوك على الصورة")
     finally:
         for p in (frame, ass_path):
@@ -165,6 +175,7 @@ def make_long_thumbnail(video_path, hook, out_path, at_seconds=None):
 
 def probe_image(path):
     """يرجع (العرض، الارتفاع) لملف صورة عبر ffprobe."""
+    path = os.path.abspath(os.path.expanduser(path))
     out = _run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                 "-show_entries", "stream=width,height", "-of", "json", path],
                "فحص أبعاد الصورة")
