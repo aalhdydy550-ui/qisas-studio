@@ -133,7 +133,12 @@ def make_thumbnail(video_path, hook, out_path, at_seconds=None,
     # مجلد مؤقت فريد لكل استدعاء — الاسم الثابت .thumb-tmp كان
     # يتصادم بين استدعاءين متوازيين لنفس المجلد فيفسد أحدهما
     # الآخر (أُثبت حيًا: 6 متوازية نجح منها 3 فقط).
-    tmpdir = tempfile.mkdtemp(prefix=".thumb-", dir=out_dir)
+    # إصلاح اختبار اختراق 2026-11-22 (L1): المجلد المؤقت كان
+    # داخل out_dir فمسار ASS يحوي `'` من اسم مجلد الخرج فينكسر
+    # فلتر subtitles رغم الهروب — الآن في temp النظام، ومسار
+    # الخرج نفسه يُمرَّر وسيطًا (لا في فلتر) فعلامة الاقتباس فيه
+    # آمنة.
+    tmpdir = tempfile.mkdtemp(prefix="qisas-thumb-")
     frame = os.path.join(tmpdir, "frame.png")
     ass_path = os.path.join(tmpdir, "hook.ass")
     try:
