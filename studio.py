@@ -100,6 +100,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from lib import omniroute_client
+from lib import llm_state
 from lib import openmontage_stage
 from lib import concat_mcp
 from lib import headless_stage
@@ -140,6 +141,9 @@ from lib import update_backup
 from lib import balance as balance_lib
 from lib import batch as batch_lib
 from lib import dna as dna_lib
+from lib import avatar_job as avatar_job_lib
+from lib import avatar_profiles as avatar_profiles_lib
+from lib import audio_profile as audio_profile_lib
 from lib import scene_plan as scene_plan_lib
 from lib import social_publish as social_lib
 from lib import ass_shaping as ass_shaping_lib
@@ -160,7 +164,7 @@ def _print_translated(prefix, exc, context):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.37"
+VERSION = "0.1.38"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
 # مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،
@@ -542,8 +546,12 @@ def _ensure_environment():
         if missing or unit_missing:
             script = _SETUP_ENV_SCRIPT
             if not os.path.isfile(script):
+                # إلى stderr لا stdout — فمخرجات JSON للأوامر
+                # (مثل avatar-job --template وcheck --json) تبقى
+                # قابلة للقراءة الآلية في بيئة متدهورة.
                 print("تحذير: أدوات غائبة (%s) ولا يوجد سكربت استعادة %s"
-                      % (", ".join(missing) or "ملف الخدمة", script))
+                      % (", ".join(missing) or "ملف الخدمة", script),
+                      file=sys.stderr)
             else:
                 reasons = []
                 if missing:
@@ -551,10 +559,11 @@ def _ensure_environment():
                 if unit_missing:
                     reasons.append("ملف الخدمة غائب")
                 print("تحذير: %s — تشغيل سكربت الاستعادة…"
-                      % " و".join(reasons))
+                      % " و".join(reasons), file=sys.stderr)
                 if not _script_safe_to_run(script):
                     print("تحذير: سكربت الاستعادة غير آمن للتشغيل "
-                          "التلقائي (مالك/صلاحيات) — يُتخطى: %s" % script)
+                          "التلقائي (مالك/صلاحيات) — يُتخطى: %s" % script,
+                          file=sys.stderr)
                 else:
                     _log_auto_script(script, " و".join(reasons))
                     env = dict(os.environ)
@@ -568,7 +577,7 @@ def _ensure_environment():
                     except (OSError,
                             subprocess.TimeoutExpired) as e:
                         print("تحذير: فشلت استعادة البيئة تلقائيًا (%s) — "
-                              "أكمل بدونها" % e)
+                              "أكمل بدونها" % e, file=sys.stderr)
     _ensure_protection_tools()
     _ensure_omniroute_server()
 
@@ -704,17 +713,49 @@ def _fallback_script(story):
             "قصة قصيرة حقيقية عن %s — والنهاية أغرب مما تتخيل." % desc)
 
 
+def _llm_chat(cfg, prompt, max_tokens=200, temperature=0.7):
+    """استدعاء LLM عبر سلسلة المزودين مع تسجيل الحالة.
+
+    يبني السلسلة من قسم omniroute في config (الموديل، البديل،
+    Gemini) ويسجّل كل محاولة مزود في
+    runs/llm-provider-state.json (نجاح/فشل + تهدئة الحصة).
+    يرجع (النص، المسار، الموديل) كما يرجع omniroute_client.chat.
+    """
+    cfg_o = cfg.get("omniroute", {}) if isinstance(cfg, dict) else {}
+    providers = omniroute_client.providers_from_config(cfg_o)
+    runs_dir = None
+    try:
+        runs_dir = expand(cfg["paths"]["runs_dir"])
+    except Exception:
+        runs_dir = None
+    state = (llm_state.load_state(runs_dir) if runs_dir
+             else llm_state.default_state())
+
+    def on_attempt(provider, ok, kind):
+        llm_state.record_attempt(state, provider, ok, kind)
+        if runs_dir:
+            try:
+                llm_state.save_state(state, runs_dir)
+            except OSError:
+                pass
+
+    return omniroute_client.chat(
+        prompt, cfg_o.get("model"), cfg_o.get("fallback_model"),
+        cfg_o.get("base_url", "http://localhost:20128"),
+        max_tokens=max_tokens, temperature=temperature,
+        retries=int(cfg_o.get("retries", 1)),
+        retry_delay=int(cfg_o.get("retry_delay_seconds", 5)),
+        providers=providers, state=state, on_attempt=on_attempt)
+
+
 def cmd_script(cfg, story, allow_fallback, run_dir=None):
     cfg_o = cfg["omniroute"]
     prompt = SCRIPT_PROMPT.format(
         story=STORY_TEXTS.get(story, story))
     t0 = time.time()
     try:
-        text, via, model = omniroute_client.chat(
-            prompt, cfg_o["model"], cfg_o.get("fallback_model"),
-            cfg_o["base_url"], max_tokens=200, temperature=0.7,
-            retries=int(cfg_o.get("retries", 1)),
-            retry_delay=int(cfg_o.get("retry_delay_seconds", 5)))
+        text, via, model = _llm_chat(cfg, prompt,
+                                     max_tokens=200, temperature=0.7)
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         result = {"source": "omniroute", "via": via, "model": model,
                   "title": lines[0] if lines else "",
@@ -737,17 +778,20 @@ def cmd_script(cfg, story, allow_fallback, run_dir=None):
                   "seconds": round(time.time() - t0, 1)}
         print("استُخدم البديل من سيناريو OpenMontage الجاهز: %s"
               % result["title"])
+    _meta_llm = {}
+
     def _chat(prompt):
-        text, _via, _model = omniroute_client.chat(
-            prompt, cfg_o["model"], cfg_o.get("fallback_model"),
-            cfg_o["base_url"], max_tokens=200, temperature=0.7,
-            retries=int(cfg_o.get("retries", 1)),
-            retry_delay=int(cfg_o.get("retry_delay_seconds", 5)))
+        text, _via, _model = _llm_chat(cfg, prompt,
+                                       max_tokens=200, temperature=0.7)
+        _meta_llm["via"] = _via
+        _meta_llm["model"] = _model
         return text
     meta = script_meta_lib.generate_publish_meta(
         {"title": result["title"],
          "text": STORY_TEXTS.get(story, story)}, chat_fn=_chat)
     result["publish_meta"] = meta
+    result["publish_meta_llm_via"] = _meta_llm.get("via")
+    result["publish_meta_llm_model"] = _meta_llm.get("model")
     print("وصف النشر: %s" % meta["description"])
     print("الهاشتاغات: %s" % " ".join(meta["hashtags"]))
     if run_dir:
@@ -1245,18 +1289,32 @@ def cmd_run(cfg, story, project, out_path, allow_fallback, dry_run=False,
 
 # ---------------------------------------------------------------- doctor
 def cmd_check(cfg, video, long_mode=False, as_json=False,
-              captions_dir=None):
+              captions_dir=None, avatar_image=None,
+              aspect_policy="native"):
     """فحص جودة فيديو قبل النشر (تقرير عربي PASS/FAIL).
 
     يرجع 0 إن نجحت كل الفحوصات، و1 عند أي فشل (أو تعذر القراءة).
     مع --captions يُدقَّق أيضًا تشكيل الكابشنات العربية في
     ملفات ASS بالمجلد (حروف متصلة، RTL، بلا U+FFFD).
+    مع --avatar-image تُقارن نسبة أبعاد الفيديو بنسبة صورة
+    الأفاتار (تحذير فقط — لا أثر في كود الخروج).
     """
     try:
         result = check_lib.run_checks(expand(video), long_mode=long_mode)
     except check_lib.CheckError as e:
         _print_translated("تعذر فحص الفيديو", e, "check")
         return 1
+    if avatar_image:
+        try:
+            aspect = check_lib.check_avatar_aspect(
+                expand(video), expand(avatar_image),
+                policy=aspect_policy)
+        except check_lib.CheckError as e:
+            aspect = {"level": "warn", "detail": str(e)}
+        result["avatar_aspect"] = aspect
+        if aspect["level"] == "warn":
+            print("تحذير — نسبة أبعاد الأفاتار: %s"
+                  % aspect["detail"])
     # بيان المصدر (جولة v0.1.37): legacy تحذير فقط، لا فشل أبدًا؛
     # فيديو جديد بلا بيان (أو بيان مشوَّه) فشل.
     manifest_status, manifest_issues = manifest_lib.verify_manifest(
@@ -1312,6 +1370,50 @@ def cmd_check(cfg, video, long_mode=False, as_json=False,
         return 0 if (result["passed"] and ass_result["ok"]
                      and manifest_ok) else 1
     return 0 if (result["passed"] and manifest_ok) else 1
+
+
+def cmd_avatar_job(cfg, args):
+    """أمر تحقق نحيف لوظيفة أفاتار (جولة v0.1.38 §1+5).
+
+    --validate job.json [--profile NAME]: تحقق + طباعة أعلام
+    الملف؛ خروج 0 «وظيفة الأفاتار سليمة» أو 1 + خطأ عربي.
+    --template [--scene-type S]: اطبع وظيفة مثال JSON.
+    --list-profiles: الملفات الثلاثة + أعلامها.
+    """
+    if args.list_profiles:
+        for name in avatar_profiles_lib.list_profiles():
+            profile = avatar_profiles_lib.get_profile(name)
+            flags = avatar_profiles_lib.profile_flags(name)
+            print("%s (%s، %d GPU): %s"
+                  % (name, profile.get("resolution", "?"),
+                     profile.get("gpus", 0), " ".join(flags)))
+        return 0
+    if args.template:
+        print(json.dumps(
+            avatar_job_lib.job_template(
+                scene_type=args.scene_type or "narration"),
+            ensure_ascii=False, indent=2))
+        return 0
+    if args.validate:
+        try:
+            job = avatar_job_lib.load_job(expand(args.validate))
+        except avatar_job_lib.AvatarJobError as e:
+            print("وظيفة الأفاتار غير سليمة: %s" % e)
+            return 1
+        profile_name = (args.profile
+                        or job["settings"].get("profile")
+                        or "t4x2-int8")
+        try:
+            flags = avatar_profiles_lib.profile_flags(profile_name)
+        except avatar_profiles_lib.AvatarProfilesError as e:
+            print("وظيفة الأفاتار غير سليمة: %s" % e)
+            return 1
+        print("وظيفة الأفاتار سليمة")
+        print("الملف: %s" % profile_name)
+        print("الأعلام: %s" % " ".join(flags))
+        return 0
+    print("لازم أحد: --validate أو --template أو --list-profiles")
+    return 2
 
 
 def cmd_manifest(cfg, video, title=None, hook=None, story=None):
@@ -1441,11 +1543,29 @@ def cmd_init(cfg, args):
                                   check_only=args.check_only)
 
 
-def cmd_doctor(cfg, fix=False, accounts_flag=False):
+def cmd_llm_status(cfg):
+    """حالة مزودي الذكاء: السلسلة المهيأة + التهدئة + عدادات
+    اليوم (قراءة فقط — بلا أي استدعاء حي)."""
+    cfg_o = cfg.get("omniroute", {}) if isinstance(cfg, dict) else {}
+    providers = omniroute_client.providers_from_config(cfg_o)
+    runs_dir = expand(cfg["paths"]["runs_dir"])
+    state = llm_state.load_state(runs_dir)
+    print("سلسلة المزودين (بالترتيب):")
+    for i, p in enumerate(providers, 1):
+        print("  %d) %s (%s)" % (i, p["model"], p["kind"]))
+    for line in llm_state.status_lines(
+            state, [p["model"] for p in providers]):
+        print(line)
+    return 0
+
+
+def cmd_doctor(cfg, fix=False, accounts_flag=False, llm_flag=False):
     """فحص بيئة studio (تقرير PASS/FAIL صادق). --fix ينشئ config.yaml.
 
     --accounts يضيف قسمًا منفصلًا بعدّاده الخاص لفحوصات الحسابات
     (فيسبوك/يوتيوب/Veo/TikTok/Instagram — قراءة فقط).
+    --llm يضيف قسمًا منفصلًا لفحوصات سلسلة LLM (بوابة
+    OmniRoute + مساعد Gemini — قراءة فقط).
     """
     here = os.path.dirname(os.path.abspath(__file__))
     if fix and doctor.ensure_config(here):
@@ -1461,6 +1581,14 @@ def cmd_doctor(cfg, fix=False, accounts_flag=False):
         print(acc_text)
         errors += acc_errors
         warnings += acc_warnings
+    if llm_flag:
+        llm_checks = doctor.run_llm_checks(cfg)
+        llm_text, llm_errors, llm_warnings = doctor.format_report(
+            llm_checks)
+        print("== فحوصات LLM (%d) ==" % len(llm_checks))
+        print(llm_text)
+        errors += llm_errors
+        warnings += llm_warnings
     return 0 if errors == 0 else 1
 
 
@@ -2578,7 +2706,8 @@ def cmd_queue_import(cfg, text_file, title, queue_file=None, start=None):
 # ------------------------------------------------------------------ analyze
 def cmd_analyze(cfg, page_id=None, channel_id=None, dna=False,
                 video=None, hook=None, subs_dir=None, story_text=None,
-                slug=None, reference=None, story=None):
+                slug=None, reference=None, story=None,
+                audio_profile=None):
     """حلّل آخر فيديو منشور بأرقام حقيقية (فيسبوك + يوتيوب).
 
     يطبع المنصتين جنبًا إلى جنب + 2–3 اقتراحات تحسين مشتقة من
@@ -2595,7 +2724,10 @@ def cmd_analyze(cfg, page_id=None, channel_id=None, dna=False,
                                subs_dir=subs_dir, story_text=story_text,
                                page_id=page_id, channel_id=channel_id,
                                slug=slug, reference=reference,
-                               new_story_path=story)
+                               new_story_path=story,
+                               audio_profile=audio_profile)
+    if audio_profile:
+        print("تنبيه: --audio-profile يعمل مع --dna فقط ويُتجاهل")
     page_id = page_id or (cfg.get("publish") or {}).get("page_id")
     channel_id = (channel_id
                   or (cfg.get("publish") or {}).get("youtube_channel_id"))
@@ -2793,13 +2925,13 @@ def cmd_ab_eval_set(cfg, variants=3, cost_per_video=0):
         return 1
     videos = eval_set_lib.eval_videos(data)
     cfg_o = cfg["omniroute"]
+    _eval_llm = {}
 
     def chat_fn(prompt):
-        text, _via, _model = omniroute_client.chat(
-            prompt, cfg_o["model"], cfg_o.get("fallback_model"),
-            cfg_o["base_url"], max_tokens=400, temperature=0.8,
-            retries=int(cfg_o.get("retries", 1)),
-            retry_delay=int(cfg_o.get("retry_delay_seconds", 5)))
+        text, _via, _model = _llm_chat(
+            cfg, prompt, max_tokens=400, temperature=0.8)
+        _eval_llm["via"] = _via
+        _eval_llm["model"] = _model
         return text
 
     runs_dir = expand(cfg["paths"]["runs_dir"])
@@ -2838,14 +2970,20 @@ def cmd_ab_eval_set(cfg, variants=3, cost_per_video=0):
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"seed": data.get("seed"),
                    "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+                   "llm_model": _eval_llm.get("model"),
+                   "llm_via": _eval_llm.get("via"),
                    "results": results}, f, ensure_ascii=False, indent=2)
     print("سُجّل في: %s" % out_path)
+    if _eval_llm.get("model"):
+        print("النموذج المستخدم: %s (عبر %s)"
+              % (_eval_llm["model"], _eval_llm.get("via")))
     return 0
 
 
 def cmd_analyze_dna(cfg, video=None, hook=None, subs_dir=None,
                     story_text=None, page_id=None, channel_id=None,
-                    slug=None, reference=None, new_story_path=None):
+                    slug=None, reference=None, new_story_path=None,
+                    audio_profile=None):
     """تحليل DNA الفيروسي لفيديو واحد (الجولة 7)."""
     if not video:
         print("تحليل DNA يحتاج --video <ملف mp4>")
@@ -2888,6 +3026,14 @@ def cmd_analyze_dna(cfg, video=None, hook=None, subs_dir=None,
     except check_lib.CheckError as e:
         print("فشل تحليل DNA: %s" % e)
         return 1
+    if audio_profile:
+        # ملف أداء الصوت (جولة v0.1.38 §2): يُلحق بالتقرير؛
+        # وفشله لا يُفشل DNA أبدًا — تحذير ويُكمل.
+        try:
+            report["audio_profile"] = audio_profile_lib.build_profile(
+                expand(audio_profile))
+        except Exception as e:
+            print("تحذير: تعذر بناء ملف أداء الصوت (%s)" % e)
     print(dna_lib.format_report(report))
     if reference:
         new_story = None
@@ -2923,18 +3069,21 @@ def cmd_ideas(cfg, count=5, theme=None, add=None, queue_file=None):
     --add N يضيف الفكرة رقم N إلى الطابور عبر queue add."""
     queue_path = expand(queue_file or cfg["paths"]["queue_file"])
     cfg_o = cfg["omniroute"]
+    _ideas_llm = {}
 
     def chat_fn(prompt):
-        text, _via, _model = omniroute_client.chat(
-            prompt, cfg_o["model"], cfg_o.get("fallback_model"),
-            cfg_o["base_url"], max_tokens=800, temperature=0.8,
-            retries=int(cfg_o.get("retries", 1)),
-            retry_delay=int(cfg_o.get("retry_delay_seconds", 5)))
+        text, _via, _model = _llm_chat(
+            cfg, prompt, max_tokens=800, temperature=0.8)
+        _ideas_llm["via"] = _via
+        _ideas_llm["model"] = _model
         return text
 
     ideas_list, notes = ideas.generate_ideas(
         queue_path, count=count, theme=theme, chat_fn=chat_fn)
     print(ideas.format_ideas(ideas_list))
+    if _ideas_llm.get("model"):
+        print("النموذج المستخدم: %s (عبر %s)"
+              % (_ideas_llm["model"], _ideas_llm.get("via")))
     for note in notes:
         print("ملاحظة: %s" % note)
     if not ideas_list:
@@ -3239,13 +3388,13 @@ def _cmd_ab_variants(cfg, video, hook_a, hook_b, title, out_dir,
     بدرجة DNA + الفائز (الأعلى درجة)."""
     runs_dir = expand(out_dir or cfg["paths"]["runs_dir"])
     cfg_o = cfg["omniroute"]
+    _ab_llm = {}
 
     def chat_fn(prompt):
-        text, _via, _model = omniroute_client.chat(
-            prompt, cfg_o["model"], cfg_o.get("fallback_model"),
-            cfg_o["base_url"], max_tokens=400, temperature=0.8,
-            retries=int(cfg_o.get("retries", 1)),
-            retry_delay=int(cfg_o.get("retry_delay_seconds", 5)))
+        text, _via, _model = _llm_chat(
+            cfg, prompt, max_tokens=400, temperature=0.8)
+        _ab_llm["via"] = _via
+        _ab_llm["model"] = _model
         return text
 
     hooks = [h for h in (hook_a, hook_b) if h]
@@ -3261,7 +3410,8 @@ def _cmd_ab_variants(cfg, video, hook_a, hook_b, title, out_dir,
     try:
         record = ab_lib.create_ab_variants(
             expand(video), hooks[:variants], runs_dir, title=title,
-            cost_per_video=cost_per_video)
+            cost_per_video=cost_per_video,
+            llm_model=_ab_llm.get("model"))
     except (ValueError, thumbnail.ThumbnailError) as e:
         print("فشل اختبار A/B: %s" % e)
         return 1
@@ -3303,15 +3453,15 @@ def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
         return _cmd_ab_variants(cfg, video, hook_a, hook_b, title,
                                 out_dir, cost_per_video, variants)
     runs_dir = expand(out_dir or cfg["paths"]["runs_dir"])
+    _ab2_llm = {}
     if not hook_a or not hook_b:
         cfg_o = cfg["omniroute"]
 
         def chat_fn(prompt):
-            text, _via, _model = omniroute_client.chat(
-                prompt, cfg_o["model"], cfg_o.get("fallback_model"),
-                cfg_o["base_url"], max_tokens=200, temperature=0.8,
-                retries=int(cfg_o.get("retries", 1)),
-                retry_delay=int(cfg_o.get("retry_delay_seconds", 5)))
+            text, _via, _model = _llm_chat(
+                cfg, prompt, max_tokens=200, temperature=0.8)
+            _ab2_llm["via"] = _via
+            _ab2_llm["model"] = _model
             return text
 
         sug_a, sug_b, src = ab_lib.suggest_hooks(
@@ -3322,7 +3472,8 @@ def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
     try:
         record = ab_lib.create_ab(expand(video), hook_a, hook_b,
                                   runs_dir, title=title,
-                                  cost_per_video=cost_per_video)
+                                  cost_per_video=cost_per_video,
+                                  llm_model=_ab2_llm.get("model"))
     except (ValueError, thumbnail.ThumbnailError) as e:
         print("فشل اختبار A/B: %s" % e)
         return 1
@@ -3753,6 +3904,12 @@ def main():
     p.add_argument("--accounts", action="store_true",
                    help="أضف فحوصات الحسابات: فيسبوك/يوتيوب/Veo/"
                         "TikTok/Instagram (قراءة فقط)")
+    p.add_argument("--llm", action="store_true",
+                   help="أضف فحوصات سلسلة LLM: بوابة OmniRoute + "
+                        "مساعد Gemini (قراءة فقط)")
+    sub.add_parser("llm-status",
+                   help="حالة مزودي الذكاء: السلسلة + التهدئة + "
+                        "عدادات اليوم (قراءة فقط)")
     sub.add_parser("protect",
                    help="فحص حماية المشروع: سلامة + صلاحيات + أسرار + "
                         "نسخة احتياطية (قراءة فقط)")
@@ -3765,12 +3922,35 @@ def main():
     p.add_argument("--captions", metavar="DIR",
                    help="مجلد ملفات ASS للكابشنات — دقّق تشكيلها "
                         "العربي مع فحص الفيديو")
+    p.add_argument("--avatar-image", metavar="FILE",
+                   help="صورة مرجع الأفاتار — قارن نسبة أبعادها "
+                        "بنسبة الفيديو (تحذير فقط)")
+    p.add_argument("--aspect-policy",
+                   choices=["native", "crop", "pad", "rotate"],
+                   default="native",
+                   help="سياسة نسبة الأبعاد مع --avatar-image "
+                        "(الافتراضي: native)")
     p = sub.add_parser("manifest",
                        help="ولّد بيان مصدر لفيديو موجود (مصدر يدوي)")
     p.add_argument("--video", required=True, help="ملف الفيديو mp4")
     p.add_argument("--title", help="عنوان الفيديو (افتراضي: اسم الملف)")
     p.add_argument("--hook", default="", help="هوك الفيديو")
     p.add_argument("--story", default="", help="نص القصة")
+    p = sub.add_parser("avatar-job",
+                       help="تحقق من وظيفة أفاتار ناطق (JSON) أو اطبع "
+                            "مثالًا أو اعرض ملفات العتاد")
+    p.add_argument("--validate", metavar="FILE",
+                   help="ملف وظيفة JSON للتحقق منه")
+    p.add_argument("--profile",
+                   help="ملف عتاد للأعلام (افتراضي: من الوظيفة)")
+    p.add_argument("--template", action="store_true",
+                   help="اطبع وظيفة مثال JSON")
+    p.add_argument("--scene-type",
+                   choices=["narration", "dialogue", "singing"],
+                   default="narration",
+                   help="نوع مشهد المثال (مع --template)")
+    p.add_argument("--list-profiles", action="store_true",
+                   help="اعرض ملفات العتاد الثلاثة + أعلامها")
     p = sub.add_parser("fix-audio",
                        help="إصلاح فجوات الصمت في فيديو (ضجيج وردي + "
                             "صوت المشاهد الأصلي)")
@@ -4114,6 +4294,9 @@ def main():
     p.add_argument("--story",
                    help="ملف نص قصة عربية جديدة (مع --reference) "
                         "لاقتراح إعادة البناء")
+    p.add_argument("--audio-profile", metavar="FILE",
+                   help="ملف سرد wav — ملف أداء الصوت يُلحق بتقرير "
+                        "DNA (مع --dna فقط؛ وبلا --dna يُتجاهل)")
     p = sub.add_parser("queue", help="إدارة طابور القصص")
     qp = p.add_subparsers(dest="queue_cmd", required=True)
     qa = qp.add_parser("add", help="إضافة قصة جديدة إلى الطابور")
@@ -4394,15 +4577,22 @@ def main():
         _ensure_environment()  # إصلاح ذاتي: أعد الأدوات/الخدمة إن غابتا
 
     if args.cmd == "doctor":
-        return cmd_doctor(cfg, fix=args.fix, accounts_flag=args.accounts)
+        return cmd_doctor(cfg, fix=args.fix, accounts_flag=args.accounts,
+                          llm_flag=args.llm)
+    if args.cmd == "llm-status":
+        return cmd_llm_status(cfg)
     if args.cmd == "protect":
         return cmd_protect(cfg)
     if args.cmd == "manifest":
         return cmd_manifest(cfg, args.video, title=args.title,
                             hook=args.hook, story=args.story)
+    if args.cmd == "avatar-job":
+        return cmd_avatar_job(cfg, args)
     if args.cmd == "check":
         return cmd_check(cfg, args.video, long_mode=args.long,
-                         as_json=args.json, captions_dir=args.captions)
+                         as_json=args.json, captions_dir=args.captions,
+                         avatar_image=args.avatar_image,
+                         aspect_policy=args.aspect_policy)
     if args.cmd == "fix-audio":
         return cmd_fix_audio(cfg, args.video,
                              scene_audio=args.scene_audio or None,
@@ -4726,7 +4916,8 @@ def main():
                            story_text=args.story_text,
                            slug=args.slug,
                            reference=args.reference,
-                           story=args.story)
+                           story=args.story,
+                           audio_profile=args.audio_profile)
     if args.cmd == "long-narration":
         try:
             cmd_long_narration(cfg, args.text, args.text_file,
