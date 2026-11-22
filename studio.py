@@ -44,6 +44,17 @@
   studio.py run-queue [--limit N] [--continue-on-error] [--dry-run]
       # دفعة جماعية من ملف الطابور: القصص الجاهزة فقط (مشروع
       # OpenMontage موجود) تُشغَّل بالتتابع؛ بلا مشروع تُتخطى.
+  studio.py batch --count N [--source veo|openmontage] [--execute]
+      # دفعة جماعية (الجولة 7): القصص التالية من الطابور في تشغيل
+      # واحد — إنتاج + فحص + مصغرة + سجل؛ افتراضيًا وضع تجريبي.
+  studio.py scene-plan --story N [--clips 6]
+      # خطة مشاهد Veo مكتوبة قبل أي إنفاق (موجهات + وحدات) مع
+      # فحص السقف — الجولة 7.
+  studio.py tiktok-auth [--token TOKEN] / instagram-auth [--token TOKEN]
+      # خطوات ربط TikTok/Instagram يدويًا + حفظ التوكن (600).
+  studio.py analyze --dna --video F [--title T] [--hook H]
+      # تحليل DNA الفيروسي (الجولة 7): درجة الهوك 0–10 + الإيقاع
+      # + الصمت + كثافة الكلمات + حكم مربوط بالأرقام الحقيقية.
   studio.py analyze-ref --url URL
       # تحليل فيديو مرجعي (بيانات + تفريغ + هوك/إيقاع/ختام) — تحليل
       # خاص فقط، بلا إعادة نشر أو توزيع (انظر README).
@@ -112,6 +123,10 @@ from lib import daily
 from lib import ab as ab_lib
 from lib import update_backup
 from lib import balance as balance_lib
+from lib import batch as batch_lib
+from lib import dna as dna_lib
+from lib import scene_plan as scene_plan_lib
+from lib import social_publish as social_lib
 
 
 def _print_translated(prefix, exc, context):
@@ -127,7 +142,7 @@ def _print_translated(prefix, exc, context):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.30"
+VERSION = "0.1.32"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # الموسيقى الخلفية المدمجة (شوبان — ملكية عامة، assets/music/).
 DEFAULT_MUSIC = os.path.join(
@@ -1148,10 +1163,13 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     privacy = privacy or cfg.get("publish", {}).get("youtube_privacy") \
         or "public"
     tags = tags if tags is not None else list(YT_DEFAULT_TAGS)
+    fb_caption = yt_desc = yt_title = None
     try:
-        fb_caption = publish.build_caption(title, caption)
-        yt_desc = publish.build_youtube_description(title, caption)
-        yt_title = publish.build_youtube_title(title)
+        if "facebook" in platforms:
+            fb_caption = publish.build_caption(title, caption)
+        if "youtube" in platforms:
+            yt_desc = publish.build_youtube_description(title, caption)
+            yt_title = publish.build_youtube_title(title)
     except publish.PublishError as e:
         print("خطأ في بيانات النشر: %s" % e)
         return 1
@@ -1164,7 +1182,7 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     # أو طباعة حمولة. --skip-caption-check للتجاوز الصريح فقط.
     # الكابشن النهائي يُعرض دائمًا قبل النشر (تجريبي وحقيقي).
     from lib import caption_check
-    if not skip_caption_check:
+    if "facebook" in platforms and not skip_caption_check:
         cap_result = caption_check.check_caption(fb_caption)
         print("الكابشن النهائي (%d حرفًا):" % len(fb_caption))
         print("   " + fb_caption.replace("\n", "\n   "))
@@ -1182,7 +1200,7 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
             print("أعد النشر بالكابشن المصحح، أو استخدم "
                   "--skip-caption-check للتجاوز على مسؤوليتك")
             return 1
-    else:
+    elif "facebook" in platforms:
         print("الكابشن النهائي (%d حرفًا) — فحص الامتثال متخطَّى "
               "(--skip-caption-check):" % len(fb_caption))
         print("   " + fb_caption.replace("\n", "\n   "))
@@ -1223,6 +1241,31 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
                 thumbnail=thumb)
             print("-- يوتيوب (videos.insert):")
             print(json.dumps(payload, ensure_ascii=False, indent=2))
+        if "tiktok" in platforms:
+            try:
+                payload = social_lib.tiktok_init_payload(
+                    video, title, caption)
+            except social_lib.SocialPublishError as e:
+                print("تيك توك: لا يمكن بناء الحمولة — %s" % e)
+                return 1
+            print("-- تيك توك (Content Posting API — video/init):")
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            print("   تنبيه: الرفع الحقيقي غير مختبَر حيًا — لا حساب "
+                  "TikTok مربوط بعد.")
+        if "instagram" in platforms:
+            ig_user_id = (cfg.get("publish") or {}).get(
+                "instagram_user_id")
+            try:
+                payload = social_lib.instagram_reel_payload(
+                    video, title, caption, ig_user_id)
+            except social_lib.SocialPublishError as e:
+                print("إنستغرام: لا يمكن بناء الحمولة — %s" % e)
+                return 1
+            print("-- إنستغرام (Graph API — Reels، رفع قابل "
+                  "للاستئناف):")
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            print("   تنبيه: الرفع الحقيقي غير مختبَر حيًا — لا حساب "
+                  "Instagram مربوط بعد.")
         return 0
     ok = True
     if "facebook" in platforms:
@@ -1265,6 +1308,66 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
             print("حزمة الرفع اليدوي جاهزة في: %s" % bundle)
             print("اتبع steps.txt داخل الحزمة، أو أكمل "
                   "`studio.py youtube-auth` ثم أعد الأمر.")
+            ok = False
+    if "tiktok" in platforms:
+        token = social_lib.load_token("tiktok")
+        if token:
+            try:
+                res = social_lib.upload_tiktok(video, title, caption,
+                                               token)
+                print("تيك توك: رُفع — publish_id=%s"
+                      % res["publish_id"])
+                print("   تحقق من ظهور الفيديو على الحساب — أول رفع "
+                      "حقيقي عبر API غير مختبَر حيًا بعد.")
+            except social_lib.SocialPublishError as e:
+                print("تيك توك: فشل — %s" % e)
+                ok = False
+        else:
+            bundle_dir = os.path.join(
+                expand(cfg["paths"]["videos_dir"]),
+                "publish-%s-tiktok" % time.strftime("%Y%m%d-%H%M%S"))
+            try:
+                payload = social_lib.tiktok_init_payload(
+                    video, title, caption)
+            except social_lib.SocialPublishError as e:
+                print("تيك توك: لا يمكن بناء الحمولة — %s" % e)
+                return 1
+            bundle = social_lib.write_social_bundle(
+                bundle_dir, "tiktok", video, title, caption, payload)
+            print("تيك توك: بلا توكن — لم يُرفع شيء.")
+            print("حزمة الرفع اليدوي جاهزة في: %s" % bundle)
+            print(social_lib.setup_steps("tiktok"))
+            ok = False
+    if "instagram" in platforms:
+        ig_user_id = (cfg.get("publish") or {}).get("instagram_user_id")
+        token = social_lib.load_token("instagram")
+        if token and ig_user_id:
+            try:
+                res = social_lib.upload_instagram(
+                    video, title, caption, ig_user_id, token)
+                print("إنستغرام: رُفع — media_id=%s"
+                      % res["media_id"])
+                print("   تحقق من ظهور الريل على الحساب — أول رفع "
+                      "حقيقي عبر API غير مختبَر حيًا بعد.")
+            except social_lib.SocialPublishError as e:
+                print("إنستغرام: فشل — %s" % e)
+                ok = False
+        else:
+            bundle_dir = os.path.join(
+                expand(cfg["paths"]["videos_dir"]),
+                "publish-%s-instagram" % time.strftime("%Y%m%d-%H%M%S"))
+            try:
+                payload = social_lib.instagram_reel_payload(
+                    video, title, caption, ig_user_id)
+            except social_lib.SocialPublishError as e:
+                print("إنستغرام: لا يمكن بناء الحمولة — %s" % e)
+                return 1
+            bundle = social_lib.write_social_bundle(
+                bundle_dir, "instagram", video, title, caption, payload,
+                ig_user_id=ig_user_id)
+            print("إنستغرام: بلا توكن أو معرّف حساب — لم يُرفع شيء.")
+            print("حزمة الرفع اليدوي جاهزة في: %s" % bundle)
+            print(social_lib.setup_steps("instagram"))
             ok = False
     return 0 if ok else 1
 
@@ -1985,14 +2088,25 @@ def cmd_queue_import(cfg, text_file, title, queue_file=None, start=None):
 
 
 # ------------------------------------------------------------------ analyze
-def cmd_analyze(cfg, page_id=None, channel_id=None):
+def cmd_analyze(cfg, page_id=None, channel_id=None, dna=False,
+                video=None, hook=None, subs_dir=None, story_text=None,
+                slug=None):
     """حلّل آخر فيديو منشور بأرقام حقيقية (فيسبوك + يوتيوب).
 
     يطبع المنصتين جنبًا إلى جنب + 2–3 اقتراحات تحسين مشتقة من
     الأرقام، ويحفظ JSON في runs/analyze-<وقت>.json. أي مصدر لا
     يصل يُطبع «غير معروف» — بلا أرقام مخترعة أبدًا. يرجع 1 فقط
     إن تعذر المصدران معًا.
+
+    مع --dna: تحليل DNA الفيروسي لفيديو واحد (--video) — درجة
+    الهوك 0–10 + الإيقاع + الصمت + كثافة الكلمات + حكم مربوط
+    بأرقام المنصتين لنفس الفيديو (بمطابقة العنوان).
     """
+    if dna:
+        return cmd_analyze_dna(cfg, video=video, hook=hook,
+                               subs_dir=subs_dir, story_text=story_text,
+                               page_id=page_id, channel_id=channel_id,
+                               slug=slug)
     page_id = page_id or (cfg.get("publish") or {}).get("page_id")
     channel_id = (channel_id
                   or (cfg.get("publish") or {}).get("youtube_channel_id"))
@@ -2087,6 +2201,59 @@ def cmd_analyze_ref(cfg, url, model="small"):
     return 0
 
 
+# ------------------------------------------------------- analyze --dna
+def cmd_analyze_dna(cfg, video=None, hook=None, subs_dir=None,
+                    story_text=None, page_id=None, channel_id=None,
+                    slug=None):
+    """تحليل DNA الفيروسي لفيديو واحد (الجولة 7)."""
+    if not video:
+        print("تحليل DNA يحتاج --video <ملف mp4>")
+        return 2
+    page_id = page_id or (cfg.get("publish") or {}).get("page_id")
+    channel_id = (channel_id
+                  or (cfg.get("publish") or {}).get("youtube_channel_id"))
+    title = os.path.splitext(os.path.basename(expand(video)))[0]
+    story = None
+    if story_text:
+        try:
+            with open(expand(story_text), encoding="utf-8") as f:
+                story = f.read()
+        except OSError as e:
+            print("تعذرت قراءة ملف نص القصة: %s" % e)
+            return 1
+    # أرقام المنصتين لنفس الفيديو (بمطابقة العنوان/الهوك) — أي
+    # مصدر لا يصل يُطبع «غير معروف» في التقرير.
+    fb = yt = None
+    needle = (hook or "").strip() or title
+    fb_bin = publish.find_facebook_bin()
+    if page_id and fb_bin:
+        entries, _note = ab_lib.fetch_fb_posts(fb_bin, page_id)
+        match = ab_lib.match_variant(entries, needle, "caption")
+        if match is not None:
+            fb = match
+    if channel_id:
+        yt_entries, _note = ab_lib.fetch_yt_uploads(channel_id)
+        match = ab_lib.match_variant(yt_entries, needle, "title")
+        if match is not None:
+            yt = match
+    try:
+        report = dna_lib.analyze_dna(
+            expand(video), title=title, hook=hook or None,
+            subs_dir=subs_dir, story_text=story, fb=fb, yt=yt,
+            slug=slug)
+    except dna_lib.DnaError as e:
+        print("فشل تحليل DNA: %s" % e)
+        return 1
+    except check_lib.CheckError as e:
+        print("فشل تحليل DNA: %s" % e)
+        return 1
+    print(dna_lib.format_report(report))
+    runs_dir = expand(cfg["paths"]["runs_dir"])
+    out_path = dna_lib.save_report(report, runs_dir)
+    print("حُفظ تقرير DNA في: %s" % out_path)
+    return 0
+
+
 # ------------------------------------------------------------------ ideas
 def cmd_ideas(cfg, count=5, theme=None, add=None, queue_file=None):
     """ولّد أفكار قصص بأسلوب الصفحة (النموذج أولًا، والبنك
@@ -2131,10 +2298,13 @@ def cmd_ideas(cfg, count=5, theme=None, add=None, queue_file=None):
 
 # ------------------------------------------------------------------ daily
 def cmd_daily(cfg, slot="morning", execute=False, video=None,
-              moral="", question="", queue_file=None):
+              moral="", question="", queue_file=None,
+              auto_approve=False):
     """أمر اليوم الواحد: خطة (dry-run افتراضيًا) أو تنفيذ
     كامل مع --execute (إنتاج + فحص + مصغرة + نشر + نص
-    أول تعليق)."""
+    أول تعليق). الجولة 7: مسار Veo يحفظ خطة المشاهد ويطلب
+    الموافقة على الإنفاق تفاعليًا — إلا مع --auto-approve
+    أو في تشغيل غير تفاعلي (كرون)."""
     if queue_file:
         cfg = json.loads(json.dumps(cfg))
         cfg["paths"]["queue_file"] = queue_file
@@ -2171,17 +2341,132 @@ def cmd_daily(cfg, slot="morning", execute=False, video=None,
     try:
         rc, _result = daily.execute_daily(
             cfg, plan, produce_fn, check_fn, thumbnail_fn, publish_fn,
-            expand(cfg["paths"]["runs_dir"]))
+            expand(cfg["paths"]["runs_dir"]), auto_approve=auto_approve)
     except check_lib.CheckError as e:
         print("تعذر فحص الجودة: %s" % e)
         return 1
     return rc
 
 
+# ------------------------------------------------------------------ batch
+def cmd_batch(cfg, count=1, source="openmontage", execute=False,
+              continue_on_error=False, queue_file=None):
+    """دفعة جماعية (الجولة 7): القصص التالية من الطابور في
+    تشغيل واحد — إنتاج + فحص + مصغرة + سجل. افتراضيًا وضع
+    تجريبي (يطبع الخطة بلا تنفيذ)؛ والتنفيذ فقط مع --execute."""
+    if queue_file:
+        cfg = json.loads(json.dumps(cfg))
+        cfg["paths"]["queue_file"] = queue_file
+    try:
+        plan = batch_lib.plan_batch(
+            cfg, count, source=source,
+            ready_fn=lambda s: check_story_ready(cfg, s))
+    except batch_lib.BatchError as e:
+        print("تعذرت خطة الدفعة: %s" % e)
+        return 1
+    if not execute:
+        print(batch_lib.format_plan(plan))
+        print("== وضع تجريبي — لم يُنفَّذ شيء "
+              "(أضف --execute للتنفيذ) ==")
+        return 0
+
+    def produce_fn(c, slug, project, out_path):
+        return cmd_run(c, slug, project, out_path, False)
+
+    def check_fn(v):
+        return check_lib.run_checks(v)
+
+    def thumbnail_fn(v, hook, out):
+        path, _sec, _lines = thumbnail.make_thumbnail(v, hook, out)
+        return path
+
+    try:
+        rc, _result = batch_lib.execute_batch(
+            cfg, plan, produce_fn, check_fn, thumbnail_fn,
+            expand(cfg["paths"]["runs_dir"]),
+            continue_on_error=continue_on_error)
+    except check_lib.CheckError as e:
+        print("تعذر فحص الجودة: %s" % e)
+        return 1
+    return rc
+
+
+# ------------------------------------------------------------- scene-plan
+def cmd_scene_plan(cfg, story=None, clips=6, queue_file=None):
+    """خطة مشاهد Veo مكتوبة لقصة من الطابور (الجولة 7) — تُطبع
+    وتُحفظ قبل أي إنفاق، مع فحص السقف. story: رقم القصة في
+    الطابور أو جزء من عنوانها."""
+    if story is None:
+        print("حدد القصة: --story <رقم في الطابور أو جزء من العنوان>")
+        return 2
+    queue_path = expand(queue_file or cfg["paths"]["queue_file"])
+    if not os.path.isfile(queue_path):
+        print("ملف الطابور غير موجود: %s" % queue_path)
+        return 1
+    try:
+        stories = parse_queue(queue_path)
+    except OSError as e:
+        print("تعذر قراءة ملف الطابور: %s" % e)
+        return 1
+    target = None
+    if str(story).strip().isdigit():
+        for s in stories:
+            if s["number"] == int(str(story).strip()):
+                target = s
+                break
+    else:
+        needle = str(story).strip()
+        for s in stories:
+            if needle in s["title"]:
+                target = s
+                break
+    if target is None:
+        print("لا توجد قصة مطابقة في الانتظار: %s" % story)
+        return 1
+    try:
+        plan = scene_plan_lib.build_scene_plan(cfg, target, clips=clips)
+    except scene_plan_lib.CapError as e:
+        print("رفضت خطة المشاهد: %s" % e)
+        return 1
+    except ValueError as e:
+        print("خطة مشاهد غير صالحة: %s" % e)
+        return 2
+    print(scene_plan_lib.format_plan(plan))
+    out_path = scene_plan_lib.save_plan(
+        plan, expand(cfg["paths"]["runs_dir"]))
+    print("حُفظت الخطة في: %s" % out_path)
+    return 0
+
+
+# ------------------------------------------- tiktok-auth / instagram-auth
+def cmd_social_auth(cfg, platform, token=None):
+    """خطوات ربط TikTok/Instagram يدويًا + حفظ التوكن (600).
+
+    بلا --token: يطبع الخطوات فقط. مع --token: يحفظه ولا يعرضه.
+    """
+    if token:
+        try:
+            path = social_lib.save_token(platform, token)
+        except social_lib.SocialPublishError as e:
+            print("فشل حفظ التوكن: %s" % e)
+            return 1
+        print("حُفظ توكن %s في: %s (صلاحية 600 — لم يُعرض)"
+              % (platform, path))
+        print("أعد النشر الآن: python3 studio.py publish --video "
+              "<ملف> --title \"...\" --platforms %s" % platform)
+        return 0
+    print(social_lib.setup_steps(platform))
+    return 0
+
+
 # ---------------------------------------------------------------------- ab
 def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
-           out_dir=None):
-    """اختبار A/B: هوكان ومصغرتان لفيديو واحد + سجل الزوج."""
+           out_dir=None, cost_per_video=0):
+    """اختبار A/B: هوكان ومصغرتان لفيديو واحد + سجل الزوج.
+
+    cost_per_video: تقدير وحدات Veo لإنتاج كل بديل من جديد
+    (الافتراضي 0 — نفس الفيديو، هوك+مصغرة فقط؛ وتوليد جديد
+    كامل = 120 وحدة)."""
     runs_dir = expand(out_dir or cfg["paths"]["runs_dir"])
     if not hook_a or not hook_b:
         cfg_o = cfg["omniroute"]
@@ -2201,7 +2486,8 @@ def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
         print("الهوكان المقترحان (%s)" % src)
     try:
         record = ab_lib.create_ab(expand(video), hook_a, hook_b,
-                                  runs_dir, title=title)
+                                  runs_dir, title=title,
+                                  cost_per_video=cost_per_video)
     except (ValueError, thumbnail.ThumbnailError) as e:
         print("فشل اختبار A/B: %s" % e)
         return 1
@@ -2209,6 +2495,11 @@ def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
     print("  المصغرة: %s" % record["thumb_a"])
     print("نسخة ب — الهوك: %s" % record["hook_b"])
     print("  المصغرة: %s" % record["thumb_b"])
+    cost = record.get("cost_estimate_units") or {}
+    if cost:
+        print("تقدير التكلفة (وحدات Veo): أ %s — ب %s — المجموع %s"
+              % (cost.get("variant_a"), cost.get("variant_b"),
+                 cost.get("total")))
     print("سُجّل الزوج في: %s" % record["record_path"])
     print(ab_lib.AB_NOTE)
     print("انشر كل نسخة بعنوانها (هوكها) ثم قارن بـ:")
@@ -2452,13 +2743,40 @@ def _save_veo_balance(balance_units, stamp):
 
 def cmd_balance(cfg, balance=None, renew=None, cost_min=None,
                 cost_max=None, record=None, video=None, clips=None,
-                history_flag=False):
+                history_flag=False, cap=None, config_path=None):
     """توقع رصيد Veo بالأيام — من الرصيد المسجَّل في الإعداد
     (ليس حيًا من API).
 
     --record N --video NAME يسجّل إنفاقًا فعليًا بعد توليد في
     Flow في runs/cost-ledger.jsonl؛ و--history يعرض السجل.
+    --cap N يضبط سقف الإنفاق لكل توليد Veo (فيديو واحد) في
+    config.yaml؛ و--cap 0 يلغي السقف.
     """
+    if cap is not None:
+        if isinstance(cap, bool) or not isinstance(cap, int) \
+                or cap < 0:
+            print("سقف غير صالح: %s (المسموح: عدد صحيح ≥ 0 — و0 "
+                  "يلغي السقف)" % (cap,))
+            return 2
+        path = config_path or os.path.join(STUDIO_DIR, "config.yaml")
+        try:
+            if cap == 0:
+                balance_lib.remove_veo_key("cap_units", path)
+                print("أُلغي سقف الإنفاق (بلا سقف الآن).")
+            else:
+                balance_lib.save_veo_value("cap_units", cap, path)
+                print("حُفظ سقف الإنفاق (%d وحدة لكل توليد Veo) في "
+                      "config.yaml." % cap)
+        except (ValueError, OSError) as e:
+            print("فشل حفظ السقف: %s" % e)
+            return 1
+        veo = dict(cfg.get("veo") or {})
+        if cap == 0:
+            veo.pop("cap_units", None)
+        else:
+            veo["cap_units"] = cap
+        cfg = dict(cfg)
+        cfg["veo"] = veo
     if record is not None:
         from lib import cost_ledger
         try:
@@ -2494,7 +2812,8 @@ def cmd_balance(cfg, balance=None, renew=None, cost_min=None,
               "التحديث." % balance)
     try:
         result = balance_lib.forecast(bal, ren, cmin, cmax,
-                                      updated_at=veo.get("updated_at"))
+                                      updated_at=veo.get("updated_at"),
+                                      cap_units=veo.get("cap_units"))
     except (ValueError, TypeError) as e:
         print("قيم غير صالحة: %s" % e)
         return 2
@@ -2828,6 +3147,20 @@ def main():
                    help="معرّف صفحة فيسبوك (أو من config.yaml)")
     p.add_argument("--channel-id",
                    help="معرّف قناة يوتيوب (أو من config.yaml)")
+    p.add_argument("--dna", action="store_true",
+                   help="تحليل DNA الفيروسي لفيديو واحد (مع --video)")
+    p.add_argument("--video",
+                   help="ملف الفيديو لتحليل DNA (مع --dna)")
+    p.add_argument("--hook",
+                   help="نص الهوك لدرجة DNA (مع --dna؛ الافتراضي: "
+                        "اسم الفيديو)")
+    p.add_argument("--subs-dir",
+                   help="مجلد ملفات ASS لكثافة الكلمات (مع --dna)")
+    p.add_argument("--slug",
+                   help="بادئة ملفات ASS لكثافة الكلمات (مع --dna؛ "
+                        "الافتراضي: تُشتق من اسم الفيديو)")
+    p.add_argument("--story-text",
+                   help="ملف نص القصة لمعيار العائد (مع --dna)")
     p = sub.add_parser("queue", help="إدارة طابور القصص")
     qp = p.add_subparsers(dest="queue_cmd", required=True)
     qa = qp.add_parser("add", help="إضافة قصة جديدة إلى الطابور")
@@ -2897,6 +3230,40 @@ def main():
                    help="سؤال المعضلة لنص أول تعليق")
     p.add_argument("--queue-file", default=None,
                    help="ملف طابور بديل (للاختبار)")
+    p.add_argument("--auto-approve", action="store_true",
+                   help="موافقة تلقائية على إنفاق Veo بخطة المشاهد "
+                        "(بلا توقف تفاعلي)")
+    p = sub.add_parser("batch",
+                       help="دفعة جماعية: القصص التالية من الطابور "
+                            "في تشغيل واحد (إنتاج + فحص + مصغرة)")
+    p.add_argument("--count", type=int, default=1,
+                   help="عدد القصص من بداية الطابور (افتراضي 1)")
+    p.add_argument("--source", choices=["veo", "openmontage"],
+                   default="openmontage",
+                   help="مصدر الإنتاج (افتراضي openmontage)")
+    p.add_argument("--execute", action="store_true",
+                   help="تنفيذ حقيقي (بدونه: وضع تجريبي فقط)")
+    p.add_argument("--continue-on-error", action="store_true",
+                   help="أكمل بعد فشل قصة بدل التوقف")
+    p.add_argument("--queue-file", default=None,
+                   help="ملف طابور بديل (للاختبار)")
+    p = sub.add_parser("scene-plan",
+                       help="خطة مشاهد Veo مكتوبة لقصة من الطابور "
+                            "قبل أي إنفاق (مع فحص السقف)")
+    p.add_argument("--story", required=True,
+                   help="رقم القصة في الطابور أو جزء من عنوانها")
+    p.add_argument("--clips", type=int, default=6,
+                   help="عدد المقاطع (افتراضي 6 — كل مقطع 20 وحدة)")
+    p.add_argument("--queue-file", default=None,
+                   help="ملف طابور بديل (للاختبار)")
+    p = sub.add_parser("tiktok-auth",
+                       help="خطوات ربط TikTok يدويًا + حفظ التوكن")
+    p.add_argument("--token", default=None,
+                   help="توكن TikTok (يُحفظ بصلاحية 600 ولا يُعرض)")
+    p = sub.add_parser("instagram-auth",
+                       help="خطوات ربط Instagram يدويًا + حفظ التوكن")
+    p.add_argument("--token", default=None,
+                   help="توكن Instagram (يُحفظ بصلاحية 600 ولا يُعرض)")
     p = sub.add_parser("ab", help="اختبار A/B: هوكان ومصغرتان "
                                   "لفيديو واحد")
     p.add_argument("--video", required=True,
@@ -2906,6 +3273,10 @@ def main():
     p.add_argument("--title", default=None, help="عنوان الفيديو")
     p.add_argument("--out-dir", default=None,
                    help="مجلد السجلات (افتراضي runs/)")
+    p.add_argument("--cost-per-video", type=int, default=0,
+                   help="تقدير وحدات Veo لإنتاج كل بديل من جديد "
+                        "(افتراضي 0 — نفس الفيديو بلا توليد جديد؛ "
+                        "وتوليد جديد كامل = 120)")
     p = sub.add_parser("ab-results",
                        help="قارن مشاهدات نسختي اختبار A/B")
     p.add_argument("--ab-file", default=None,
@@ -2975,6 +3346,10 @@ def main():
                    help="عدد مقاطع التوليد (مع --record)")
     p.add_argument("--history", action="store_true",
                    help="اعرض سجل التكاليف المسجَّلة")
+    p.add_argument("--cap", type=int, default=None,
+                   help="سقف الإنفاق: حد أقصى لوحدات Veo لكل توليد "
+                        "(فيديو واحد) — يُحفظ في config.yaml؛ و0 "
+                        "يلغي السقف")
     args = ap.parse_args()
     cfg = load_config()
     # خيار --size (في run/assemble): يبدّل مقاس الفيديو لهذا التشغيل
@@ -3250,10 +3625,11 @@ def main():
         platforms = [pl.strip() for pl in args.platforms.split(",")
                      if pl.strip()]
         bad = [pl for pl in platforms
-               if pl not in ("facebook", "youtube")]
+               if pl not in ("facebook", "youtube", "tiktok",
+                             "instagram")]
         if bad:
-            print("منصات غير معروفة: %s (المسموح: facebook,youtube)"
-                  % ", ".join(bad))
+            print("منصات غير معروفة: %s (المسموح: facebook,youtube,"
+                  "tiktok,instagram)" % ", ".join(bad))
             return 2
         if not platforms:
             print("حدد منصة واحدة على الأقل في --platforms")
@@ -3302,7 +3678,11 @@ def main():
         return 2
     if args.cmd == "analyze":
         return cmd_analyze(cfg, page_id=args.page_id,
-                           channel_id=args.channel_id)
+                           channel_id=args.channel_id, dna=args.dna,
+                           video=args.video, hook=args.hook,
+                           subs_dir=args.subs_dir,
+                           story_text=args.story_text,
+                           slug=args.slug)
     if args.cmd == "long-narration":
         try:
             cmd_long_narration(cfg, args.text, args.text_file,
@@ -3356,10 +3736,25 @@ def main():
                          execute=args.execute and not args.dry_run,
                          video=args.video, moral=args.moral,
                          question=args.question,
+                         queue_file=args.queue_file,
+                         auto_approve=args.auto_approve)
+    if args.cmd == "batch":
+        return cmd_batch(cfg, count=args.count, source=args.source,
+                         execute=args.execute,
+                         continue_on_error=args.continue_on_error,
                          queue_file=args.queue_file)
+    if args.cmd == "scene-plan":
+        return cmd_scene_plan(cfg, story=args.story,
+                              clips=args.clips,
+                              queue_file=args.queue_file)
+    if args.cmd == "tiktok-auth":
+        return cmd_social_auth(cfg, "tiktok", token=args.token)
+    if args.cmd == "instagram-auth":
+        return cmd_social_auth(cfg, "instagram", token=args.token)
     if args.cmd == "ab":
         return cmd_ab(cfg, args.video, args.hook_a, args.hook_b,
-                      args.title, args.out_dir)
+                      args.title, args.out_dir,
+                      cost_per_video=args.cost_per_video)
     if args.cmd == "ab-results":
         return cmd_ab_results(cfg, args.ab_file)
     if args.cmd == "update":
@@ -3391,7 +3786,8 @@ def main():
                            cost_max=args.cost_max,
                            record=args.record, video=args.video,
                            clips=args.clips,
-                           history_flag=args.history)
+                           history_flag=args.history,
+                           cap=args.cap)
     return 0
 
 
