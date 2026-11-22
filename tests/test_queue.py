@@ -124,6 +124,36 @@ class TestQueueAdd(unittest.TestCase):
                                      stories_dir=self.stories_dir)
         self.assertEqual(result["number"], 4)
 
+    def test_concurrent_adds_lose_nothing(self):
+        # اختبار انحدار (اختراق 2026-11-22): 10 إضافات متوازية
+        # كانت تفقد إضافتين (8/10) بلا قفل. الآن القفل الحصري
+        # والكتابة الذرية يحفظان الكل بأرقام فريدة.
+        import threading
+        errors = []
+
+        def add_one(i):
+            try:
+                queue_lib.add_story(
+                    self.qpath, "قصة متوازية %d" % i, "نص %d" % i,
+                    stories_dir=self.stories_dir)
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        threads = [threading.Thread(target=add_one, args=(i,))
+                   for i in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        with open(self.qpath, encoding="utf-8") as f:
+            entries = queue_lib.parse_waiting_entries(f.read())
+        titles = [e["title"] for e in entries]
+        for i in range(10):
+            self.assertIn("قصة متوازية %d" % i, titles)
+        numbers = [e["number"] for e in entries]
+        self.assertEqual(len(numbers), len(set(numbers)))
+
 
 if __name__ == "__main__":
     unittest.main()
