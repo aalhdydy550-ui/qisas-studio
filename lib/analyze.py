@@ -76,11 +76,13 @@ def _fb_entry_metrics(entry):
     return out
 
 
-def fb_last_video(facebook_bin, page_id, run=None):
+def fb_last_video(facebook_bin, page_id, run=None, raw_sink=None):
     """آخر منشور فيديو على الصفحة مع أرقامه، أو (None, السبب).
 
     run: دالة تشغيل قابلة للحقن في الاختبارات (افتراضيًا
     subprocess.run). تعيد (entry, None) أو (None, reason).
+    raw_sink: قاموس اختياري تُحفظ فيه الاستجابة الخام حرفيًا
+    (لقطة insights — جولة v0.1.37) تحت مفتاح "facebook".
     """
     runner = run or (lambda cmd, **kw: subprocess.run(
         cmd, capture_output=True, text=True, timeout=120, **kw))
@@ -99,6 +101,8 @@ def fb_last_video(facebook_bin, page_id, run=None):
         data = json.loads(proc.stdout or "")
     except ValueError:
         return None, "مخرجات facebook-cli ليست JSON صالحًا"
+    if raw_sink is not None:
+        raw_sink["facebook"] = data
     results = data.get("results") or []
     videos = [_fb_entry_metrics(r) for r in results if _fb_entry_metrics(r)["is_video"]]
     if videos:
@@ -124,8 +128,25 @@ def _run_ytdlp(args, run=None):
         raise AnalyzeError("مخرجات yt-dlp ليست JSON صالحًا")
 
 
-def yt_latest_video(channel_id, run=None):
-    """آخر فيديو على قناة يوتيوب مع أرقامه العامة، أو (None, السبب)."""
+def _yt_video_metrics(video_id, info):
+    """أرقام فيديو يوتيوب من مخرجات yt-dlp الخام (قابلة لإعادة
+    الاشتقاق من لقطة insights)."""
+    return {"video_id": video_id,
+            "title": info.get("title") or "",
+            "upload_date": info.get("upload_date"),
+            "duration": info.get("duration"),
+            "views": info.get("view_count"),
+            "likes": info.get("like_count"),
+            "comments": info.get("comment_count")}
+
+
+def yt_latest_video(channel_id, run=None, raw_sink=None):
+    """آخر فيديو على قناة يوتيوب مع أرقامه العامة، أو (None, السبب).
+
+    raw_sink: قاموس اختياري تُحفظ فيه الاستجابتان الخام حرفيًا
+    (لقطة insights — جولة v0.1.37) تحت مفتاح "youtube"
+    {playlist, info}.
+    """
     if not channel_id:
         return None, "معرّف قناة يوتيوب غير مضبوط (publish.youtube_channel_id)"
     # إصلاح اختبار اختراق 2026-11-21: المعرف كان يُدرج خامًا في
@@ -145,6 +166,8 @@ def yt_latest_video(channel_id, run=None):
         return None, "تعذرت قراءة قائمة رفع يوتيوب: %s" % e
     except subprocess.TimeoutExpired:
         return None, "انتهت مهلة قراءة قائمة رفع يوتيوب"
+    if raw_sink is not None:
+        raw_sink["youtube"] = {"playlist": playlist, "info": None}
     entries = playlist.get("entries") or []
     if not entries:
         return None, "قناة يوتيوب بلا فيديوهات"
@@ -160,13 +183,9 @@ def yt_latest_video(channel_id, run=None):
         return None, "تعذرت قراءة بيانات الفيديو %s: %s" % (video_id, e)
     except subprocess.TimeoutExpired:
         return None, "انتهت مهلة قراءة بيانات الفيديو"
-    return {"video_id": video_id,
-            "title": info.get("title") or "",
-            "upload_date": info.get("upload_date"),
-            "duration": info.get("duration"),
-            "views": info.get("view_count"),
-            "likes": info.get("like_count"),
-            "comments": info.get("comment_count")}, None
+    if raw_sink is not None:
+        raw_sink["youtube"]["info"] = info
+    return _yt_video_metrics(video_id, info), None
 
 
 def _like_rate(likes, views):
