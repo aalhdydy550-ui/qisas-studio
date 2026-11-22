@@ -16,10 +16,16 @@ story-queue-2026-11-20.md): قسم «في الانتظار» (أو «دفعة ث
 
 لا يُمسّ أي قسم آخر من الملف، ولا يُعاد ترقيم شيء.
 """
+import fcntl
 import os
 import re
+import tempfile
+import threading
 
 QUEUE_WAITING_MARKERS = ("في الانتظار", "دفعة ثانية")
+
+# قفل خيوط داخل العملية (يكمل قفل الملف بين العمليات).
+_QUEUE_THREAD_LOCK = threading.Lock()
 
 
 class QueueError(Exception):
@@ -73,6 +79,13 @@ def add_story(queue_path, title, text, parts=1, note=None,
     يرفع QueueError عند: عنوان فارغ، نص فارغ، عنوان مكرر، عدد
     أجزاء غير صالح، أو مجلد نصوص غير قابل للكتابة. ملف طابور
     غائب يُنشأ بالهيكل المعتاد بدل الرفض.
+
+    إصلاح اختراق 2026-11-22: الإضافة كانت قراءة-تعديل-كتابة
+    بلا قفل وبلا ذرية — إضافتان متوازيتان فقدتا إحداهما (أُثبت
+    حيًا: 10 إضافات متوازية بقي منها 8 فقط). الآن قفل ملف
+    حصري يغطي القراءة والحساب والكتابة كلها، والكتابة ذرية
+    (ملف مؤقت + os.replace) فلا يتلف الطابور بانقطاع منتصف
+    الكتابة.
     """
     title = _norm_title(title)
     if not title:
@@ -82,11 +95,25 @@ def add_story(queue_path, title, text, parts=1, note=None,
     if not isinstance(parts, int) or parts < 1:
         raise QueueError("عدد الأجزاء يجب أن يكون 1 أو أكثر (وصل: %s)"
                          % parts)
+    with _QUEUE_THREAD_LOCK:
+        lock_path = queue_path + ".lock"
+        with open(lock_path, "a+", encoding="utf-8") as lock_f:
+            fcntl.flock(lock_f, fcntl.LOCK_EX)
+            try:
+                return _add_story_locked(queue_path, title, text,
+                                         parts, note, stories_dir)
+            finally:
+                fcntl.flock(lock_f, fcntl.LOCK_UN)
+
+
+def _add_story_locked(queue_path, title, text, parts, note,
+                      stories_dir):
+    """جسم الإضافة — يُستدعى والقفل ممسوك."""
     if not os.path.isfile(queue_path):
-        with open(queue_path, "w", encoding="utf-8") as f:
-            f.write("# طابور قصص\n\n## في الانتظار\n\n")
-    with open(queue_path, encoding="utf-8") as f:
-        content = f.read()
+        content = "# طابور قصص\n\n## في الانتظار\n\n"
+    else:
+        with open(queue_path, encoding="utf-8") as f:
+            content = f.read()
     entries = parse_waiting_entries(content)
     for e in entries:
         if _norm_title(e["title"]) == title:
@@ -123,6 +150,23 @@ def add_story(queue_path, title, text, parts=1, note=None,
                 insert_at = i + 1
                 break
     lines.insert(insert_at, new_line)
-    with open(queue_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+    _write_atomic(queue_path, "\n".join(lines) + "\n")
     return {"number": number, "title": title, "text_file": text_file}
+
+
+def _write_atomic(path, text):
+    """اكتب نصًا في ملف ذريًا: ملف مؤقت بنفس المجلد ثم
+    os.replace — فلا يبقى الملف نصف مكتوب أبدًا."""
+    dir_name = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=dir_name, prefix=".queue-",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
