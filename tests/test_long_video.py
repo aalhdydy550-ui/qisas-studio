@@ -150,6 +150,14 @@ class TestBuildProject(unittest.TestCase):
         blob = json.dumps(project, ensure_ascii=False)
         self.assertNotIn("cards", blob)
         self.assertNotIn("بطاقة", blob)
+        # قاعدة دائمة 2026-11-22: لا نص أعلى الشاشة أبدًا — هوك
+        # المقدمة أسفل فوق الكابشن ("above")، وبطاقات العناوين
+        # والخاتمة في المنتصف (بطاقات لا تراكب)، وكل العبارات أسفل.
+        texts = [t for t in project["tracks"] if t["type"] == "text"]
+        self.assertFalse(any(t.get("position") == "top" for t in texts))
+        intro_hook = [t for t in texts if t["start"] == 0.0]
+        self.assertEqual(len(intro_hook), 1)
+        self.assertEqual(intro_hook[0]["position"], "above")
 
     def test_music_track_is_background(self):
         spec = dict(self.spec)
