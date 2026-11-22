@@ -262,6 +262,95 @@ def fix_silence_gaps(video_path, scene_audio_paths=None, out_path=None,
             "note": note}
 
 
+def _audio_pass(video_path, out_path, af_filter, action,
+                default_suffix):
+    """مرّر فلتر صوت واحدًا على فيديو (الفيديو يُنسخ بلا إعادة
+    ترميز، والصوت يُعاد ترميزه aac 192k). يرجع تقريرًا قاموسيًا.
+
+    {"path", "output", "action", "filter", "duration_before",
+     "duration_after"}
+    يرفع FixAudioError برسالة عربية عند ملف مفقود أو فشل ffmpeg.
+    """
+    video_path = os.path.abspath(os.path.expanduser(video_path))
+    if not os.path.isfile(video_path):
+        raise FixAudioError("ملف الفيديو غير موجود: %s" % video_path)
+    try:
+        info = check_lib.probe(video_path)
+    except check_lib.CheckError as e:
+        raise FixAudioError(str(e))
+    if not info["has_audio"]:
+        raise FixAudioError("الفيديو بلا مسار صوتي — لا صوت لـ%s: %s"
+                            % (action, video_path))
+    duration = info["duration"]
+    if out_path:
+        out_path = os.path.abspath(os.path.expanduser(out_path))
+    else:
+        root, _ext = os.path.splitext(video_path)
+        out_path = "%s-%s.mp4" % (root, default_suffix)
+    if os.path.abspath(out_path) == video_path:
+        raise FixAudioError(
+            "مسار الإخراج هو نفسه ملف الفيديو — حدد --out مختلفًا")
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    tmp_out = out_path + ".tmp.mp4"
+    cmd = ["ffmpeg", "-y", "-v", "error", "-i", video_path,
+           "-af", af_filter, "-map", "0:v:0", "-map", "0:a:0",
+           "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+           "-t", "%.3f" % duration, "-movflags", "+faststart", tmp_out]
+    proc = _run(cmd, timeout=900)
+    if proc.returncode != 0 or not os.path.isfile(tmp_out):
+        if os.path.isfile(tmp_out):
+            os.remove(tmp_out)
+        raise FixAudioError("فشل %s عبر ffmpeg: %s"
+                            % (action, (proc.stderr or "").strip()[-300:]))
+    os.replace(tmp_out, out_path)
+    try:
+        after_info = check_lib.probe(out_path)
+    except check_lib.CheckError as e:
+        raise FixAudioError("تعذر قراءة الفيديو بعد %s: %s" % (action, e))
+    return {"path": video_path, "output": out_path, "action": action,
+            "filter": af_filter,
+            "duration_before": round(duration, 3),
+            "duration_after": round(after_info["duration"], 3)}
+
+
+def denoise_audio(video_path, out_path=None, nr=12):
+    """أزل ضجيج الخلفية من صوت فيديو بفلتر `afftdn` (FFT).
+
+    nr شدة الإزالة بالديسيبل (12 افتراضيًا — توازن بين إزالة
+    الهسهسة وبقاء السرد طبيعيًا؛ أعلى من 20 قد يشوّه الصوت).
+    الفيديو يُنسخ بلا إعادة ترميز.
+    """
+    return _audio_pass(video_path, out_path, "afftdn=nr=%d" % int(nr),
+                       "إزالة ضجيج", "denoised")
+
+
+def normalize_loudness(video_path, out_path=None, target_i=-16.0,
+                       target_tp=-1.5, target_lra=11.0):
+    """طبّع جهارة صوت فيديو إلى EBU R128 بفلتر `loudnorm`
+    (تمريرة واحدة linear).
+
+    الهدف الافتراضي -16 LUFS (معيار البث الصوتي للكلام —
+    نفس مستوى عينة SoundCraft المقاسة) مع قمة حقيقية -1.5
+    ديسيبل ونطاق جهارة 11 LU. الفيديو يُنسخ بلا إعادة ترميز.
+    """
+    af = ("loudnorm=I=%.1f:TP=%.1f:LRA=%.1f:linear=true"
+          % (target_i, target_tp, target_lra))
+    return _audio_pass(video_path, out_path, af, "تطبيع جهارة",
+                       "loudnorm")
+
+
+def format_audio_pass_report(result):
+    """نص عربي لتقرير مرور صوتي واحد (ضجيج/جهارة)."""
+    return (
+        "%s: %s\n"
+        "المدة: %.3f ث ← %.3f ث\n"
+        "الفلتر: %s\n"
+        "الناتج: %s\n"
+        % (result["action"], result["path"],
+           result["duration_before"], result["duration_after"],
+           result["filter"], result["output"]))
+
+
 def format_report(result):
     """نص عربي للتقرير: الفجوات قبل/بعد والمدة."""
     lines = ["إصلاح فجوات الصمت: %s" % result["path"]]
