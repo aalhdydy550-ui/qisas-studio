@@ -24,6 +24,7 @@ import re
 import time
 
 from lib import publish
+from lib import scene_plan as scene_plan_lib
 
 VEO_MIN_BALANCE = 120  # حد فحص الرصيد الصباحي (وحدة)
 
@@ -104,7 +105,9 @@ def plan_daily(cfg, slot, video=None, moral="", question="",
                ready_fn=None):
     """خطط ليوم واحد بلا أي تنفيذ: القصة التالية + المسار +
     الكابشن + نص أول تعليق + الحمولات (إن وُجد فيديو جاهز).
-    يرجع قاموس الخطة. يرفع DailyError إن لم توجد قصة انتظار."""
+    يرجع قاموس الخطة. يرفع DailyError إن لم توجد قصة انتظار،
+    أو إن تجاوز الإنفاق المتوقع لمسار Veo السقفَ أو الرصيد
+    (فحص `scene_plan` — بلا أي إنفاق في التخطيط)."""
     if slot not in ("morning", "evening"):
         raise DailyError("الموعد غير صالح: %s (المسموح: morning/evening)"
                          % slot)
@@ -126,6 +129,14 @@ def plan_daily(cfg, slot, video=None, moral="", question="",
     balance = ((cfg.get("veo") or {}).get("balance_units")
                if isinstance(cfg.get("veo"), dict) else None)
     path, path_reason = decide_path(slot, balance)
+    # الجولة 7: مسار Veo يبني خطة مشاهد مكتوبة قبل أي إنفاق —
+    # تجاوز السقف أو الرصيد يرفض التخطيط كله برسالة عربية.
+    scene_plan = None
+    if path == "veo":
+        try:
+            scene_plan = scene_plan_lib.build_scene_plan(cfg, story)
+        except scene_plan_lib.CapError as e:
+            raise DailyError(str(e))
     title = story["title"]
     caption_text = (moral or "").strip()
     fb_caption = publish.build_caption(title, caption_text)
@@ -148,6 +159,7 @@ def plan_daily(cfg, slot, video=None, moral="", question="",
         "reason": reason,
         "path": path, "path_reason": path_reason,
         "balance_units": balance,
+        "scene_plan": scene_plan,
         "video": planned_video,
         "video_ready": bool(planned_video
                             and os.path.isfile(planned_video)),
@@ -212,11 +224,14 @@ def format_plan(plan):
     if plan["path"] == "veo" and not plan["video_ready"]:
         lines.append("تنبيه: مسار Veo — أنتج المشاهد في Google Flow "
                      "أولًا ثم أعد الأمر مع --video <الملف>.")
+    if plan.get("scene_plan"):
+        lines.append("-- خطة مشاهد Veo (قبل أي إنفاق) --")
+        lines.append(scene_plan_lib.format_plan(plan["scene_plan"]))
     return "\n".join(lines)
 
 
 def execute_daily(cfg, plan, produce_fn, check_fn, thumbnail_fn,
-                  publish_fn, runs_dir):
+                  publish_fn, runs_dir, auto_approve=False):
     """نفّذ الخطة اليومية (بعد --execute الصريح).
 
     الدوال المحقونة (قابلة للاختبار بلا تنفيذ حقيقي):
@@ -224,6 +239,9 @@ def execute_daily(cfg, plan, produce_fn, check_fn, thumbnail_fn,
       check_fn(video) -> قاموس run_checks (فيه "passed")
       thumbnail_fn(video, hook, out_path) -> مسار المصغرة
       publish_fn(cfg, video, title, caption, thumbnail) -> 0/1
+    الجولة 7: مسار Veo بلا فيديو جاهز يحفظ خطة المشاهد أولًا
+    ثم يطلب الموافقة على الإنفاق (تفاعليًا إلا مع auto_approve
+    أو في تشغيل غير تفاعلي كالكرون) قبل أي إشارة لتوليد Flow.
     يرجع (رمز الخروج، قاموس النتائج المحفوظ)."""
     result = {"date": time.strftime("%Y-%m-%d %H:%M:%S"),
               "slot": plan["slot"],
@@ -232,6 +250,19 @@ def execute_daily(cfg, plan, produce_fn, check_fn, thumbnail_fn,
               "steps": {}}
     video = plan["video"]
     if plan["path"] == "veo" and not plan["video_ready"]:
+        if plan.get("scene_plan"):
+            plan_path = scene_plan_lib.save_plan(plan["scene_plan"],
+                                                 runs_dir)
+            result["steps"]["scene_plan"] = {
+                "path": plan_path,
+                "total_units": plan["scene_plan"]["total_units"],
+            }
+            print("خطة مشاهد Veo محفوظة في: %s" % plan_path)
+            approved = scene_plan_lib.request_approval(
+                plan["scene_plan"], auto_approve=auto_approve)
+            result["steps"]["scene_plan"]["approved"] = approved
+            if not approved:
+                return 1, result
         print("مسار Veo بلا فيديو جاهز — أنتج المشاهد في Google Flow "
               "أولًا ثم أعد الأمر مع --video <الملف>.")
         result["steps"]["produce"] = {"status": "needs-flow",
