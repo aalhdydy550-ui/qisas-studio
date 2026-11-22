@@ -9,6 +9,8 @@ import json
 import os
 import shutil
 
+from lib import dna as dna_lib
+
 
 class StageError(Exception):
     pass
@@ -108,6 +110,13 @@ def build_phrases(captions_path):
             "start": p[0]["startMs"] / 1000.0,
             "end": p[-1]["endMs"] / 1000.0,
             "text": " ".join(w["word"] for w in p),
+            # توقيتات الكلمات تُحفظ للبيان — فحص حدود المشاهد
+            # (lib/coverage.py) يحكم بها حرفيًا: حد داخل كلمة
+            # → FAIL، وحد بين كلمتين سليم حتى بلا صمت.
+            "words": [{"w": w["word"],
+                       "start": round(w["startMs"] / 1000.0, 3),
+                       "end": round(w["endMs"] / 1000.0, 3)}
+                      for w in p],
         })
     return out
 
@@ -172,6 +181,10 @@ def stage(project_path, run_dir, image_clip_seconds=5):
     except ValueError as e:
         raise StageError(str(e))
     hook, full_text = load_script(project_path)
+    # قاعدة دائمة (v0.1.37): الهوك لا يبدأ برقم أبدًا — يُعاد
+    # كتابته كلمات هنا (نقطة اختناق واحدة لكل الخلفيات الأربع،
+    # فكلها تقرأ الهوك من البيان).
+    hook = dna_lib.normalize_hook(hook)
     phrases = build_phrases(captions_path)
 
     # مدة السرد من ffprobe (إن توفر) لتوزيع الصور؛ وإلا من آخر عبارة.
