@@ -261,6 +261,13 @@ class TestOpenMontageStage(unittest.TestCase):
         self.assertEqual(phrases[0]["text"], "في نص")
         self.assertAlmostEqual(phrases[0]["end"], 0.6)
         self.assertEqual(phrases[1]["text"], "الليل")
+        # توقيتات الكلمات تُحفظ في العبارة لفحص حدود المشاهد
+        # (تصحيح 2026-11-22: حد بين كلمتين لا يفشل).
+        self.assertEqual(phrases[0]["words"],
+                         [{"w": "في", "start": 0.0, "end": 0.3},
+                          {"w": "نص", "start": 0.3, "end": 0.6}])
+        self.assertEqual(phrases[1]["words"],
+                         [{"w": "الليل", "start": 0.6, "end": 1.0}])
 
     def test_build_phrases_bad_word_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -407,10 +414,11 @@ class TestConcatArabicFeatures(unittest.TestCase):
         self.assertEqual(motion_calls[0]["clipId"], "c11")
         self.assertEqual(motion_calls[0]["patch"]["motion"],
                          concat_mcp.TITLE_MOTION)
-        # العنوان منزَّل تحت شارة الشعار (عيب 2026-11-21): بـ
-        # offsetY=-0.35 كان سطره الأول يصطدم بالشارة أعلى اليمين
-        # فيغطي أول كلمة من الهوك؛ بـ -0.26 يبدأ تحتها.
-        self.assertEqual(by_tool["title_add"][0]["offsetY"], -0.26)
+        # العنوان أسفل الشاشة فوق الكابشنات (قاعدة دائمة
+        # 2026-11-22: لا نص أعلى الشاشة أبدًا): كان offsetY=-0.26
+        # أعلى الشاشة (وقبله -0.35 يصطدم بالشارة)؛ الآن +0.12
+        # (صُحح من +0.17 بعد تداخل حي مع أول عبارة).
+        self.assertEqual(by_tool["title_add"][0]["offsetY"], 0.12)
         # الكابشنات تُرسَل بإعداد العربي نفسه
         self.assertEqual(by_tool["captions_add"][0]["style"],
                          concat_mcp.CAPTION_STYLE)
@@ -499,6 +507,10 @@ class TestWhisperCaptions(unittest.TestCase):
                          "في نص الليل حماتي طردتني")
         self.assertAlmostEqual(phrases[0]["start"], 0.0)
         self.assertAlmostEqual(phrases[0]["end"], 3.40)
+        # توقيتات الكلمات تُحفظ في العبارة لفحص حدود المشاهد.
+        self.assertEqual(len(phrases[0]["words"]), 5)
+        self.assertEqual(phrases[0]["words"][0],
+                         {"w": "في", "start": 0.0, "end": 0.16})
 
     def test_splits_on_gap_and_max_words(self):
         words = self.WORDS + [{"w": "أنا", "start": 5.00, "end": 5.30}]
@@ -831,7 +843,7 @@ class TestHeadlessStage(unittest.TestCase):
         hook = texts[0]
         self.assertEqual(hook["text"], "هوك تجريبي")
         self.assertEqual((hook["start"], hook["end"]), (0, 4.0))
-        self.assertEqual(hook["position"], "top")
+        self.assertEqual(hook["position"], "above")
         self.assertEqual(hook["fontsize"], 58)
         caps = texts[1:]
         self.assertEqual(len(caps), 2)
@@ -1287,24 +1299,66 @@ class TestMltStage(unittest.TestCase):
             open(mlt_path, "w").write("<mlt/>")
             out = os.path.join(d, "out.mp4")
 
-            class R:
+            class FakePopen:
+                pid = 4242
                 returncode = 0
-                stdout = ""
-                stderr = ""
 
-            def fake_run(cmd, **kw):
-                self.assertIn("/usr/bin/melt", cmd)
-                self.assertIn(mlt_path, cmd)
-                with open(out, "wb") as f:
-                    f.write(b"rendered")
-                return R()
+                def __init__(self, cmd, **kw):
+                    assert "/usr/bin/melt" in cmd
+                    assert kw.get("start_new_session") is True
+                    self._cmd = cmd
 
-            with mock.patch.object(mlt_stage.subprocess, "run",
-                                  side_effect=fake_run), \
+                def communicate(self, timeout=None):
+                    with open(out, "wb") as f:
+                        f.write(b"rendered")
+                    return ("", "")
+
+                def wait(self, timeout=None):
+                    return self.returncode
+
+            with mock.patch.object(mlt_stage.subprocess, "Popen",
+                                   side_effect=FakePopen), \
                     mock.patch.object(mlt_stage, "find_melt",
                                      return_value="/usr/bin/melt"):
                 res = mlt_stage.render_mlt(mlt_path, out)
             self.assertEqual(res["size_bytes"], 8)
+
+    def test_render_timeout_kills_process_group(self):
+        # المهلة يجب أن تقتل مجموعة عمليات melt كلها (لا xvfb-run
+        # وحده) — وإلا يبقى melt يتيمًا يريندر للأبد (2026-11-22).
+        import signal
+        import subprocess
+        from lib import mlt_stage
+        with tempfile.TemporaryDirectory() as d:
+            mlt_path = os.path.join(d, "proj.mlt")
+            open(mlt_path, "w").write("<mlt/>")
+            out = os.path.join(d, "out.mp4")
+            killed = []
+
+            class SlowPopen:
+                pid = 4242
+                returncode = None
+
+                def communicate(self, timeout=None):
+                    raise subprocess.TimeoutExpired("melt", timeout)
+
+                def wait(self, timeout=None):
+                    return -9
+
+            def fake_popen(cmd, **kw):
+                assert kw.get("start_new_session") is True
+                return SlowPopen()
+
+            with mock.patch.object(mlt_stage.subprocess, "Popen",
+                                   side_effect=fake_popen), \
+                    mock.patch.object(mlt_stage, "find_melt",
+                                     return_value="/usr/bin/melt"), \
+                    mock.patch.object(os, "killpg",
+                                     side_effect=lambda pgid, sig: killed.append((pgid, sig))):
+                with self.assertRaises(mlt_stage.MltError) as ctx:
+                    mlt_stage.render_mlt(mlt_path, out, timeout=5)
+            self.assertIn("انتهت مهلة ريندر melt", str(ctx.exception))
+            self.assertEqual(killed, [(4242, signal.SIGKILL)])
 
     def test_prepare_fill_images_crops_to_frame(self):
         from lib import mlt_stage
@@ -1365,15 +1419,15 @@ class TestMltStage(unittest.TestCase):
             self.assertEqual(profile.get("height"), str(h))
             self.assertEqual(profile.get("display_aspect_num"), num)
             self.assertEqual(profile.get("display_aspect_den"), den)
-            # نص الهوك محجوز له عرض الإطار ناقص منطقة الشعار
-            # أعلى اليمين (LOGO_RESERVE_PX) بإزاحتين متماثلتين
-            # فيبقى متمركزًا ولا يصل إلى الشارة.
+            # صندوق الهوك أسفل الشاشة فوق صندوق العبارات
+            # (قاعدة دائمة 2026-11-22: لا نص أعلى أبدًا):
+            # x=0 وعرض الإطار كاملًا، وy=height-420 وارتفاع 150.
             hook = ET.fromstring(xml_text).find(
                 "tractor/filter[@id='filter-hook']")
             geometry = hook.find(
                 "property[@name='geometry']").text.split()
-            self.assertEqual(geometry[0], "70")
-            self.assertEqual(int(geometry[2]), w - 140)
+            self.assertEqual(geometry, ["0", str(h - 420),
+                                        str(w), "150"])
 
 
 class TestEnsureEnvironment(unittest.TestCase):
