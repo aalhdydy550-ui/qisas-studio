@@ -30,6 +30,8 @@ backups/
 *.zip
 client_secrets*.json
 youtube-token.json
+tiktok-token.json
+instagram-token.json
 whisper-test-results/
 # ملفات المزامنة والسجلات المحلية — لا تُنشر أبدًا
 # (اختبار اختراق 2026-11-21: الرفع عبر Contents API يتجاوز .gitignore
