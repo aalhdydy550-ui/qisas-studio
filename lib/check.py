@@ -156,6 +156,36 @@ def extract_frame(path, seconds, out_path):
         raise CheckError("تعذر استخراج إطار عند %.1f ثانية" % seconds)
 
 
+def sample_video(path, out_dir):
+    """عيّنة سلوكية من فيديو (جولة v0.1.37 — مقترح tinker رقم 6).
+
+    يستخرج 3 لقطات (25% و50% و75% من المدة) + معاينة 3 ثوانٍ
+    تبدأ عند 25% من المدة، في `out_dir` (المقصود:
+    runs/samples/<اسم الفيديو>/). يرجع قاموسًا بالمسارات.
+    يرفع CheckError عند أي فشل — المتصل يقرر إن كان تحذيرًا.
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+    info = probe(path)
+    duration = info["duration"]
+    os.makedirs(out_dir, exist_ok=True)
+    frames = []
+    for frac, name in ((0.25, "frame-25.jpg"), (0.5, "frame-50.jpg"),
+                       (0.75, "frame-75.jpg")):
+        out_path = os.path.join(out_dir, name)
+        extract_frame(path, round(duration * frac, 2), out_path)
+        frames.append(out_path)
+    preview_path = os.path.join(out_dir, "preview-3s.mp4")
+    start = round(duration * 0.25, 2)
+    proc = _run(["ffmpeg", "-y", "-v", "error", "-ss", str(start),
+                 "-i", path, "-t", "3", "-c:v", "libx264", "-preset",
+                 "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
+                 "-c:a", "aac", preview_path], timeout=300)
+    if proc.returncode != 0 or not os.path.isfile(preview_path):
+        raise CheckError("تعذرت معاينة 3 ثوانٍ من: %s" % path)
+    return {"frames": frames, "preview": preview_path,
+            "duration": round(duration, 1)}
+
+
 def count_gold_pixels(image_path, width):
     """عدد البكسلات الذهبية في المنطقة العلوية اليمنى من صورة.
 
