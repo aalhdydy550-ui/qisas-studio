@@ -19,10 +19,12 @@ captions.json لمشاريع OpenMontage، وبتوقيتات مقدَّرة ب�
 داخل كل عبارة لباقي المصادر (السرد ثابت الإيقاع تقريبًا).
 """
 import json
+import math
 import os
 import re
 
 from . import long_narration
+from .paths import resolve_inside
 
 TITLE_CARD_SECONDS = 3.0
 IMAGE_CLIP_SECONDS = 5.0
@@ -34,10 +36,38 @@ CAPTION_FONTSIZE = 44
 TARGET_MIN_SECONDS = 480.0
 TARGET_MAX_SECONDS = 720.0
 SCENE_GAP_SECONDS = 0.35
+# إصلاح اختبار اختراق 2026-11-22 (M4): مدة فصل غير مسقوفة
+# (1e7 ث) كانت تولّد 2,000,009 مقاطع و811MB مشروع — سقف مطلق
+# 3600 ثانية للفصل/السرد، و720 للمدة المستهدفة.
+MAX_CHAPTER_SECONDS = 3600.0
+MAX_TARGET_SECONDS = 720.0
 
 
 class LongVideoError(Exception):
     """خطأ في بناء الفيديو الطويل (رسالته عربية)."""
+
+
+def _check_duration(duration, what):
+    """ارفض مدة غير رقمية أو غير منتهية أو فوق السقف المطلق."""
+    try:
+        duration = float(duration)
+    except (TypeError, ValueError):
+        raise LongVideoError("مدة %s غير صالحة: %s" % (what, duration))
+    if not math.isfinite(duration) or duration <= 0:
+        raise LongVideoError("مدة %s غير صالحة: %s" % (what, duration))
+    if duration > MAX_CHAPTER_SECONDS:
+        raise LongVideoError(
+            "مدة %s فوق الحد الأقصى %d ثانية (وصلت %.1f)"
+            % (what, int(MAX_CHAPTER_SECONDS), duration))
+    return duration
+
+
+def _resolve_in(base, path, what):
+    """حلّ مسار داخل base وارفض الهارب عبر رابط رمزي (M1)."""
+    try:
+        return resolve_inside(base, path, what)
+    except ValueError as e:
+        raise LongVideoError(str(e))
 
 
 def mmss(seconds):
@@ -166,14 +196,15 @@ def chapter_from_manifest(manifest, assets_dir, title=None, moral=""):
     الكتابة بمستوى الكلمة من assets/captions.json (توقيتات حقيقية)
     إن وُجد، وإلا عبارات فقط.
     """
-    narration = os.path.join(assets_dir, "audio", "narration-full.wav")
+    narration = _resolve_in(
+        assets_dir, os.path.join(assets_dir, "audio", "narration-full.wav"),
+        "ملف السرد الكامل")
     if not os.path.isfile(narration):
         raise LongVideoError(
             "ملف السرد الكامل غير موجود: %s" % narration)
-    duration = float(manifest.get("narration_duration") or 0.0)
-    if duration <= 0:
-        raise LongVideoError("مدة السرد في البيان صفر أو غائبة")
-    from lib.paths import resolve_inside, safe_component
+    duration = _check_duration(manifest.get("narration_duration") or 0.0,
+                               "السرد في البيان")
+    from lib.paths import safe_component
     images_dir = os.path.join(assets_dir, "images")
     images = []
     for name in manifest.get("sequence", []):
@@ -192,7 +223,9 @@ def chapter_from_manifest(manifest, assets_dir, title=None, moral=""):
     if missing:
         raise LongVideoError("صور مفقودة في أصول الفصل: %s" % missing[0])
     word_groups = None
-    captions_path = os.path.join(assets_dir, "captions.json")
+    captions_path = _resolve_in(
+        assets_dir, os.path.join(assets_dir, "captions.json"),
+        "ملف الكتابة")
     if os.path.isfile(captions_path):
         word_groups = _words_by_phrase(captions_path)
     phrases = []
@@ -232,31 +265,39 @@ def load_chapter_dir(path, work_dir=None, atempo=1.0, title=None,
     """
     if not os.path.isdir(path):
         raise LongVideoError("مجلد الفصل غير موجود: %s" % path)
+    # إصلاح اختبار اختراق 2026-11-22 (M1): كل ملف في مجلد الفصل
+    # يُحلّ بـresolve_inside — رابط رمزي يشير خارج المجلد يُرفض
+    # بدل اتباعه (سرد/عبارات/صور/غلاف).
     if title is None:
-        title = _read_text_file(os.path.join(path, "title.txt"),
-                                "عنوان الفصل")
+        title = _read_text_file(_resolve_in(
+            path, os.path.join(path, "title.txt"), "عنوان الفصل"),
+            "عنوان الفصل")
     if not title:
         raise LongVideoError("عنوان الفصل فارغ في: %s" % path)
     if moral is None:
         moral = ""
-        moral_path = os.path.join(path, "moral.txt")
+        moral_path = _resolve_in(
+            path, os.path.join(path, "moral.txt"), "عبرة الفصل")
         if os.path.isfile(moral_path):
             moral = _read_text_file(moral_path, "عبرة الفصل")
     scene_wavs = _list_media(path, (".wav",))
-    scene_wavs = [p for p in scene_wavs
+    scene_wavs = [_resolve_in(path, p, "ملف سرد المشهد")
+                  for p in scene_wavs
                   if re.search(r"scene\d+", os.path.basename(p),
                                re.IGNORECASE)]
     work = work_dir or os.path.join(path, ".long-video")
     os.makedirs(work, exist_ok=True)
     slug = re.sub(r"[^A-Za-z0-9_-]+", "_",
                   os.path.basename(os.path.abspath(path)))
-    narration = os.path.join(path, "narration.wav")
+    narration = _resolve_in(path, os.path.join(path, "narration.wav"),
+                            "ملف السرد")
     phrases = []
     if os.path.isfile(narration):
         if atempo != 1.0:
             narration = long_narration.apply_atempo(narration, atempo, work)
         duration = long_narration.probe_duration(narration)
-        ass_path = os.path.join(path, "phrases.ass")
+        ass_path = _resolve_in(path, os.path.join(path, "phrases.ass"),
+                               "ملف العبارات")
         if os.path.isfile(ass_path):
             phrases = parse_ass(ass_path)
     elif scene_wavs:
@@ -274,7 +315,8 @@ def load_chapter_dir(path, work_dir=None, atempo=1.0, title=None,
         for wav, timed_wav in zip(scene_wavs, timed):
             dur = long_narration.probe_duration(timed_wav)
             base = os.path.splitext(os.path.basename(wav))[0]
-            ass_path = os.path.join(path, base + ".ass")
+            ass_path = _resolve_in(
+                path, os.path.join(path, base + ".ass"), "ملف العبارات")
             if os.path.isfile(ass_path):
                 for p in parse_ass(ass_path):
                     phrases.append({
@@ -285,9 +327,13 @@ def load_chapter_dir(path, work_dir=None, atempo=1.0, title=None,
     else:
         raise LongVideoError(
             "مجلد الفصل بلا سرد (narration.wav أو scene*.wav): %s" % path)
-    images = _list_media(os.path.join(path, "images"), (".jpg", ".jpeg", ".png"))
+    duration = _check_duration(duration, "فصل %s" % path)
+    images = [_resolve_in(path, p, "صورة الفصل") for p in
+              _list_media(os.path.join(path, "images"),
+                          (".jpg", ".jpeg", ".png"))]
     if not images:
-        cover = os.path.join(path, "cover.jpg")
+        cover = _resolve_in(path, os.path.join(path, "cover.jpg"),
+                            "غلاف الفصل")
         if os.path.isfile(cover):
             images = [cover]
     if not images:
@@ -308,6 +354,7 @@ def chapter_from_text(title, text, narration_info, images, moral=""):
     """
     if not images:
         raise LongVideoError("الفصل النصي بلا صور: %s" % title)
+    _check_duration(narration_info["duration"], "الفصل النصي %s" % title)
     phrases = []
     for c in narration_info["chunks"]:
         phrases.append({
@@ -354,16 +401,17 @@ def build_project(spec):
     for label, part in (("المقدمة", intro), ("الخاتمة", outro)):
         if not part.get("narration") or not os.path.isfile(part["narration"]):
             raise LongVideoError("سرد %s غير موجود" % label)
-        if float(part.get("duration") or 0) <= 0:
-            raise LongVideoError("مدة سرد %s صفر" % label)
+        # إصلاح اختبار اختراق 2026-11-22 (M4): مدة غير مسقوفة
+        # هنا أيضًا قبل توليد أي مقاطع.
+        _check_duration(part.get("duration") or 0, "سرد %s" % label)
     for ch in chapters:
         if not ch.get("title"):
             raise LongVideoError("فصل بلا عنوان")
         if not ch.get("narration") or not os.path.isfile(ch["narration"]):
             raise LongVideoError(
                 "سرد الفصل غير موجود: %s" % ch.get("title"))
-        if float(ch.get("duration") or 0) <= 0:
-            raise LongVideoError("مدة الفصل صفر: %s" % ch.get("title"))
+        _check_duration(ch.get("duration") or 0,
+                        "الفصل %s" % ch.get("title"))
         if not ch.get("images"):
             raise LongVideoError("الفصل بلا صور: %s" % ch.get("title"))
         missing = [p for p in ch["images"] if not os.path.isfile(p)]
