@@ -9,6 +9,8 @@ COMMANDS = [
      "python3 studio.py status"),
     ("doctor", "فحص بيئة studio كاملة (24 فحصًا) — PASS/FAIL صادق لكل فحص",
      "python3 studio.py doctor"),
+    ("init", "معالج إعداد تفاعلي — يسألك بالعربية ويكتب config.yaml + الكرونات المقترحة",
+     "python3 studio.py init"),
     ("run", "خط الإنتاج الكامل: قصة ← فيديو عمودي 720×1280 جاهز للنشر",
      "python3 studio.py run --story anza --project anza-part1 --out ~/workspace/videos/out.mp4"),
     ("run --demo", "القصة التجريبية المدمجة — فيديو حقيقي في ~دقيقة، بلا مفاتيح ولا رصيد",
@@ -35,10 +37,26 @@ COMMANDS = [
      "python3 studio.py queue add --title \"قصة جديدة\" --text-file story.txt --parts 1"),
     ("analyze", "تحليل آخر فيديو منشور بأرقام حقيقية (فيسبوك + يوتيوب) واقتراحات تحسين",
      "python3 studio.py analyze"),
+    ("ideas", "مولّد أفكار قصص بأسلوب الصفحة (هوك صادم + عبرة + سؤال ختام) مع منع تكرار أي عنوان في الطابور — --add يضيف الفكرة للطابور",
+     "python3 studio.py ideas --count 5"),
+    ("daily", "أمر اليوم الواحد: إنتاج + فحص + مصغرة + نشر المنصتين + نص أول تعليق — افتراضيًا وضع تجريبي، والتنفيذ فقط مع --execute",
+     "python3 studio.py daily --slot evening --dry-run"),
+    ("ab", "اختبار A/B: هوكان ومصغرتان لفيديو واحد + سجل الزوج — فيسبوك ويوتيوب بلا A/B أصلي، فالأداة تولّد النسخ وتتتبع المقارنة",
+     "python3 studio.py ab --video ~/workspace/videos/out.mp4 --hook-a \"الهوك الأول\" --hook-b \"الهوك الثاني\""),
+    ("ab-results", "قارن مشاهدات نسختي اختبار A/B بعد نشرهما (فيسبوك + يوتيوب)",
+     "python3 studio.py ab-results"),
+    ("update", "جلب آخر إصدار من GitHub وتطبيق الملفات المتغيرة فقط، مع نسخة احتياطية أولًا — config.yaml والأسرار والطابور وبيانات العملاء لا تُمسّ أبدًا",
+     "python3 studio.py update --dry-run"),
+    ("backup", "نسخة احتياطية zip: الإعداد + الطابور + طلبات العملاء + سجلات التشغيل",
+     "python3 studio.py backup"),
+    ("balance", "توقع رصيد Veo بالأيام: كم يوم يكفي + تاريخ النفاد + توصية — من الرصيد المسجَّل في الإعداد وليس حيًا من API",
+     "python3 studio.py balance"),
     ("analyze-ref", "تحليل فيديو مرجعي لمنافس (الهوك وسرعة السرد والختام) — للتعلم فقط",
      "python3 studio.py analyze-ref --url https://www.youtube.com/watch?v=..."),
     ("publish", "نشر فيديو على فيسبوك (Reel) ويوتيوب معًا — أو --dry-run للمعاينة بلا نشر",
      "python3 studio.py publish --video ~/workspace/videos/out.mp4 --title \"العنوان\" --dry-run"),
+    ("check", "فحص جودة فيديو قبل النشر (المدة والصمت والصوت والمقاس والشعار) — PASS/FAIL",
+     "python3 studio.py check --video ~/workspace/videos/out.mp4"),
     ("youtube-auth", "تبادل OAuth ليوتيوب لمرة واحدة (يفتح المتصفح للموافقة)",
      "python3 studio.py youtube-auth"),
     ("client-run", "تنفيذ طلب فيديو عميل واحد من صفحة «طلب فيديو»",
@@ -71,6 +89,9 @@ def help_text():
     lines.append("ملاحظات:")
     lines.append("  - الراوي الافتراضي رجل (Piper Kareem)؛ والصوت الثاني "
                  "الاختياري عبر --voice gtts في long-narration وlong-video.")
+    lines.append("  - النشر يفحص جودة الفيديو أولًا تلقائيًا (المدة "
+                 "والصمت والصوت والمقاس والشعار)؛ وتجاوزه بـ --skip-check "
+                 "فقط عند الضرورة.")
     lines.append("  - كل فيديو يُنشر مدته 40–60 ثانية؛ والفيديو الطويل "
                  "8–12 دقيقة أفقي ليوتيوب فقط.")
     lines.append("  - للفحص الكامل: python3 studio.py doctor")
