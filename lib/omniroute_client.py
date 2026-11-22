@@ -25,6 +25,26 @@ class OmniRouteError(Exception):
     pass
 
 
+_SYSTEM_PROMPT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "prompts",
+    "story_system.md")
+
+
+def load_system_prompt():
+    """حمّل موجّه النظام المشترك حرفيًا (جولة v0.1.37).
+
+    ملف واحد `lib/prompts/story_system.md` هو مصدر قواعد
+    الأسلوب لكل استدعاء LLM في المشروع — أي تعديل فيه
+    يسري على كل الأوامر دفعة واحدة. يرجع النص كما هو
+    (بلا تعديل) أو "" إن غاب الملف.
+    """
+    try:
+        with open(_SYSTEM_PROMPT_PATH, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
 def _strip_ansi(text):
     import re
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
@@ -133,7 +153,12 @@ def chat(prompt, model, fallback_model=None, base_url="http://localhost:20128",
     تتجاوز الانقطاعات العابرة بدل اللجوء فورًا للبديل.
     يرجع (النص، المسار المستخدم، الموديل المستخدم).
     يرفع OmniRouteError لو فشلت كل المحاولات مع تجميع رسائل الخطأ.
+    بلا موجّه نظام صريح يُحمَّل الموجّه المشترك حرفيًا من
+    `lib/prompts/story_system.md` (جولة v0.1.37) — كل الأوامر
+    (script/ideas/ab/analyze) تتكلم بنفس قواعد الأسلوب.
     """
+    if system is None:
+        system = load_system_prompt() or None
     errors = []
 
     def _try(fn, label):
