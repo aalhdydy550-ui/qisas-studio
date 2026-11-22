@@ -141,14 +141,36 @@ def stage(project_path, run_dir, image_clip_seconds=5):
     aud_dst = os.path.join(assets_dir, "audio")
     os.makedirs(img_dst, exist_ok=True)
     os.makedirs(aud_dst, exist_ok=True)
+    # إصلاح اختبار اختراق 2026-11-22 (M1): copy2 كان يتبع الروابط
+    # الرمزية فينسخ ملفًا خارج المشروع إلى الأصول — كل مصدر
+    # يُحلّ داخل مجلد مصدره أولًا ويُرفض الهارب.
+    from lib.paths import resolve_inside
+
+    def _copy_inside(src_dir, src, dst):
+        try:
+            real = resolve_inside(src_dir, src, "ملف أصل المشروع")
+        except ValueError as e:
+            raise StageError(str(e))
+        shutil.copy2(real, dst)
+
     for name in images:
-        shutil.copy2(os.path.join(img_src, name), os.path.join(img_dst, name))
-    shutil.copy2(narration, os.path.join(aud_dst, "narration-full.wav"))
-    shutil.copy2(captions_path, os.path.join(assets_dir, "captions.json"))
+        _copy_inside(img_src, os.path.join(img_src, name),
+                     os.path.join(img_dst, name))
+    _copy_inside(aud_src, narration,
+                 os.path.join(aud_dst, "narration-full.wav"))
+    _copy_inside(artifacts, captions_path,
+                 os.path.join(assets_dir, "captions.json"))
     script_src = os.path.join(artifacts, "script.json")
     if os.path.isfile(script_src):
-        shutil.copy2(script_src, os.path.join(assets_dir, "script.json"))
+        _copy_inside(artifacts, script_src,
+                     os.path.join(assets_dir, "script.json"))
 
+    # القراءة أيضًا من المسار المحلول فقط (لا من رابط هارب).
+    try:
+        captions_path = resolve_inside(artifacts, captions_path,
+                                       "ملف الكتابة")
+    except ValueError as e:
+        raise StageError(str(e))
     hook, full_text = load_script(project_path)
     phrases = build_phrases(captions_path)
 
