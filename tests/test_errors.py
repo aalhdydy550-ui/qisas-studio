@@ -267,5 +267,35 @@ class TestUnknownAndEdgeCases(unittest.TestCase):
             self.assertIn("ماذا حدث", result)
 
 
+class TestClipOutput(unittest.TestCase):
+    """قصّ المخرجات الطويلة — جولة v0.1.37 (مقترح tinker رقم 12)."""
+
+    def test_short_text_returned_unchanged(self):
+        text = "\n".join("سطر %d" % i for i in range(10))
+        self.assertEqual(errors.clip_output(text), text)
+
+    def test_long_text_clipped_head_and_tail(self):
+        text = "\n".join("سطر %d" % i for i in range(50))
+        out = errors.clip_output(text)
+        lines = out.splitlines()
+        self.assertEqual(len(lines), 17)  # 8 رأس + سطر الحذف + 8 ذيل
+        self.assertEqual(lines[0], "سطر 0")
+        self.assertEqual(lines[-1], "سطر 49")
+        self.assertIn("حُذفت 34 سطرًا", lines[8])
+
+    def test_none_and_empty(self):
+        self.assertEqual(errors.clip_output(None), "")
+        self.assertEqual(errors.clip_output(""), "")
+
+    def test_format_error_clips_long_original(self):
+        long_msg = "\n".join("سطر %d" % i for i in range(50))
+        text = errors.format_error(
+            errors.explain_error("FileNotFoundError: " + long_msg))
+        self.assertIn("حُذفت", text)
+        self.assertIn("سطر 49", text)  # الذيل محفوظ
+        self.assertNotIn("سطر 25", text)  # الوسط محذوف
+
+
+
 if __name__ == "__main__":
     unittest.main()
