@@ -1,0 +1,13 @@
+# متطلبات بايثون المثبّتة لمشروع qisas-studio.
+#
+# Pillow (يستخدمه lib/check.py لفحص الشعار وmake_quote_cards.py):
+# الإصدار النظامي عبر apt هو 10.2.0 وبه CVE-2024-28219
+# (تجاوز مخزن مؤقت في فك ترميز TIFF عبر libImaging).
+# أُصلح في 10.3.0؛ والمثبّت هنا 13.0.0 عبر
+# `pip install --user --break-system-packages "pillow>=10.3.0"`
+# (يُحمَّل من ~/.local قبل حزمة النظام في sys.path — تحقّق:
+# `python3 -c "import PIL; print(PIL.__version__, PIL.__file__)"`).
+# ملاحظة: تثبيت apt يُمسح مع إعادة تشغيل الـVM، أما تثبيت
+# --user في ~/ فينجو منها. راجع دوريًا بـ `pip-audit`:
+# `pip install --user pip-audit && pip-audit`.
+Pillow==13.0.0
