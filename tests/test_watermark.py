@@ -11,6 +11,13 @@ from lib import watermark
 
 STUDIO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# جولة v0.1.41 (إصلاح CI): بطاقات الاقتباس تُرسم بخط
+# Noto Naskh Arabic (make_quote_cards.py) المثبّت محليًا فقط؛
+# في CI يثبّته سير العمل (fonts-noto-core) والحراسة دفاع
+# إضافي إن غاب (نمط test_ci_skips).
+_ARABIC_FONT = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf"
+_HAS_ARABIC_FONT = os.path.isfile(_ARABIC_FONT)
+
 
 def _make_test_video(path, seconds=2):
     subprocess.run(
@@ -42,6 +49,9 @@ class TestWatermark(unittest.TestCase):
                 self.video, os.path.join(self.tmp, "x.mp4"),
                 badge=os.path.join(self.tmp, "nope.png"))
 
+    @unittest.skipUnless(
+        _HAS_ARABIC_FONT,
+        "خط Noto Naskh Arabic غائب — بيئة CI بلا fonts-noto-core")
     def test_append_quote_cards(self):
         cards_dir = os.path.join(self.tmp, "cards")
         cards = watermark.generate_quote_cards(
@@ -57,6 +67,9 @@ class TestWatermark(unittest.TestCase):
         self.assertAlmostEqual(watermark.probe_duration(out), 11.0, delta=0.6)
         self.assertEqual(watermark.probe_size(out), (720, 1280))
 
+    @unittest.skipUnless(
+        _HAS_ARABIC_FONT,
+        "خط Noto Naskh Arabic غائب — بيئة CI بلا fonts-noto-core")
     def test_generate_quote_cards_files(self):
         cards_dir = os.path.join(self.tmp, "cards2")
         cards = watermark.generate_quote_cards(
@@ -67,6 +80,9 @@ class TestWatermark(unittest.TestCase):
         for c in cards:
             self.assertTrue(os.path.isfile(c))
 
+    @unittest.skipUnless(
+        _HAS_ARABIC_FONT,
+        "خط Noto Naskh Arabic غائب — بيئة CI بلا fonts-noto-core")
     def test_find_cards(self):
         cards_dir = os.path.join(self.tmp, "cards3")
         made = watermark.generate_quote_cards(

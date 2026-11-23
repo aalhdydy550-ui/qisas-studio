@@ -1027,6 +1027,13 @@ class TestMoviePyFx(unittest.TestCase):
     @unittest.skipUnless(
         importlib.util.find_spec("PIL") is not None,
         "Pillow غير مثبّت في بايثون الحالي")
+    @unittest.skipUnless(
+        # جولة v0.1.41 (إصلاح CI): خط Noto Naskh Arabic مثبّت
+        # محليًا فقط؛ في CI يثبّته سير العمل (fonts-noto-core)
+        # والحراسة دفاع إضافي إن غاب (نمط test_ci_skips).
+        os.path.isfile("/usr/share/fonts/truetype/noto/"
+                       "NotoNaskhArabic-Bold.ttf"),
+        "خط Noto Naskh Arabic غائب — بيئة CI بلا fonts-noto-core")
     def test_render_arabic_text_image(self):
         from lib import moviepy_fx
         img = moviepy_fx.render_arabic_text_image("عنزة صغيرة")
@@ -1034,7 +1041,7 @@ class TestMoviePyFx(unittest.TestCase):
         self.assertLessEqual(img.width, 660 + 20)
         # فيها بكسلات نص غير شفافة فعلًا
         alpha = img.split()[3]
-        self.assertGreater(max(alpha.getdata()), 0)
+        self.assertGreater(max(alpha.get_flattened_data()), 0)
         # نص طويل يُصغَّر ليدخل العرض الأقصى
         img2 = moviepy_fx.render_arabic_text_image(
             "عنزة صغيرة هزّت القاهرة كلها والناس ركعوا لها في 1184",

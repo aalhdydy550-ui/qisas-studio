@@ -179,7 +179,7 @@ class TestUploadInstagram(unittest.TestCase):
 
     def _fake_http(self, calls):
         def fake(method, url, body=None, token=None, headers=None,
-                 timeout=300):
+                 timeout=300, **kw):
             calls.append((method, url, body, token))
             if method == "POST" and url.endswith("/media"):
                 return {"id": "17841400000000000"}
@@ -285,7 +285,7 @@ class TestUploadTiktokStatus(unittest.TestCase):
             real_dur = sp._check_duration
 
             def fake(method, url, body=None, token=None,
-                     headers=None, timeout=300):
+                     headers=None, timeout=300, **kw):
                 calls.append((method, url))
                 if url.endswith("/video/init/"):
                     return {"data": {"publish_id": "pid-1",
