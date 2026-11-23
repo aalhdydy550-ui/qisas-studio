@@ -291,6 +291,16 @@ class TestSha256Verify(unittest.TestCase):
                             for l in lines))
 
     def test_verify_cli_exit_codes(self):
+        # حارس CI (جولة v0.1.42): بيئة gtts محلية فقط
+        # (.venv-gtts أو المشتركة .venv-youtube) وغائبة في
+        # checkout نظيف، فيفشل `verify` بـ«بلا بيئة (غير
+        # مثبّت)» لا بخلل في الكود — يُتخطى. فحص الأداة غير
+        # المعروفة (→ 2) بلا بيئة فيبقى يعمل دائمًا.
+        python, _where = ensure_env.resolve_python(STUDIO_ROOT,
+                                                   "gtts")
+        if python is None:
+            self.skipTest("بيئة gtts غائبة (لا .venv-gtts ولا "
+                          ".venv-youtube — CI عارٍ)")
         # CLI عملية فرعية (بلا أداة وهمية): تحقق حقيقي قراءة فقط
         # على الشجرة الحية + أداة غير معروفة → 2.
         r = subprocess.run(

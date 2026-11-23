@@ -182,7 +182,7 @@ def _print_translated(prefix, exc, context, lang="ar"):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.41"
+VERSION = "0.1.42"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
 # مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،

@@ -446,16 +446,44 @@ class TestCmdWiring(unittest.TestCase):
         cfg["paths"]["videos_dir"] = td
         return cfg
 
+    def _local_tools_present(self, cfg):
+        """هل يوجد أي من مسارات أدوات الاستوديو المحلية التي
+        يطبع `status` عنها «exists»؟ (حارس CI — انظر
+        test_status_english: الخادم وحده لا يحدد النتيجة،
+        فـ«exists» تأتي من هذه المسارات لا من الخادم)."""
+        return (os.path.isdir(studio.expand(cfg["openmontage"]["root"]))
+                or os.path.isfile(studio.expand(cfg["concat"]["bin"]))
+                or os.path.isfile(
+                    studio.expand(cfg["headless"]["editor"])))
+
     def test_status_arabic_default(self):
         with tempfile.TemporaryDirectory() as td:
-            _rc, out = _capture(studio.cmd_status, self._base_cfg(td))
+            cfg = self._base_cfg(td)
+            if not self._local_tools_present(cfg):
+                self.skipTest(
+                    "أدوات الاستوديو المحلية غائبة (لا OpenMontage "
+                    "ولا Concat ولا headless — CI عارٍ)، فلا يطبع "
+                    "`status` كلمة «موجود» حقيقية أبدًا")
+            _rc, out = _capture(studio.cmd_status, cfg)
             self.assertIn("== OmniRoute (الذكاء) ==", out)
-            self.assertIn("موجود", out)
+            # «موجود» كلمة مستقلة لا جزء من «غير موجود»: السطر
+            # بصيغة «المسار: موجود» — فـassertIn("موجود") وحده
+            # كان يمرّ صوريًا في بيئة عارية (كل الأدوات تطبع
+            # «غير موجود» وتطابق السلسلة الجزئية).
+            self.assertTrue(
+                any(line.endswith(": موجود")
+                    for line in out.splitlines()),
+                out)
 
     def test_status_english(self):
         with tempfile.TemporaryDirectory() as td:
-            _rc, out = _capture(studio.cmd_status, self._base_cfg(td),
-                                lang="en")
+            cfg = self._base_cfg(td)
+            if not self._local_tools_present(cfg):
+                self.skipTest(
+                    "أدوات الاستوديو المحلية غائبة (لا OpenMontage "
+                    "ولا Concat ولا headless — CI عارٍ)، فلا يطبع "
+                    "`status` كلمة «exists» أبدًا")
+            _rc, out = _capture(studio.cmd_status, cfg, lang="en")
             self.assertIn("== OmniRoute (AI) ==", out)
             self.assertIn("exists", out)
             self.assertNotIn("الذكاء", out)

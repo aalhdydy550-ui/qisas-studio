@@ -194,8 +194,15 @@ class TestCmdPublishDryRun(unittest.TestCase):
             proc.returncode = 0
             proc.stdout = json.dumps({"state": "published",
                                       "post_id": "122"})
+            # (انحدار CI #255): post_facebook يبني الأمر عبر
+            # find_facebook_bin — بلا هذه المحاكاة يفشل الاختبار
+            # في CI حيث facebook-cli غير مثبّت أصلًا، بينما يمر
+            # محليًا بفضل المسار المطلق /opt/hatch/bin/facebook-cli
+            # الموجود على الـVM فقط.
             with mock.patch("lib.publish.subprocess.run",
-                            return_value=proc):
+                            return_value=proc), \
+                 mock.patch("lib.publish.find_facebook_bin",
+                            return_value="facebook-cli"):
                 buf = io.StringIO()
                 with mock.patch("sys.stdout", buf):
                     # فيديو وهمي — فحص الجودة يُتجاوز؛ المقصود هنا
@@ -359,6 +366,71 @@ class TestCaptionComplianceGate(unittest.TestCase):
             rc, out = self._run(td, video, self.GATE, "كابشن عادي")
             self.assertEqual(rc, 1)
             self.assertIn("أعد كتابة", out)
+
+
+class TestPublishNoFacebookBinRegression(unittest.TestCase):
+    """انحدار CI #255: اختبارات النشر الثلاثة تمرّ بلا facebook-cli.
+
+    السبب الجذري: cmd_publish يبني أمر فيسبوك عبر
+    lib.publish.find_facebook_bin()، وفي CI (ubuntu-latest)
+    لا facebook-cli في PATH ولا /opt/hatch/bin — ففشلت
+    الاختبارات الثلاثة هناك بينما تمرّ محليًا بفضل المسار
+    المطلق الموجود على الـVM فقط (ومحاكاة find_facebook_bin
+    في الاختبارات نفسها هي الإصلاح). هذا الاختبار يثبت
+    الإصلاح بتشغيل الاختبارات الثلاثة في عملية فرعية ببيئة
+    عارية (HOME فارغ، PATH بلا شيء إلا python وffmpeg كما
+    في CI) مع إفراغ FACEBOOK_BIN_CANDIDATES لمحاكاة غياب
+    الثنائي تمامًا — والنجاح = 3 اختبارات ناجحة بلا تخطٍّ.
+    """
+
+    def test_publish_tests_pass_without_facebook_bin(self):
+        import shutil
+        studio_dir = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))
+        test_ids = [
+            "tests.test_publish.TestCmdPublishDryRun."
+            "test_real_run_without_youtube_token_writes_bundle",
+            "tests.test_wiring_0139.TestPublishGenerateMetaWiring."
+            "test_generate_meta_dry_run_with_mock_llm",
+            "tests.test_wiring_0139.TestPublishGenerateMetaWiring."
+            "test_generate_meta_explicit_caption_wins",
+        ]
+        driver = (
+            "import sys\n"
+            "sys.path.insert(0, %r)\n"
+            "import lib.publish\n"
+            "lib.publish.FACEBOOK_BIN_CANDIDATES = ()\n"
+            "import unittest\n"
+            "suite = unittest.TestLoader().loadTestsFromNames(%r)\n"
+            "result = unittest.TextTestRunner(verbosity=2).run(suite)\n"
+            "sys.exit(0 if result.wasSuccessful() else 1)\n"
+            % (studio_dir, test_ids))
+        home = tempfile.mkdtemp(prefix="ci-home-")
+        bindir = tempfile.mkdtemp(prefix="ci-bin-")
+        os.symlink(sys.executable, os.path.join(bindir, "python3"))
+        os.symlink(sys.executable, os.path.join(bindir, "python"))
+        for tool in ("ffmpeg", "ffprobe"):
+            path = shutil.which(tool)
+            if path:
+                os.symlink(path, os.path.join(bindir, tool))
+        env = {"HOME": home, "PATH": bindir}
+        with tempfile.NamedTemporaryFile(
+                "w", suffix=".py", delete=False,
+                encoding="utf-8") as f:
+            f.write(driver)
+            driver_path = f.name
+        try:
+            proc = subprocess.run(
+                [sys.executable, driver_path],
+                cwd=studio_dir, capture_output=True, text=True,
+                env=env, timeout=300)
+        finally:
+            os.unlink(driver_path)
+        out = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, out[-3000:])
+        self.assertIn("Ran 3 tests", out, out[-3000:])
+        self.assertIn("OK", out, out[-3000:])
+        self.assertNotIn("skipped", out.lower(), out[-3000:])
 
 
 if __name__ == "__main__":

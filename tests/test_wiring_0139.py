@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -88,9 +89,9 @@ def _make_video(path, size="720x1280", seconds=2, gap=None):
     subprocess.run(cmd, check=True, timeout=180)
 
 
-class TestVersion0140(unittest.TestCase):
-    def test_version_is_0141(self):
-        self.assertEqual(studio.VERSION, "0.1.41")
+class TestVersion0142(unittest.TestCase):
+    def test_version_is_0142(self):
+        self.assertEqual(studio.VERSION, "0.1.42")
 
 
 class TestJobsWiring(unittest.TestCase):
@@ -230,11 +231,17 @@ class TestPublishGenerateMetaWiring(unittest.TestCase):
             studio._llm_chat = lambda *a, **k: (FAKE_META_TEXT,
                                                 "mock", "mock-model")
             try:
-                rc, out = _capture(
-                    studio.cmd_publish, cfg, video, "العنزة المباركة",
-                    None, platforms=("facebook", "youtube"),
-                    dry_run=True, skip_check=True, generate_meta=True,
-                    part=1, parts=2)
+                # (انحدار CI #255): مسار dry-run يبني أمر فيسبوك
+                # عبر find_facebook_bin — بلا هذه المحاكاة يرجع
+                # cmd_publish ‏1 في CI حيث facebook-cli غير مثبّت،
+                # بينما يمر محليًا بفضل /opt/hatch/bin/facebook-cli.
+                with mock.patch("lib.publish.find_facebook_bin",
+                                return_value="facebook-cli"):
+                    rc, out = _capture(
+                        studio.cmd_publish, cfg, video, "العنزة المباركة",
+                        None, platforms=("facebook", "youtube"),
+                        dry_run=True, skip_check=True, generate_meta=True,
+                        part=1, parts=2)
             finally:
                 studio._llm_chat = orig
             self.assertEqual(rc, 0)
@@ -252,12 +259,17 @@ class TestPublishGenerateMetaWiring(unittest.TestCase):
             studio._llm_chat = lambda *a, **k: (FAKE_META_TEXT,
                                                 "mock", "mock-model")
             try:
-                rc, out = _capture(
-                    studio.cmd_publish, cfg, video, "العنزة المباركة",
-                    "كابشن صريح من المستخدم",
-                    platforms=("facebook",),
-                    dry_run=True, skip_check=True, generate_meta=True,
-                    part=1, parts=2)
+                # (انحدار CI #255 — كما في الاختبار السابق):
+                # بلا محاكاة find_facebook_bin يرجع cmd_publish ‏1
+                # في CI حيث facebook-cli غير مثبّت.
+                with mock.patch("lib.publish.find_facebook_bin",
+                                return_value="facebook-cli"):
+                    rc, out = _capture(
+                        studio.cmd_publish, cfg, video, "العنزة المباركة",
+                        "كابشن صريح من المستخدم",
+                        platforms=("facebook",),
+                        dry_run=True, skip_check=True, generate_meta=True,
+                        part=1, parts=2)
             finally:
                 studio._llm_chat = orig
             self.assertEqual(rc, 0)

@@ -8,6 +8,7 @@
 والنجاح = ظهور «skipped» في المخرجات بلا FAIL/ERROR.
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,9 +17,13 @@ import unittest
 STUDIO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _run_test_in_bare_env(test_id, with_ffmpeg=True):
+def _run_test_in_bare_env(test_id, with_ffmpeg=True,
+                          without_venvs=False):
     """شغّل اختبارًا واحدًا في عملية فرعية: HOME فارغ، وPATH
-    بلا ffmpeg إلا إن طُلب. يرجع (returncode, stdout+stderr)."""
+    بلا ffmpeg إلا إن طُلب. يرجع (returncode, stdout+stderr).
+    without_venvs: شغّل من نسخة مصغّرة من الشجرة (lib/ +
+    tests/ + setup.sh) بلا أي .venv-* — تحاكي checkout نظيفًا
+    في CI حيث بيئات الأدوات المحلية غائبة أصلًا."""
     home = tempfile.mkdtemp(prefix="ci-home-")
     env = {"HOME": home, "PATH": ""}
     bindir = tempfile.mkdtemp(prefix="ci-bin-")
@@ -26,24 +31,34 @@ def _run_test_in_bare_env(test_id, with_ffmpeg=True):
     os.symlink(sys.executable, python_link)
     os.symlink(sys.executable, os.path.join(bindir, "python"))
     if with_ffmpeg:
-        import shutil as _shutil
-        ffmpeg = _shutil.which("ffmpeg")
+        ffmpeg = shutil.which("ffmpeg")
         if ffmpeg:
             os.symlink(ffmpeg, os.path.join(bindir, "ffmpeg"))
-        ffprobe = _shutil.which("ffprobe")
+        ffprobe = shutil.which("ffprobe")
         if ffprobe:
             os.symlink(ffprobe, os.path.join(bindir, "ffprobe"))
     env["PATH"] = bindir
+    cwd = STUDIO_DIR
+    if without_venvs:
+        cwd = tempfile.mkdtemp(prefix="ci-tree-")
+        ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+        for sub in ("lib", "tests"):
+            shutil.copytree(os.path.join(STUDIO_DIR, sub),
+                            os.path.join(cwd, sub), ignore=ignore)
+        shutil.copy2(os.path.join(STUDIO_DIR, "setup.sh"),
+                     os.path.join(cwd, "setup.sh"))
     proc = subprocess.run(
         [sys.executable, "-m", "unittest", test_id, "-v"],
-        cwd=STUDIO_DIR, capture_output=True, text=True,
+        cwd=cwd, capture_output=True, text=True,
         env=env, timeout=300)
     return proc.returncode, proc.stdout + proc.stderr
 
 
 class TestCiSkips(unittest.TestCase):
-    def _assert_skipped(self, test_id, with_ffmpeg=True):
-        rc, out = _run_test_in_bare_env(test_id, with_ffmpeg)
+    def _assert_skipped(self, test_id, with_ffmpeg=True,
+                        without_venvs=False):
+        rc, out = _run_test_in_bare_env(test_id, with_ffmpeg,
+                                        without_venvs)
         self.assertEqual(rc, 0, out[-2000:])
         self.assertIn("skipped", out.lower(), out[-2000:])
         self.assertNotIn("FAILED", out)
@@ -116,6 +131,33 @@ class TestCiSkips(unittest.TestCase):
         self._assert_skipped(
             "tests.test_eval_set_manifest."
             "TestEvalSet.test_snapshot_cli_matches_baseline")
+
+    def test_status_english_skips_without_local_tools(self):
+        """انحدار جولة v0.1.42 (إصلاح CI #255): `status` الإنجليزي
+        يتخطى في بيئة عارية — كلمة «exists» لا تطبعها إلا مسارات
+        أدوات الاستوديو المحلية (OpenMontage/Concat/headless)
+        الغائبة في CI، والخادم وحده لا يحدد النتيجة (الاختبار
+        يمر محليًا والخادم متوقف)."""
+        self._assert_skipped(
+            "tests.test_i18n.TestCmdWiring.test_status_english")
+
+    def test_verify_cli_skips_without_gtts_venv(self):
+        """انحدار جولة v0.1.42 (إصلاح CI #255): تحقق `verify`
+        من gtts يتخطى في checkout نظيف بلا .venv-* — بيئة gtts
+        محلية فقط، و`verify` يفشل فيها بـ«بلا بيئة» لا بخلل
+        في الكود."""
+        self._assert_skipped(
+            "tests.test_setup_alpha_patterns.TestSha256Verify."
+            "test_verify_cli_exit_codes",
+            without_venvs=True)
+
+    def test_status_arabic_skips_without_local_tools(self):
+        """انحدار جولة v0.1.42: الشقيق العربي لـtest_status_english
+        يتخطى في بيئة عارية — تأكيده «موجود» صُحّح ليطابق
+        سطر «المسار: موجود» لا السلسلة الجزئية داخل
+        «غير موجود» (كان يمرّ صوريًا في CI)."""
+        self._assert_skipped(
+            "tests.test_i18n.TestCmdWiring.test_status_arabic_default")
 
 
 class TestCiWorkflow(unittest.TestCase):
