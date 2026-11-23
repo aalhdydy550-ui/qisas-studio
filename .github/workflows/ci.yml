@@ -14,8 +14,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      # numpy: الكشف البكسلي في qa_safe_area (lib/check.py)
+      # يحتاجها؛ غيابها في التشغيل #255 أسقط 5 اختبارات
+      # TestQaSafeAreaBands بـModuleNotFoundError و3 اختبارات
+      # فيديو QA بـ«True is not false» — الفحص يُتخطى بلا
+      # numpy فيُرجع qa ‏ok=True.
       - name: Install dependencies
-        run: pip install pyyaml pillow
+        run: pip install pyyaml pillow numpy
       # أدوات الفيديو الرخيصة: معظم الاختبارات تستدعي ffmpeg/ffprobe
       # مباشرةً (بلا محاكاة)، فغيابها كان يُسقط ~50 اختبارًا بـ
       # FileNotFoundError. melt خلفية تجميع بديلة — تثبيته
