@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""اختبارات انحدار لتخطي CI — جولة v0.1.38 (إصلاح CI).
+
+كل اختبار معتمد على بيئة المستخدم (فيديو ديمو، كابشنات،
+مشروع العنزة، Piper، ffmpeg) يجب أن يتخطى نظيفًا (skipped)
+لا أن يفشل عند غياب البيئة. تُتحقق هنا بتشغيل الاختبار
+المستهدف في عملية فرعية بـHOME فارغة وPATH بلا ffmpeg،
+والنجاح = ظهور «skipped» في المخرجات بلا FAIL/ERROR.
+"""
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+STUDIO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _run_test_in_bare_env(test_id, with_ffmpeg=True):
+    """شغّل اختبارًا واحدًا في عملية فرعية: HOME فارغ، وPATH
+    بلا ffmpeg إلا إن طُلب. يرجع (returncode, stdout+stderr)."""
+    home = tempfile.mkdtemp(prefix="ci-home-")
+    env = {"HOME": home, "PATH": ""}
+    bindir = tempfile.mkdtemp(prefix="ci-bin-")
+    python_link = os.path.join(bindir, "python3")
+    os.symlink(sys.executable, python_link)
+    os.symlink(sys.executable, os.path.join(bindir, "python"))
+    if with_ffmpeg:
+        import shutil as _shutil
+        ffmpeg = _shutil.which("ffmpeg")
+        if ffmpeg:
+            os.symlink(ffmpeg, os.path.join(bindir, "ffmpeg"))
+        ffprobe = _shutil.which("ffprobe")
+        if ffprobe:
+            os.symlink(ffprobe, os.path.join(bindir, "ffprobe"))
+    env["PATH"] = bindir
+    proc = subprocess.run(
+        [sys.executable, "-m", "unittest", test_id, "-v"],
+        cwd=STUDIO_DIR, capture_output=True, text=True,
+        env=env, timeout=300)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+class TestCiSkips(unittest.TestCase):
+    def _assert_skipped(self, test_id, with_ffmpeg=True):
+        rc, out = _run_test_in_bare_env(test_id, with_ffmpeg)
+        self.assertEqual(rc, 0, out[-2000:])
+        self.assertIn("skipped", out.lower(), out[-2000:])
+        self.assertNotIn("FAILED", out)
+
+    def test_demo_tests_skip_without_demo_video(self):
+        self._assert_skipped(
+            "tests.test_round9_wiring."
+            "TestAbVariantsWiring.test_ab_variants_ranked_with_winner")
+
+    def test_captions_tests_skip_without_subs(self):
+        self._assert_skipped(
+            "tests.test_round9_wiring."
+            "TestCheckCaptionsWiring.test_check_captions_real_subs_pass")
+
+    def test_real_ass_tests_skip_without_subs(self):
+        self._assert_skipped(
+            "tests.test_ass_shaping."
+            "TestRealCaptions.test_real_aisha2_and_najjar_pass")
+
+    def test_real_coverage_tests_skip_without_anza_run(self):
+        self._assert_skipped(
+            "tests.test_coverage."
+            "TestSceneCoverage.test_real_anza_manifest_passes")
+
+    def test_first_scene_tests_skip_without_anza_project(self):
+        self._assert_skipped(
+            "tests.test_first_scene."
+            "TestFirstSceneSample.test_daily_dry_run_prints_sample")
+
+    def test_piper_tests_skip_without_piper(self):
+        self._assert_skipped(
+            "tests.test_long_narration."
+            "TestSynthesizeLong.test_two_sentences_with_gap")
+
+    def test_audio_profile_tests_skip_without_ffmpeg(self):
+        self._assert_skipped(
+            "tests.test_audio_profile."
+            "TestEnergyCurve.test_six_buckets",
+            with_ffmpeg=False)
+
+    def test_avatar_job_tests_skip_without_ffmpeg(self):
+        self._assert_skipped(
+            "tests.test_avatar_job."
+            "TestValidateJob.test_valid_single_person_passes",
+            with_ffmpeg=False)
+
+    def test_template_json_parseable_in_bare_env(self):
+        """انحدار: تحذير حارس بدء التشغيل (أدوات غائبة) يذهب
+        إلى stderr لا stdout — فمخرج `avatar-job --template`
+        يبقى JSON نقيًا قابلًا للقراءة الآلية في بيئة متدهورة
+        (عيب كشفته المحاكاة العارية: كان التحذير يسبق JSON
+        في stdout فيكسر json.loads)."""
+        import json
+        home = tempfile.mkdtemp(prefix="ci-home-")
+        bindir = tempfile.mkdtemp(prefix="ci-bin-")
+        os.symlink(sys.executable, os.path.join(bindir, "python3"))
+        os.symlink(sys.executable, os.path.join(bindir, "python"))
+        env = {"HOME": home, "PATH": bindir}
+        proc = subprocess.run(
+            [sys.executable, "studio.py", "avatar-job", "--template"],
+            cwd=STUDIO_DIR, capture_output=True, text=True,
+            env=env, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-1000:])
+        tpl = json.loads(proc.stdout)
+        self.assertIn("prompt", tpl)
+        self.assertIn("person1", tpl["cond_audio"])
+        self.assertIn("أدوات غائبة", proc.stderr)
+
+    def test_eval_snapshot_skips_without_eval_videos(self):
+        self._assert_skipped(
+            "tests.test_eval_set_manifest."
+            "TestEvalSet.test_snapshot_cli_matches_baseline")
+
+
+class TestCiWorkflow(unittest.TestCase):
+    def test_ci_installs_ffmpeg(self):
+        """انحدار: سير العمل يثبّت ffmpeg (سبب ~50 فشلًا سابقًا)."""
+        path = os.path.join(STUDIO_DIR, ".github", "workflows",
+                            "ci.yml")
+        with open(path, encoding="utf-8") as fh:
+            content = fh.read()
+        self.assertIn("apt-get install -y ffmpeg", content)
+        self.assertIn("python -m unittest discover -s tests", content)
+
+
+if __name__ == "__main__":
+    unittest.main()
