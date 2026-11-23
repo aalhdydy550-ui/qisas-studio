@@ -11,16 +11,37 @@
 بين منشورين منفصلين (عنوان النشر لكل نسخة هو هوكها، فيُميَّز
 المنشوران بنص الهوك في الكابشن/العنوان). أي نسخة غير منشورة
 بعد تُطبع «غير منشورة بعد» — بلا أرقام مخترعة أبدًا.
+
+تكلفة كل متغير (الجولة v0.1.39 — من ViralForge في المقارنة
+2026-11-23 §4.7): `estimate_variant_cost` يقدّر إعادة توليد
+متغير من جديد — رصيد Veo (مقاطع × 10 Lite / 20 Fast)، ووقت
+ريندر تقديري، وتكلفة نقدية $0 للمسارات المجانية. الأسعار من
+المصادر المعروفة فقط: Fast ‏20 وحدة/مقطع 8ث (lib.scene_plan)،
+وLite ‏10 وحدات/مقطع (قياس Flow 2026-11-22: 610 ← 600 لمقطع
+8ث). وقت الريندر تقدير بمرساة مقاسة: تجميع محلي ≈ ضعف مدة
+الفيديو (فيديو طويل 10 دقائق ≈ 20 دقيقة ريندر على هذا
+المعالج) — بلا زمن انتظار توليد Veo في Flow (غير مقاس).
 """
 import json
 import os
 import re
+import statistics
 import subprocess
 import time
 
 from lib import analyze
+from lib import balance as balance_lib
+from lib import cost_ledger as cost_ledger_lib
 from lib import ideas as ideas_lib
 from lib import thumbnail
+
+# تكلفة مقطع Veo 3.1 (8 ثوانٍ) بالوحدات — الأسعار المعروفة فقط.
+VEO_FAST_UNITS_PER_CLIP = 20
+VEO_LITE_UNITS_PER_CLIP = 10
+VEO_CLIP_SECONDS = 8
+DEFAULT_VARIANT_CLIPS = 6
+# عامل تقدير الريندر المحلي (تجميع ffmpeg): ضعف مدة الفيديو.
+RENDER_TIME_FACTOR = 2.0
 
 AB_NOTE = ("تنبيه: فيسبوك ويوتيوب بلا اختبار A/B أصلي للريلز/"
            "الشورتس — هذه الأداة تولّد النسختين وتتتبع المقارنة "
@@ -65,6 +86,326 @@ def _local_hooks(title, n):
 
 def _norm(text):
     return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def average_units_per_clip(ledger_entries):
+    """متوسط الوحدات الفعلية لكل مقطع من قيود سجل التكاليف.
+
+    ledger_entries: قائمة كما يرجعها cost_ledger.history
+    (قيود فيها clips/units). None إن لم يوجد أي قيد بمقاطع
+    — لا متوسط مخترع من فراغ.
+    """
+    units = 0
+    clips = 0
+    for entry in (ledger_entries or []):
+        try:
+            c = int((entry or {}).get("clips") or 0)
+            u = int((entry or {}).get("units") or 0)
+        except (TypeError, ValueError):
+            continue
+        if c > 0:
+            clips += c
+            units += u
+    if clips <= 0:
+        return None
+    return round(units / clips, 1)
+
+
+def ledger_avg_units_per_clip(studio_root):
+    """متوسط الوحدات الفعلية لكل مقطع من runs/cost-ledger.jsonl."""
+    return average_units_per_clip(cost_ledger_lib.history(studio_root))
+
+
+def _build_cost_estimate(clips, engine, balance_units, ledger_entries):
+    """بناء قاموس تقدير التكلفة من عدد مقاطع (قد يكون كسريًا
+    عند اشتقاقه من وحدات) — مشترك بين المقدّرين أدناه."""
+    units_per_clip = (VEO_FAST_UNITS_PER_CLIP if engine == "fast"
+                      else VEO_LITE_UNITS_PER_CLIP)
+    engine_label = ("Veo 3.1 Fast" if engine == "fast"
+                    else "Veo 3.1 Lite")
+    veo_units = int(round(clips * units_per_clip))
+    video_seconds = round(clips * VEO_CLIP_SECONDS, 1)
+    render_minutes = round(video_seconds * RENDER_TIME_FACTOR / 60.0, 1)
+    fits = None
+    balance_note = None
+    if balance_units is not None:
+        if veo_units <= 0:
+            fits = True
+            balance_note = ("لا رصيد مطلوب (متغير بلا مقاطع) — الرصيد "
+                            "المسجَّل %d وحدة" % balance_units)
+        else:
+            fits, balance_note = balance_lib.check_cap(
+                veo_units, {"balance_units": balance_units})
+    actual_avg = average_units_per_clip(ledger_entries) \
+        if ledger_entries else None
+    return {"engine": engine,
+            "engine_label": engine_label,
+            "clips": clips,
+            "clip_seconds": VEO_CLIP_SECONDS,
+            "units_per_clip": units_per_clip,
+            "veo_units": veo_units,
+            "video_seconds": video_seconds,
+            "render_minutes_estimate": render_minutes,
+            "render_basis": ("تقدير تجميع محلي ≈ ضعف مدة الفيديو "
+                             "(قياس الفيديو الطويل: 10 دقائق ≈ 20 "
+                             "دقيقة ريندر) — بلا زمن انتظار توليد Veo "
+                             "في Flow (غير مقاس)"),
+            "cash_usd": 0,
+            "cash_note": ("بلا تكلفة نقدية حدّية — من رصيد اشتراك "
+                          "Google AI Pro الحالي"),
+            "balance_units": balance_units,
+            "fits_recorded_balance": fits,
+            "balance_note": balance_note,
+            "actual_avg_units_per_clip": actual_avg}
+
+
+def estimate_variant_cost(clips=DEFAULT_VARIANT_CLIPS, engine="fast",
+                          balance_units=None, ledger_entries=None):
+    """قدّر تكلفة إعادة توليد متغير A/B واحد من جديد بعدد مقاطع.
+
+    clips: عدد مقاطع Veo في المتغير (0 = متغير بلا مقاطع:
+    صفر رصيد وصفر ريندر). engine: "fast" (20 وحدة/مقطع) أو
+    "lite" (10 وحدات/مقطع). balance_units: الرصيد المسجَّل
+    (اختياري) — يُفحص عبر balance.check_cap ويُسجَّل هل
+    يكفي. ledger_entries: قيود سجل التكاليف الفعلية
+    (اختياري) — يُقارَن التقدير بمتوسطها الفعلي.
+    يرجع dict فيه veo_units وrender_minutes_estimate
+    وcash_usd (0 دائمًا — المسارات المجانية/رصيد الاشتراك)
+    وملاحظات عربية. يرفع ValueError برسالة عربية عند محرك
+    أو عدد مقاطع غير صالح.
+    """
+    if isinstance(clips, bool) or not isinstance(clips, int) \
+            or clips < 0:
+        raise ValueError("عدد مقاطع المتغير يجب أن يكون عددًا صحيحًا "
+                         "≥ 0 (وصل: %s)" % (clips,))
+    if engine not in ("fast", "lite"):
+        raise ValueError("محرك Veo غير معروف: %s — المتاح: fast "
+                         "(20 وحدة/مقطع) أو lite (10 وحدات/مقطع)"
+                         % (engine,))
+    if balance_units is not None:
+        if isinstance(balance_units, bool) \
+                or not isinstance(balance_units, int) \
+                or balance_units < 0:
+            raise ValueError("الرصيد المسجَّل يجب أن يكون عددًا صحيحًا "
+                             "≥ 0 (وصل: %s)" % (balance_units,))
+    est = _build_cost_estimate(float(clips), engine, balance_units,
+                               ledger_entries)
+    est["clips"] = clips
+    if clips == 0:
+        est["note"] = "متغير بلا مقاطع — لا توليد ولا ريندر ولا رصيد"
+    else:
+        est["note"] = ("تقدير إعادة توليد المتغير من جديد: %d مقاطع "
+                       "× %d وحدة (%s)"
+                       % (clips, est["units_per_clip"],
+                          est["engine_label"]))
+    return est
+
+
+def estimate_variant_cost_from_units(units, engine="fast",
+                                     balance_units=None,
+                                     ledger_entries=None):
+    """قدّر تكلفة متغير من قيمة `cost_per_video` الموجودة أصلًا.
+
+    هذا توسعة للمسار الموجود (لا مسار موازٍ): الوحدات الممرَّرة
+    هي التقدير نفسه، وتُشتق منها المقاطع (وحدات ÷ وحدات المقطع
+    حسب المحرك) ومدة الفيديو ووقت الريندر التقديري والتكلفة
+    النقدية ($0). units=0 = نفس الفيديو بلا توليد جديد (الحالة
+    الافتراضية في create_ab/create_ab_variants). يرفع
+    ValueError برسالة عربية عند وحدات أو محرك غير صالح.
+    """
+    if isinstance(units, bool) or not isinstance(units, int) \
+            or units < 0:
+        raise ValueError("تقدير تكلفة البديل يجب أن يكون عددًا صحيحًا "
+                         "≥ 0 (وصل: %s)" % (units,))
+    if engine not in ("fast", "lite"):
+        raise ValueError("محرك Veo غير معروف: %s — المتاح: fast "
+                         "(20 وحدة/مقطع) أو lite (10 وحدات/مقطع)"
+                         % (engine,))
+    if balance_units is not None:
+        if isinstance(balance_units, bool) \
+                or not isinstance(balance_units, int) \
+                or balance_units < 0:
+            raise ValueError("الرصيد المسجَّل يجب أن يكون عددًا صحيحًا "
+                             "≥ 0 (وصل: %s)" % (balance_units,))
+    units_per_clip = (VEO_FAST_UNITS_PER_CLIP if engine == "fast"
+                      else VEO_LITE_UNITS_PER_CLIP)
+    clips = units / units_per_clip if units else 0
+    est = _build_cost_estimate(clips, engine, balance_units,
+                               ledger_entries)
+    # عدد المقاطع المشتق: صحيح إن قُسمت الوحدات تمامًا، وإلا
+    # كسري مقرب لعشرة واحدة (بلا اختراع مقطع كامل).
+    est["clips"] = (int(clips) if float(clips).is_integer()
+                    else round(clips, 1))
+    est["veo_units"] = units
+    if units == 0:
+        est["note"] = ("نفس الفيديو — هوك ومصغرة فقط بلا توليد "
+                       "جديد")
+    else:
+        est["note"] = ("تقدير توليد كل بديل من جديد: %d وحدة "
+                       "(%s مقطعًا × %d وحدة — %s)"
+                       % (units, est["clips"], units_per_clip,
+                          est["engine_label"]))
+    return est
+
+
+def format_variant_cost(est, label=None):
+    """سطر عربي واحد لتكلفة متغير (من estimate_variant_cost)."""
+    est = est or {}
+    prefix = ("%s: " % label) if label else ""
+    line = ("%s%d وحدة Veo (%s: %d مقاطع × %d وحدة) — ريندر "
+            "تقديري ~%s دقيقة — $%s"
+            % (prefix, est.get("veo_units") or 0,
+               est.get("engine_label") or "؟",
+               est.get("clips") or 0,
+               est.get("units_per_clip") or 0,
+               est.get("render_minutes_estimate"),
+               est.get("cash_usd") or 0))
+    actual = est.get("actual_avg_units_per_clip")
+    if actual is not None:
+        line += (" — المتوسط الفعلي من سجل التكاليف: %s وحدة/مقطع"
+                 % actual)
+    fits = est.get("fits_recorded_balance")
+    if fits is True:
+        line += " — يكفي الرصيد المسجَّل"
+    elif fits is False:
+        line += " — لا يكفي الرصيد المسجَّل"
+    return line
+
+
+def _bench_stats(times):
+    """إحصاءات زمنية لقائمة أزمنة: الوسيط والمتوسط والانحراف
+    المعياري (0.0 لتشغيلة واحدة) والحدان الأدنى والأقصى."""
+    if not times:
+        return {"median": 0.0, "mean": 0.0, "stddev": 0.0,
+                "min": 0.0, "max": 0.0}
+    return {"median": statistics.median(times),
+            "mean": statistics.mean(times),
+            "stddev": (statistics.stdev(times) if len(times) > 1
+                       else 0.0),
+            "min": min(times),
+            "max": max(times)}
+
+
+def _first_diff(a, b):
+    """أول سطر يختلف بين مخرجين نصيين: {index, a, b} أو None.
+
+    None إن تطابقا أو لم يكونا نصين (فالمقارنة السطرية لا
+    تنطبق على مخرجات غير نصية).
+    """
+    if not isinstance(a, str) or not isinstance(b, str):
+        return None
+    if a == b:
+        return None
+    lines_a = a.splitlines()
+    lines_b = b.splitlines()
+    for i in range(max(len(lines_a), len(lines_b))):
+        line_a = lines_a[i] if i < len(lines_a) else None
+        line_b = lines_b[i] if i < len(lines_b) else None
+        if line_a != line_b:
+            return {"index": i, "a": line_a, "b": line_b}
+    return None
+
+
+def bench_interleaved(fn_a, fn_b, runs=5):
+    """قِس دالتين بتشغيلات متداخلة (أ، ب، أ، ب...).
+
+    الفكرة مقتبسة من fast-anything (§2.5 في تقرير التقييم):
+    التناوب يصيب الانجراف الزمني الطرفين بالتساوي، فلا
+    يُحسَب انجراف بداية القياس لصالح أحد الجانبين. كل
+    تشغيل يُوقَّت بـ time.perf_counter.
+
+    fn_a/fn_b: دالتان بلا وسائط (أو مغلَّفتان بلا وسائط).
+    runs: عدد التشغيلات لكل جانب (عدد صحيح ≥ 1).
+    يرجع قاموسًا فيه runs، ولكل جانب {times, median, mean,
+    stddev, output} (output: مخرج آخر تشغيلة)، وoutputs_equal،
+    وfirst_diff ({index, a, b} أو None — أول سطر يختلف عند
+    اختلاف المخرجات النصية)، وwinner ("a"/"b"/"tie" حسب
+    الوسيط الأقل)، وspeedup (نسبة وسيط الأبطأ/الأسرع).
+    يرفع ValueError برسالة عربية عند runs غير صالح أو دالة
+    غير قابلة للاستدعاء.
+    """
+    if isinstance(runs, bool) or not isinstance(runs, int) \
+            or runs < 1:
+        raise ValueError("عدد التشغيلات يجب أن يكون عددًا صحيحًا "
+                         "≥ 1 (وصل: %s)" % (runs,))
+    if not callable(fn_a) or not callable(fn_b):
+        raise ValueError("bench يحتاج دالتين قابلتين للاستدعاء "
+                         "(أ و ب)")
+    times_a, times_b = [], []
+    out_a = out_b = None
+    for _ in range(runs):
+        start = time.perf_counter()
+        out_a = fn_a()
+        times_a.append(time.perf_counter() - start)
+        start = time.perf_counter()
+        out_b = fn_b()
+        times_b.append(time.perf_counter() - start)
+    stats_a = _bench_stats(times_a)
+    stats_b = _bench_stats(times_b)
+    try:
+        outputs_equal = bool(out_a == out_b)
+    except Exception:
+        outputs_equal = False
+    med_a, med_b = stats_a["median"], stats_b["median"]
+    if med_a < med_b:
+        winner, faster, slower = "a", med_a, med_b
+    elif med_b < med_a:
+        winner, faster, slower = "b", med_b, med_a
+    else:
+        winner, faster, slower = "tie", med_a, med_b
+    if faster <= 0:
+        speedup = 1.0 if slower <= 0 else float("inf")
+    else:
+        speedup = slower / faster
+    return {"runs": runs,
+            "a": {"times": times_a, "output": out_a, **stats_a},
+            "b": {"times": times_b, "output": out_b, **stats_b},
+            "outputs_equal": outputs_equal,
+            "first_diff": _first_diff(out_a, out_b),
+            "winner": winner,
+            "speedup": speedup}
+
+
+def format_bench(result):
+    """سطور عربية تلخص نتيجة bench_interleaved: الوسيط
+    والانحراف المعياري لكل جانب + تطابق المخرجات أو أول
+    اختلاف + الفائز والتسريع."""
+    result = result or {}
+    a = result.get("a") or {}
+    b = result.get("b") or {}
+    lines = ["== نتيجة القياس المتداخل ==",
+             "التشغيلات لكل جانب: %s" % result.get("runs"),
+             "أ: الوسيط %.4f ث — المتوسط %.4f ث — الانحراف "
+             "المعياري %.4f ث"
+             % (a.get("median") or 0.0, a.get("mean") or 0.0,
+                a.get("stddev") or 0.0),
+             "ب: الوسيط %.4f ث — المتوسط %.4f ث — الانحراف "
+             "المعياري %.4f ث"
+             % (b.get("median") or 0.0, b.get("mean") or 0.0,
+                b.get("stddev") or 0.0),
+             ""]
+    if result.get("outputs_equal"):
+        lines.append("المخرجات: متطابقة")
+    else:
+        diff = result.get("first_diff")
+        if diff:
+            lines.append("المخرجات: مختلفة — أول اختلاف في السطر %d:"
+                         % (diff.get("index", 0) + 1))
+            lines.append("  أ: %s" % diff.get("a"))
+            lines.append("  ب: %s" % diff.get("b"))
+        else:
+            lines.append("المخرجات: مختلفة")
+    lines.append("")
+    winner = result.get("winner")
+    speedup = result.get("speedup")
+    if winner == "tie":
+        lines.append("النتيجة: تعادل — الوسيطان متساويان.")
+    elif winner in ("a", "b"):
+        lines.append("الفائز: نسخة %s — أسرع ×%.2f"
+                     % ("أ" if winner == "a" else "ب", speedup))
+    else:
+        lines.append("النتيجة: بلا فائز محدد.")
+    return "\n".join(lines) + "\n"
 
 
 def suggest_hooks(title, chat_fn=None):
@@ -150,7 +491,8 @@ def score_hooks(hooks, story_text=None):
 def create_ab_variants(video, hooks, out_dir, title=None,
                        cost_per_video=0, thumbnail_fn=None,
                        duration_fn=None, story_text=None,
-                       llm_model=None):
+                       llm_model=None, engine="fast",
+                       balance_units=None, ledger_entries=None):
     """ولّد مصغرة لكل نسخة من n هوكًا وسجّلها في ab-<وقت>.json.
 
     أوقات المصغرات موزعة بالتساوي بين 35% و65% من المدة
@@ -160,8 +502,12 @@ def create_ab_variants(video, hooks, out_dir, title=None,
     (لكل نسخة + المجموع) للتوافق مع ab-results.
     cost_per_video: تقدير وحدات Veo لإنتاج كل بديل من جديد
     (الافتراضي 0 — نفس الفيديو، هوك+مصغرة فقط بلا توليد جديد).
-    llm_model (اختياري): الموديل الذي خدم اقتراح الهوكات
-    فعلًا — يُسجَّل في السجل إن وُجد.
+    engine: محرك التقدير — "fast" (20 وحدة/مقطع، الافتراضي
+    كما في الملاحظة القديمة «6 مقاطع × 20») أو "lite" (10
+    وحدات/مقطع). balance_units/ledger_entries: اختياريان
+    لتقدير كل متغير (انظر estimate_variant_cost_from_units).
+    كل متغير يحمل "cost_estimate" كاملًا (رصيد Veo + وقت
+    ريندر تقديري + $0)، والسجل يحمل "cost_estimates" بمجاميعها.
     """
     video = os.path.abspath(os.path.expanduser(video))
     if not os.path.isfile(video):
@@ -187,6 +533,12 @@ def create_ab_variants(video, hooks, out_dir, title=None,
     thumbnail_fn = thumbnail_fn or thumbnail.make_thumbnail
     duration = duration_fn(video)
     scores = score_hooks(hooks, story_text=story_text)
+    # تقدير تكلفة كل متغير — توسعة لمسار cost_per_video الموجود
+    # (لا مسار موازٍ): يُحسب مرة واحدة قبل أي مصغرة فيفشل
+    # المحرك/الرصيد غير الصالح قبل أي عمل.
+    variant_cost = estimate_variant_cost_from_units(
+        cost_per_video, engine=engine, balance_units=balance_units,
+        ledger_entries=ledger_entries)
     ts = time.strftime("%Y%m%d-%H%M%S")
     ab_dir = os.path.join(out_dir, "ab-%s" % ts)
     os.makedirs(ab_dir, exist_ok=True)
@@ -205,6 +557,7 @@ def create_ab_variants(video, hooks, out_dir, title=None,
             "dna_verdict": score["verdict"],
             "dna_breakdown": score["breakdown"],
             "cost": cost_per_video,
+            "cost_estimate": dict(variant_cost),
         })
     variants.sort(key=lambda v: v["dna_score"], reverse=True)
     best = variants[0]["hook"]
@@ -233,6 +586,15 @@ def create_ab_variants(video, hooks, out_dir, title=None,
         "variants": variants,
         "best": best,
         "cost_estimate_units": cost_block,
+        "cost_estimates": {
+            "engine": variant_cost["engine"],
+            "per_variant": dict(variant_cost),
+            "total_units": count * variant_cost["veo_units"],
+            "total_render_minutes_estimate": round(
+                count * variant_cost["render_minutes_estimate"], 1),
+            "cash_usd": 0,
+            "note": variant_cost["note"],
+        },
         "note": AB_NOTE,
     }
     record_path = os.path.join(ab_dir, "ab-%s.json" % ts)
@@ -244,7 +606,8 @@ def create_ab_variants(video, hooks, out_dir, title=None,
 
 def create_ab(video, hook_a, hook_b, out_dir, title=None,
               thumbnail_fn=None, duration_fn=None, cost_per_video=0,
-              llm_model=None):
+              llm_model=None, engine="fast",
+              balance_units=None, ledger_entries=None):
     """ولّد مصغرتين (أ عند 35% من المدة، ب عند 65%) وسجّل
     الزوج في ab-<وقت>.json داخل out_dir. يرجع السجل.
     thumbnail_fn(video, hook, out, at_seconds) -> مسار؛
@@ -252,6 +615,9 @@ def create_ab(video, hook_a, hook_b, out_dir, title=None,
     cost_per_video: تقدير وحدات Veo لإنتاج كل بديل من جديد
     (الافتراضي 0 — نفس الفيديو، هوك+مصغرة فقط بلا توليد جديد؛
     وتوليد جديد كامل = 120 وحدة: 6 مقاطع × 20).
+    engine/balance_units/ledger_entries: كما في
+    create_ab_variants — توسعة لمسار cost_per_video الموجود:
+    كل نسخة تحمل تقديرها الكامل في "cost_estimates".
     llm_model (اختياري): الموديل الذي خدم اقتراح الهوكات
     فعلًا — يُسجَّل في السجل إن وُجد."""
     video = os.path.abspath(os.path.expanduser(video))
@@ -278,6 +644,9 @@ def create_ab(video, hook_a, hook_b, out_dir, title=None,
     duration_fn = duration_fn or thumbnail.video_duration
     thumbnail_fn = thumbnail_fn or thumbnail.make_thumbnail
     duration = duration_fn(video)
+    variant_cost = estimate_variant_cost_from_units(
+        cost_per_video, engine=engine, balance_units=balance_units,
+        ledger_entries=ledger_entries)
     ts = time.strftime("%Y%m%d-%H%M%S")
     ab_dir = os.path.join(out_dir, "ab-%s" % ts)
     os.makedirs(ab_dir, exist_ok=True)
@@ -307,6 +676,16 @@ def create_ab(video, hook_a, hook_b, out_dir, title=None,
                      if cost_per_video == 0
                      else "تقدير توليد كل بديل من جديد "
                           "(6 مقاطع Veo × 20 وحدة)"),
+        },
+        "cost_estimates": {
+            "engine": variant_cost["engine"],
+            "variant_a": dict(variant_cost),
+            "variant_b": dict(variant_cost),
+            "total_units": 2 * variant_cost["veo_units"],
+            "total_render_minutes_estimate": round(
+                2 * variant_cost["render_minutes_estimate"], 1),
+            "cash_usd": 0,
+            "note": variant_cost["note"],
         },
         "note": AB_NOTE,
     }
@@ -451,6 +830,20 @@ def format_comparison(record, comparison):
                         cost.get("total")))
         if cost.get("note"):
             lines.append("  %s" % cost["note"])
+        lines.append("")
+    ests = record.get("cost_estimates") or {}
+    per = ests.get("per_variant") or ests.get("variant_a")
+    if per:
+        lines.append("تكلفة كل متغير (تقدير إعادة التوليد):")
+        lines.append("  %s" % format_variant_cost(per))
+        if ests.get("total_units") is not None:
+            lines.append("  المجموع: %s وحدة — ريندر تقديري ~%s دقيقة "
+                         "— $%s"
+                         % (ests.get("total_units"),
+                            ests.get("total_render_minutes_estimate"),
+                            ests.get("cash_usd") or 0))
+        if ests.get("note"):
+            lines.append("  %s" % ests["note"])
         lines.append("")
     if not comparison["decisive"]:
         lines.append("النتيجة: غير حاسمة بعد — انشر النسختين "

@@ -11,10 +11,18 @@
 حتمية (موثقة أدناه)، لا من نموذج؛ ومعيار «العائد داخل المقطع»
 يحتاج نص القصة (--story-text) وإلا يبقى غير مقاس والمجموع
 الأقصى 9 مع تنبيه.
+
+الجولة v0.1.39 (Viral DNA منظّم): فوق التقرير الحرّ يبني
+`analyze_dna` قسم `viral_dna` المنظّم — نوع الهوك وقوته، وبنية
+اللقطات وتوزيعها، والإيقاع (الوسيط/التباين)، والمنحنى العاطفي
+(افتتاح/انقلاب/عبرة — من نص القصة فقط)، ونقاط ضعف قابلة
+للتنفيذ — مع طباعة عربية مقروءة عبر `format_viral_dna_report`
+(وتُلحق في `format_report` مع بقاء كل سطوره القديمة).
 """
 import json
 import os
 import re
+import statistics
 import subprocess
 import time
 
@@ -377,7 +385,7 @@ def analyze_dna(video, title=None, hook=None, subs_dir=None,
     yt_views = (yt or {}).get("views") if yt else None
     verdict = build_verdict(hook_score, cuts, silence_ok,
                             density, fb_views, yt_views)
-    return {
+    report = {
         "video": video,
         "title": title or "",
         "duration": cuts["duration"],
@@ -390,6 +398,11 @@ def analyze_dna(video, title=None, hook=None, subs_dir=None,
         "verdict": verdict,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    # تقرير Viral DNA المنظّم (v0.1.39) — من نفس المقاييس +
+    # نص القصة للمنحنى العاطفي.
+    report["viral_dna"] = build_viral_dna_report(
+        report, story_text=story_text)
+    return report
 
 
 def build_verdict(hook_score, cuts, silence_ok, density,
@@ -449,6 +462,356 @@ def build_verdict(hook_score, cuts, silence_ok, density,
         lines.append("المشاهدات الحقيقية: غير معروفة — انشر الفيديو "
                      "أولًا ثم أعد analyze --dna لمطابقته بأرقامه.")
     return lines
+
+
+# ------------------------------------------------- Viral DNA منظّم
+# (الجولة v0.1.39 — من ViralForge في المقارنة 2026-11-23 §4.7:
+# هوك/بنية لقطات/إيقاع/منحنى عاطفي). كل قسم من مقاييس موجودة
+# فعلًا (score_hook / detect_cuts / word_density / فحص الصمت)
+# + نص القصة للمنحنى العاطفي فقط — بلا مقياس جديد مخترع.
+
+TWIST_WORDS = ("فجأة", "انكشف", "مفاجأة", "صدمة", "غير متوقع",
+               "الحقيقة")
+PAYOFF_WORDS = ("العبرة", "الدرس", "تعلم", "فهم",
+                "عرف", "ندم", "تاب", "رجع", "حصد")
+
+
+def hook_type(hook_score):
+    """نوع الهوك وقوته من تفصيل درجته. None إن لم يُقَس الهوك."""
+    if hook_score is None:
+        return None
+    bd = hook_score.get("breakdown") or {}
+    gap = bd.get("curiosity_gap") or 0
+    fact = bd.get("specific_fact") or 0
+    conflict = bd.get("conflict") or 0
+    hook = hook_score.get("hook") or ""
+    question = ("؟" in hook or "?" in hook
+                or any(_word_in(hook, w) for w in QUESTION_WORDS))
+    if question and conflict >= 1:
+        kind, label = "question_conflict", "سؤال صادم بصراع"
+    elif question:
+        kind, label = "question", "سؤال يفتح فجوة فضول"
+    elif conflict >= 1 and gap >= 1:
+        kind, label = "conflict_suspense", "صراع وتشويق"
+    elif fact >= 1:
+        kind, label = "fact", "حقيقة محددة"
+    elif gap >= 1:
+        kind, label = "suspense", "تشويق بلا سؤال"
+    else:
+        kind, label = "weak", "بلا نوع واضح (ضعيف)"
+    total = hook_score.get("total")
+    if total is None:
+        strength = "غير مقاس"
+    elif total >= 9:
+        strength = "قوي"
+    elif total >= 6:
+        strength = "جيد"
+    else:
+        strength = "ضعيف"
+    return {"kind": kind, "label": label, "strength": strength,
+            "score": total, "max": hook_score.get("max")}
+
+
+def shot_lengths(cuts):
+    """أطوال اللقطات بالثواني من أزمنة القطع + المدة.
+
+    لقطة واحدة بلا قطع داخلية = [المدة] كاملة. أزمنة قطع
+    خارج المدة تُستبعد (دفاعًا عن تقارير يدوية).
+    """
+    cuts = cuts or {}
+    duration = cuts.get("duration")
+    if duration is None:
+        return []
+    try:
+        duration = float(duration)
+    except (TypeError, ValueError):
+        return []
+    if duration <= 0:
+        return []
+    times = []
+    for t in (cuts.get("cuts") or []):
+        try:
+            t = float(t)
+        except (TypeError, ValueError):
+            continue
+        if 0 < t < duration:
+            times.append(t)
+    bounds = [0.0] + sorted(times) + [duration]
+    return [round(b - a, 2) for a, b in zip(bounds, bounds[1:])
+            if b > a]
+
+
+def analyze_shot_structure(cuts):
+    """بنية اللقطات: العدد والمدة وأطوال كل لقطة وتوزيعها.
+
+    التوزيع: قصيرة ≤4ث، متوسطة 4–8ث، طويلة >8ث (مشاهد Veo
+    8 ثوانٍ بالتصميم، فالطويلة هنا بنيوية). بلا لقطات مقاسة:
+    كل الأرقام None والتوزيع أصفار — «غير مقاس» لا صفر.
+    """
+    cuts = cuts or {}
+    lengths = shot_lengths(cuts)
+    dist = {"short": 0, "medium": 0, "long": 0}
+    for length in lengths:
+        if length <= 4:
+            dist["short"] += 1
+        elif length <= 8:
+            dist["medium"] += 1
+        else:
+            dist["long"] += 1
+    if not lengths:
+        return {"shot_count": cuts.get("shot_count"),
+                "duration": cuts.get("duration"),
+                "shots_seconds": [],
+                "median_shot_seconds": None,
+                "mean_shot_seconds": None,
+                "min_shot_seconds": None,
+                "max_shot_seconds": None,
+                "distribution": dist}
+    return {"shot_count": len(lengths),
+            "duration": cuts.get("duration"),
+            "shots_seconds": lengths,
+            "median_shot_seconds": round(statistics.median(lengths), 2),
+            "mean_shot_seconds": round(statistics.mean(lengths), 2),
+            "min_shot_seconds": min(lengths),
+            "max_shot_seconds": max(lengths),
+            "distribution": dist}
+
+
+def analyze_pacing(cuts):
+    """الإيقاع: مدة المشهد الوسطى (الوسيط) والتباين.
+
+    الحكم من الوسيط (لا المتوسط — الوسيط لا تجرّه لقطة واحدة
+    طويلة): ≤4ث سريع، ≤8ث متوازن، فوقها بطيء. التباين من
+    الانحراف المعياري (السكان) لأطوال اللقطات: ≤2ث منتظم،
+    ≤4ث متباين باعتدال، فوقها متباين جدًا.
+    """
+    lengths = shot_lengths(cuts)
+    if not lengths:
+        return {"median_shot_seconds": None,
+                "mean_shot_seconds": None,
+                "stdev_shot_seconds": None,
+                "min_shot_seconds": None,
+                "max_shot_seconds": None,
+                "verdict": "غير مقاس",
+                "variance_label": "غير مقاس"}
+    median = statistics.median(lengths)
+    mean = statistics.mean(lengths)
+    stdev = statistics.pstdev(lengths) if len(lengths) > 1 else 0.0
+    if median <= 4:
+        verdict = "سريع"
+    elif median <= 8:
+        verdict = "متوازن"
+    else:
+        verdict = "بطيء"
+    if stdev <= 2:
+        variance_label = "منتظم"
+    elif stdev <= 4:
+        variance_label = "متباين باعتدال"
+    else:
+        variance_label = "متباين جدًا"
+    return {"median_shot_seconds": round(median, 2),
+            "mean_shot_seconds": round(mean, 2),
+            "stdev_shot_seconds": round(stdev, 2),
+            "min_shot_seconds": min(lengths),
+            "max_shot_seconds": max(lengths),
+            "verdict": verdict,
+            "variance_label": variance_label}
+
+
+def analyze_emotional_arc(hook_score, story_text=None):
+    """المنحنى العاطفي: افتتاح/انقلاب/عبرة.
+
+    الافتتاح من حكم الهوك. الانقلاب والعبرة من نص القصة فقط:
+    الانقلاب = كلمة انقلاب (فجأة/انكشف/مفاجأة/…) في أي موضع،
+    والعبرة = كلمة عبرة/ختام في آخر ثلث النص (نفس قاعدة
+    معيار العائد في score_hook). بلا نص قصة: الاثنان None
+    والشكل «غير مقاس» — لا استنتاج عاطفي من أطوال اللقطات.
+    """
+    if hook_score is not None:
+        opening = hook_score.get("verdict") or "غير مقاس"
+    else:
+        opening = "غير مقاس (لا هوك)"
+    if not story_text:
+        return {"opening": opening, "twist": None, "moral": None,
+                "shape": "غير مقاس (يحتاج نص القصة)"}
+    text = story_text or ""
+    twist = any(w in text for w in TWIST_WORDS)
+    sents = [s.strip() for s in re.split(r"[.!؟\n]+", text)
+             if s.strip()]
+    last_third = sents[len(sents) * 2 // 3:] if sents else []
+    tail = " ".join(last_third)
+    moral = any(w in tail for w in PAYOFF_WORDS)
+    if twist and moral:
+        shape = "تصاعد + انقلاب + عبرة"
+    elif moral:
+        shape = "تصاعد + عبرة بلا انقلاب واضح"
+    elif twist:
+        shape = "تصاعد + انقلاب بلا عبرة واضحة"
+    else:
+        shape = "بلا انقلاب ولا عبرة واضحة في النص"
+    return {"opening": opening, "twist": twist, "moral": moral,
+            "shape": shape}
+
+
+def build_weaknesses(report):
+    """نقاط ضعف قابلة للتنفيذ — كل نقطة: المجال + التفصيل
+    (برقم مقاس أو «غير مقاس») + فعل واحد محدد.
+
+    الإيقاع البطيء وحده ليس نقطة ضعف (مشاهد Veo 8 ثوانٍ
+    بالتصميم — بنيوي لا عيب مونتاج)؛ نقطة الضعف في الإيقاع
+    هي التباين الشديد أو اللقطة الواحدة الطويلة التي تجعل
+    عدد اللقطات غير موثوق (ريندر OpenMontage بلا قطع داخلية).
+    """
+    report = report or {}
+    out = []
+    hook = report.get("hook")
+    if hook is None:
+        out.append({"area": "الهوك",
+                    "detail": "غير مقاس — لا هوك ولا عنوان في التقرير",
+                    "action": "مرّر --hook أو --title عند التحليل"})
+    else:
+        total = hook.get("total")
+        mx = hook.get("max")
+        if total is not None and total < 6:
+            out.append({"area": "الهوك",
+                        "detail": "الدرجة %d/%s — أقل من 6 (يُستبعد "
+                                  "حسب جدول maquina)" % (total, mx),
+                        "action": "أعد صياغة الهوك بسؤال + حقيقة "
+                                  "محددة + كلمة صراع"})
+        if (hook.get("breakdown") or {}).get("payoff") is None:
+            out.append({"area": "العائد داخل المقطع",
+                        "detail": "غير مقاس — معيار العائد يحتاج نص القصة",
+                        "action": "مرّر نص القصة (--story-text) "
+                                  "ليُقاس العائد"})
+    pacing = report.get("pacing") or {}
+    lengths = shot_lengths(pacing)
+    if lengths:
+        if len(lengths) > 1:
+            stdev = statistics.pstdev(lengths)
+            median = statistics.median(lengths)
+            if stdev > 4:
+                out.append({"area": "الإيقاع",
+                            "detail": "متباين جدًا — الانحراف المعياري "
+                                      "%.1f ثانية" % stdev,
+                            "action": "وحّد أطوال المشاهد حول الوسيط "
+                                      "%.1f ثانية" % median})
+        if pacing.get("shot_count") == 1 \
+                and (pacing.get("duration") or 0) > 20:
+            out.append({"area": "بنية اللقطات",
+                        "detail": "لقطة واحدة بطول %.1f ثانية — كاشف "
+                                  "القطع لا يرى انتقالات OpenMontage "
+                                  "الداخلية" % pacing["duration"],
+                        "action": "لا تعتمد على عدد اللقطات هنا — "
+                                  "راجع المشاهد يدويًا"})
+    silence = report.get("silence") or {}
+    if silence.get("ok") is False:
+        out.append({"area": "الصمت",
+                    "detail": silence.get("detail")
+                    or "فجوات صمت عند الفواصل",
+                    "action": "أصلحها بـ fix-audio قبل النشر"})
+    density = report.get("word_density") or {}
+    wpm = density.get("wpm")
+    if wpm is None:
+        out.append({"area": "كثافة السرد",
+                    "detail": "غير مقاسة (لا ملفات ASS متاحة)",
+                    "action": "مرّر --subs-dir بمجلد ملفات ASS"})
+    elif wpm < 100:
+        out.append({"area": "كثافة السرد",
+                    "detail": "%.0f كلمة/دقيقة — أبطأ من إيقاع Kwai "
+                              "(~109 كلمة/دقيقة)" % wpm,
+                    "action": "جرّب atempo 1.25 على السرد"})
+    return out
+
+
+def build_viral_dna_report(report, story_text=None):
+    """ابنِ تقرير Viral DNA المنظّم من تقرير analyze_dna.
+
+    يرجع dict بمفاتيح: hook (نوع الهوك وقوته)، hook_score
+    (تفصيل الدرجة الكامل أو None)، shot_structure، pacing،
+    emotional_arc، weaknesses. يعمل على تقارير قديمة محفوظة
+    بلا viral_dna (كل قسم يتسامح مع الحقول الغائبة).
+    """
+    report = report or {}
+    hook = report.get("hook")
+    pacing = report.get("pacing") or {}
+    return {"hook": hook_type(hook),
+            "hook_score": hook,
+            "shot_structure": analyze_shot_structure(pacing),
+            "pacing": analyze_pacing(pacing),
+            "emotional_arc": analyze_emotional_arc(hook, story_text),
+            "weaknesses": build_weaknesses(report)}
+
+
+def _fmt_num(value):
+    """رقم للطباعة أو «غير مقاس» — بلا None حرفيًا."""
+    return ("%.1f" % value) if value is not None else "غير مقاس"
+
+
+def _fmt_bool(value):
+    """قيمة ثلاثية للطباعة: موجود/غائب/غير مقاس."""
+    if value is True:
+        return "موجود"
+    if value is False:
+        return "غائب"
+    return "غير مقاس"
+
+
+def format_viral_dna_report(viral):
+    """نص عربي لتقرير Viral DNA المنظّم."""
+    viral = viral or {}
+    lines = ["-- تقرير Viral DNA المنظّم --"]
+    h = viral.get("hook") or {}
+    if h:
+        lines.append("الهوك: %s — القوة %s (%s/%s)"
+                     % (h.get("label") or "غير مقاس",
+                        h.get("strength") or "غير مقاس",
+                        h.get("score")
+                        if h.get("score") is not None else "؟",
+                        h.get("max")
+                        if h.get("max") is not None else "؟"))
+    else:
+        lines.append("الهوك: غير مقاس")
+    s = viral.get("shot_structure") or {}
+    shots = s.get("shots_seconds") or []
+    if shots:
+        d = s.get("distribution") or {}
+        lines.append("بنية اللقطات: %d لقطة في %s ثانية — قصيرة "
+                     "(≤4ث): %d — متوسطة (4–8ث): %d — طويلة (>8ث): %d"
+                     % (len(shots), _fmt_num(s.get("duration")),
+                        d.get("short") or 0, d.get("medium") or 0,
+                        d.get("long") or 0))
+        lines.append("  أطوال اللقطات: %s"
+                     % ", ".join("%.1f" % t for t in shots))
+    else:
+        lines.append("بنية اللقطات: غير مقاسة")
+    p = viral.get("pacing") or {}
+    if p.get("median_shot_seconds") is not None:
+        lines.append("الإيقاع: الوسيط %s ث — المتوسط %s ث — الانحراف "
+                     "المعياري %s ث (%s) — الحكم: %s"
+                     % (_fmt_num(p.get("median_shot_seconds")),
+                        _fmt_num(p.get("mean_shot_seconds")),
+                        _fmt_num(p.get("stdev_shot_seconds")),
+                        p.get("variance_label") or "غير مقاس",
+                        p.get("verdict") or "غير مقاس"))
+    else:
+        lines.append("الإيقاع: غير مقاس")
+    a = viral.get("emotional_arc") or {}
+    lines.append("المنحنى العاطفي: الافتتاح: %s — الانقلاب: %s — "
+                 "العبرة: %s — الشكل: %s"
+                 % (a.get("opening") or "غير مقاس",
+                    _fmt_bool(a.get("twist")),
+                    _fmt_bool(a.get("moral")),
+                    a.get("shape") or "غير مقاس"))
+    weak = viral.get("weaknesses") or []
+    lines.append("نقاط الضعف القابلة للتنفيذ (%d):" % len(weak))
+    if not weak:
+        lines.append("  بلا نقاط ضعف مقاسة — واصل نفس الصيغة.")
+    for w in weak:
+        lines.append("  - [%s] %s — افعل: %s"
+                     % (w.get("area") or "؟",
+                        w.get("detail") or "؟",
+                        w.get("action") or "؟"))
+    return "\n".join(lines)
 
 
 def build_rebuild_proposal(report, story_text):
@@ -618,6 +981,13 @@ def format_report(dna):
     lines.append("-- الحكم --")
     for v in dna["verdict"]:
         lines.append("  - %s" % v)
+    lines.append("")
+    # تقرير Viral DNA المنظّم (v0.1.39) — يُبنى عند غيابه
+    # (تقارير قديمة محفوظة) من نفس حقول التقرير.
+    viral = dna.get("viral_dna")
+    if viral is None:
+        viral = build_viral_dna_report(dna)
+    lines.append(format_viral_dna_report(viral))
     ap = dna.get("audio_profile")
     if ap:
         # ملف أداء الصوت (جولة v0.1.38 §2) — يظهر فقط عند

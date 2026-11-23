@@ -161,6 +161,105 @@ def _writable_dir_check(path, name):
                 "fix": "أصلح صلاحيات المجلد"}
 
 
+# بند 8 من استخراج AlphaCLI (جولة v0.1.41): التحقق من PATH في
+# shell جديدة — إطلاق shell دخول نظيفة (بيئة فارغة إلا HOME،
+# وPATH أدنى) وسؤالها أين تجد الثنائيات، فيثبت أن تعديل PATH
+# يعمل بدل افتراضه (كما في install.sh الخاص بـAlphaCLI).
+_CLEAN_SHELL_BINARIES = ("piper", "ffmpeg", "omniroute")
+_CLEAN_SHELL_MIN_PATH = "/usr/bin:/bin"
+
+
+def _expected_binary_path(cmd):
+    """الموضع المتوقع لثنائي كما يراه doctor الآن (PATH ثم
+    بدائل الـhome الثابتة) — نفس منطق `_check`."""
+    path = _which(cmd)
+    if path:
+        return path
+    for cand in _WHICH_FALLBACKS.get(cmd, ()):
+        cand = os.path.expanduser(cand)
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _run_clean_shell(script, timeout=15):
+    """شغّل سكربتًا في shell دخول نظيفة: بيئة فارغة إلا HOME
+    وPATH أدنى (/usr/bin:/bin) — فتقرأ ملفات بدء التشغيل
+    (~/.profile) وتعيد بناء PATH كما تراه طرفية جديدة.
+    يرجع (stdout, "") أو (None, سبب الفشل)."""
+    shell = shutil.which("bash") or shutil.which("sh")
+    if not shell:
+        return None, "لا توجد shell (bash/sh) لتشغيل الفحص"
+    env = {"HOME": os.path.expanduser("~"),
+           "PATH": _CLEAN_SHELL_MIN_PATH}
+    try:
+        proc = subprocess.run([shell, "-lc", script],
+                              capture_output=True, text=True,
+                              timeout=timeout, env=env)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, "تعذر تشغيل الـshell النظيفة (%s)" % e
+    return proc.stdout or "", ""
+
+
+def _clean_shell_path_check(runner=None, timeout=15):
+    """فحص PATH في shell جديدة (بند 8 — AlphaCLI).
+
+    يمرّ إن وجدت الـshell النظيفة كلًا من piper وffmpeg
+    وomniroute في مواضعه المتوقعة (بعد حل الروابط الرمزية —
+    فـ /usr/local/bin/piper و~/.local/bin/piper الثنائي نفسه).
+    تحذير لا خطأ عند غياب ثنائي أو فوز ثنائي آخر بالاسم،
+    مع رسالة عربية تقول ماذا يفعل المستخدم.
+    `runner` للحقن في الاختبارات: دالة (script, timeout)
+    ترجع (stdout, error) كما يرجع `_run_clean_shell`."""
+    name = "PATH في shell جديدة (piper/ffmpeg/omniroute)"
+    run = runner or _run_clean_shell
+    script = ("for b in piper ffmpeg omniroute; do "
+              "echo \"$b=$(command -v \"$b\" || echo __MISSING__)\"; done")
+    try:
+        stdout, error = run(script, timeout)
+    except Exception as e:
+        stdout, error = None, str(e)
+    if stdout is None:
+        return {"name": name, "ok": False, "level": "warn",
+                "detail": error or "تعذر تشغيل الـshell النظيفة",
+                "fix": "تأكد من وجود bash وأن ملفات بدء التشغيل "
+                       "(~/.profile) سليمة، ثم أعد doctor"}
+    found = {}
+    for line in (stdout or "").splitlines():
+        if "=" in line:
+            cmd, path = line.split("=", 1)
+            found[cmd.strip()] = path.strip()
+    problems = []
+    good = []
+    for cmd in _CLEAN_SHELL_BINARIES:
+        expected = _expected_binary_path(cmd)
+        got = found.get(cmd)
+        if expected is None:
+            problems.append(
+                "%s غير مثبّت أصلًا (لا في PATH ولا في بدائل الـhome) — "
+                "ثبّته أولًا: %s" % (cmd, INSTALL_HINTS.get(cmd, "")))
+        elif not got or got == "__MISSING__":
+            problems.append(
+                "%s موجود في %s لكن الـshell الجديدة لا تجده — أضف "
+                "مجلده إلى PATH" % (cmd, expected))
+        elif os.path.realpath(got) != os.path.realpath(expected):
+            problems.append(
+                "ثنائي آخر يفوز باسم %s في الـshell الجديدة: %s بدل "
+                "%s — أزل الثنائي الآخر من PATH أو أعد ترتيب PATH"
+                % (cmd, got, expected))
+        else:
+            good.append("%s=%s" % (cmd, got))
+    if not problems:
+        return {"name": name, "ok": True, "level": "warn",
+                "detail": "؛ ".join(good), "fix": ""}
+    fix = ("أضف مجلدات الأدوات إلى PATH في ~/.bashrc و~/.profile: "
+           "export PATH=\"$HOME/.local/bin:$HOME/.npm-global/bin:"
+           "$PATH\" — ثم افتح طرفية جديدة وأعد "
+           "`python3 studio.py doctor`")
+    return {"name": name, "ok": False, "level": "warn",
+            "detail": "؛ ".join(problems), "fix": fix}
+
+
 def _protect_check(cfg=None):
     """حماية المشروع — مسح أسرار + .gitignore + نسخة احتياطية
     (المجموعة السريعة من `protect`، بلا عمليات خارجية).
@@ -254,6 +353,7 @@ def run_checks(cfg=None):
         _writable_dir_check(p["videos_dir"], "مجلد الفيديو (قابل للكتابة)"),
         _writable_dir_check(p["runs_dir"], "مجلد التشغيل (قابل للكتابة)"),
         _check("omniroute", "OmniRoute (بوابة الذكاء)", level="warn"),
+        _clean_shell_path_check(),
         _omniroute_server_check(),
         _dir_check(p["openmontage_root"], "OpenMontage (خط الإنتاج)",
                    level="warn",
@@ -309,9 +409,11 @@ def _gemini_live_check(timeout=30):
 
 def run_llm_checks(cfg=None):
     """فحوصات سلسلة LLM فقط (لـ `doctor --llm`): بوابة
-    OmniRoute (CLI + خادم) ومساعد Gemini (ملف + حي).
+    OmniRoute (CLI + خادم) ومساعد Gemini (ملف + حي) وGroq
+    (ركن ثانٍ — مفتاح/اتصال) وOllama المحلي (ساق أخيرة —
+    تحذير فقط).
     قسم منفصل بعدّاده الخاص — لا تغيّر عدد فحوصات doctor
-    الأساسية (26)."""
+    الأساسية (27 بعد إضافة فحص PATH في shell جديدة، بند 8)."""
     return [
         _check("omniroute", "OmniRoute CLI (بوابة الذكاء)",
                level="warn"),
@@ -320,7 +422,55 @@ def run_llm_checks(cfg=None):
                     "مساعد Gemini الآمن (ملف)", level="warn",
                     fix="أعد ربط Gemini عبر الـconnector"),
         _gemini_live_check(),
+        _groq_check(),
+        _ollama_check(cfg),
     ]
+
+
+def _groq_check():
+    """فحص خفيف لركن Groq الثاني (جولة v0.1.40 — يحل محل
+    g4fpol): المفتاح في بيئة العملية فقط؛ غيابه تحذير لا
+    خطأ (الركن يُتخطى عند فشل المصادقة بلا كسر للسلسلة).
+    بلا شبكة وبلا قراءة أي قيمة سرية — الوجود فقط."""
+    name = "Groq الرسمي المجاني (ركن ثانٍ — gpt-oss-120b)"
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        return {"name": name, "ok": True, "level": "warn",
+                "detail": "المفتاح مضبوط في البيئة", "fix": ""}
+    return {"name": name, "ok": False, "level": "warn",
+            "detail": "المفتاح GROQ_API_KEY غير مضبوط في البيئة — "
+                      "الركن يُتخطى حتى إضافة اتصال المزود في "
+                      "OmniRoute بالمفتاح",
+            "fix": "أضف اتصال Groq في OmniRoute بمفتاح مجاني "
+                   "(راجع free-keys/omniroute-combos.json)"}
+
+
+def _ollama_check(cfg=None, timeout=5):
+    """فحص خفيف لتوفر Ollama المحلي (ساق أخيرة في السلسلة).
+
+    تحذير فقط عند الغياب (Ollama احتياطي دون اتصال لا أساسي)؛
+    ومهلة 5ث حتى لا يعلّق doctor. بلا توليد وبلا إنفاق.
+    """
+    name = "Ollama المحلي (ساق أخيرة)"
+    try:
+        from lib import omniroute_client as _orc
+        cfg_o = ((cfg or {}).get("omniroute") or {}
+                 if isinstance(cfg, dict) else {})
+        st = _orc.ollama_status(
+            cfg_o.get("ollama_base_url"), cfg_o.get("ollama_model"),
+            timeout=timeout)
+    except Exception as e:
+        return {"name": name, "ok": False, "level": "warn",
+                "detail": "تعذر الفحص: %s" % e,
+                "fix": "ollama serve"}
+    if st.get("available"):
+        return {"name": name, "ok": True, "level": "warn",
+                "detail": "متاح — الموديل %s" % st.get("model"),
+                "fix": ""}
+    return {"name": name, "ok": False, "level": "warn",
+            "detail": st.get("detail")
+                      or "غير متاح — ثبّت Ollama وشغّل ollama serve "
+                         "ثم ollama pull qwen2.5:7b",
+            "fix": "ollama serve"}
 
 
 def ensure_config(studio_dir=None):

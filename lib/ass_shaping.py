@@ -13,6 +13,16 @@
 - التفاف: سطر أطول من 70 حرفًا، أو كلمة واحدة أطول من 25 حرفًا،
   يُعلَّم كمشكلة التفاف محتملة (مع ذكر الحد في الرسالة).
 
+ثنائية اللغة (الجولة v0.1.41): `detect_text_lang` يصنّف
+السطر ar/en/mixed/other بعدّ الحروف العربية مقابل اللاتينية؛
+و`classify_line` يرجع التصنيف مع العدّين وما إذا كانت قاعدة
+bidi تنطبق. القاعدة: الإنجليزي الخالص LTR سليم دائمًا
+(بلا فحص bidi)؛ والمختلط تُطبَّق عليه bidi فقط إن غلب
+العربي (حروف عربية أكثر من اللاتينية)؛ والمختلط الغالب
+لاتينيًا يمر بلا عَلَم — فبدء سطر إنجليزي بكلمة إنجليزية
+ليس خللًا. فحص حروف Presentation Forms يبقى على كل سطر
+(الإنجليزي لا يحويها أصلًا)؛ والتفاف واحد للغتين.
+
 لا يفحص هذا الملف امتثال كابشن فيسبوك (engagement bait) —
 ذلك في `lib/caption_check.py` — ولا يعدّله.
 """
@@ -34,6 +44,43 @@ def strip_ass_tags(text):
     text = _TAG_RE.sub("", text or "")
     text = text.replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
     return text
+
+
+def _count_letters(text):
+    """(عدد الحروف العربية، عدد الحروف اللاتينية) في نص."""
+    arabic = sum(1 for c in text if _ARABIC_RE.match(c))
+    latin = sum(1 for c in text if _LATIN_RE.match(c))
+    return arabic, latin
+
+
+def detect_text_lang(text):
+    """صنّف نصًا بعد تجريد وسوم ASS: "ar" (عربي خالص) أو
+    "en" (إنجليزي خالص) أو "mixed" (اللغتان معًا) أو
+    "other" (بلا حروف من اللغتين — أرقام/رموز فقط)."""
+    visible = strip_ass_tags(text).strip()
+    arabic, latin = _count_letters(visible)
+    if arabic and latin:
+        return "mixed"
+    if arabic:
+        return "ar"
+    if latin:
+        return "en"
+    return "other"
+
+
+def classify_line(text):
+    """تصنيف سطر للتشكيل: {"lang", "arabic_chars",
+    "latin_chars", "bidi_applies"} — وقاعدة bidi تنطبق
+    فقط على العربي والمختلط الغالب عربيًا (فالإنجليزي
+    الخالص LTR سليم، والمختلط الغالب لاتينيًا يبدأ
+    بكلمة إنجليزية بلا خلل)."""
+    visible = strip_ass_tags(text).strip()
+    arabic, latin = _count_letters(visible)
+    lang = detect_text_lang(text)
+    return {"lang": lang,
+            "arabic_chars": arabic,
+            "latin_chars": latin,
+            "bidi_applies": bool(arabic) and arabic > latin}
 
 
 def _dialogue_text(line):
@@ -75,7 +122,7 @@ def _check_line(text, file_name, line_no):
                       "يكون بترتيب منطقي ويشكّله العارض"
                       % (len(bad), bad[0]),
         })
-    if _ARABIC_RE.search(visible):
+    if classify_line(visible)["bidi_applies"]:
         first = visible[0]
         if first in _DIGITS or _LATIN_RE.match(first):
             issues.append({

@@ -23,8 +23,11 @@
 4. توكن TikTok (الجولة 9): فحص ملف فقط — مربوط/غير مربوط —
    بلا أي شبكة وبلا أي محاولة رفع أو نشر. غيابه تحذير
    (منصة إضافية اختيارية)، وتلفه خطأ.
-5. توكن Instagram (الجولة 9): مثل TikTok تمامًا — فحص ملف
-   فقط، بلا شبكة وبلا رفع أو نشر.
+5. توكن Instagram (الجولة 9، وحالة «ناقص إعداد» في جولة
+   v0.1.39): مثل TikTok تمامًا — فحص ملف فقط، بلا شبكة وبلا
+   رفع أو نشر — إضافة إلى معرّف الحساب من الإعداد: توكن
+   موجود بلا معرّف حساب = «ناقص إعداد» (تحذير)، لأن الرفع
+   سيفشل بلا معرّف رغم أن التوكن مربوط.
 
 لا يكتب شيئًا ولا ينشر شيئًا — قراءة ملفات واستدعاء قراءة واحد.
 """
@@ -204,15 +207,19 @@ def check_veo_balance(cfg, today=None, now=None):
     return _check(name, True, "error", detail)
 
 
-def check_social_token(platform, studio_dir=None):
-    """توكن TikTok/Instagram: مربوط/غير مربوط — فحص ملف فقط
-    (الجولة 9 — v0.1.34).
+def check_social_token(platform, studio_dir=None, cfg=None):
+    """توكن TikTok/Instagram: مربوط/غير مربوط/ناقص إعداد —
+    فحص ملف فقط (الجولة 9 — v0.1.34؛ وحالة «ناقص إعداد»
+    لإنستغرام في جولة v0.1.39).
 
     بلا أي شبكة وبلا أي محاولة رفع أو نشر: الملف غائب يعني
     «غير مربوط» (تحذير — المنصتان إضافيتان اختياريتان)؛ والملف
     موجود بتوكن مقروء لا يقل عن حد الحفظ الأدنى يعني «مربوط»
     (الصلاحية عبر الشبكة لا تُفحص هنا)؛ والملف موجود بلا توكن
     مقروء/صالح يعني خطأً (ملف تالف). لا تُطبع قيمة التوكن أبدًا.
+    إنستغرام فقط: عند تمرير cfg والتوكن موجود لكن معرّف
+    الحساب (publish.instagram_user_id) غائب، يرجع «ناقص
+    إعداد» (تحذير) بدل «مربوط» — الرفع سيفشل بلا معرّف.
     studio_dir: مجلد الاستوديو (للاختبار؛ الافتراضي: الحقيقي).
     """
     names = {"tiktok": "توكن TikTok",
@@ -231,25 +238,41 @@ def check_social_token(platform, studio_dir=None):
             name, False, "error",
             "ملف التوكن موجود لكنه تالف أو بلا توكن صالح: %s" % path,
             "احذف الملف وأعد `studio.py %s-auth`" % platform)
+    if platform == "instagram" and cfg is not None:
+        ig_user_id = str(((cfg.get("publish") or {}).get(
+            "instagram_user_id") or "").strip())
+        if not ig_user_id:
+            return _check(
+                name, False, "warn",
+                "ناقص إعداد — التوكن موجود لكن معرّف حساب "
+                "Instagram مفقود (publish.instagram_user_id)؛ "
+                "الرفع سيفشل بلا معرّف رغم أن التوكن مربوط",
+                "اضبط publish.instagram_user_id في config.yaml "
+                "أو مرّر --ig-user-id مع أمر النشر")
     return _check(
         name, True, "error",
         "مربوط (ملف توكن موجود — صلاحيته عبر الشبكة لم تُفحص)")
 
 
-def check_tiktok_token(studio_dir=None):
+def check_tiktok_token(studio_dir=None, cfg=None):
     """توكن TikTok (فحص ملف فقط — بلا شبكة وبلا رفع)."""
-    return check_social_token("tiktok", studio_dir=studio_dir)
+    return check_social_token("tiktok", studio_dir=studio_dir, cfg=cfg)
 
 
-def check_instagram_token(studio_dir=None):
-    """توكن Instagram (فحص ملف فقط — بلا شبكة وبلا رفع)."""
-    return check_social_token("instagram", studio_dir=studio_dir)
+def check_instagram_token(studio_dir=None, cfg=None):
+    """توكن Instagram (فحص ملف فقط — بلا شبكة وبلا رفع).
+
+    مع cfg يُفحص أيضًا معرّف الحساب: توكن بلا معرّف = «ناقص
+    إعداد» (تحذير) لا «مربوط»."""
+    return check_social_token("instagram", studio_dir=studio_dir,
+                              cfg=cfg)
 
 
-def run_account_checks(cfg, runner=None, today=None, now=None):
+def run_account_checks(cfg, runner=None, today=None, now=None,
+                       studio_dir=None):
     """شغّل فحوصات الحسابات الخمسة. يرجع قائمة قواميس doctor."""
     return [check_facebook_page(cfg, runner=runner),
             check_youtube_token(cfg, today=today),
             check_veo_balance(cfg, today=today, now=now),
-            check_tiktok_token(),
-            check_instagram_token()]
+            check_tiktok_token(studio_dir=studio_dir),
+            check_instagram_token(studio_dir=studio_dir, cfg=cfg)]

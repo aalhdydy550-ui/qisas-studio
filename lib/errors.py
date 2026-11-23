@@ -39,6 +39,11 @@ CATEGORIES = (
     "facebook_not_installed",
     "facebook_token",
     "facebook_publish_failed",
+    "tiktok_token",
+    "tiktok_publish_failed",
+    "instagram_token",
+    "instagram_user_id_missing",
+    "instagram_publish_failed",
     "youtube_token_expired",
     "youtube_quota",
     "youtube_upload_failed",
@@ -166,6 +171,78 @@ _RULES = [
          "أعد النشر مرة واحدة؛ وإن تكرر الفشل تحقق من حالة "
          "الصفحة في Meta Business Suite قبل إعادة المحاولة."]),
     _entry(
+        "tiktok_token",
+        "توكن TikTok غير صالح أو غير مربوط",
+        "لا يوجد توكن TikTok محفوظ وصالح — الحساب غير مربوط بعد، "
+        "أو التوكن منتهٍ/مرفوض — فلم يُرسل أي شيء إلى TikTok.",
+        "أكمل ربط TikTok مرة واحدة، ثم أعد النشر.",
+        ["شغّل: python3 studio.py tiktok-auth — لطباعة خطوات "
+         "الربط (تطبيق مطوّر + موافقة Content Posting API).",
+         "احفظ التوكن بـ: python3 studio.py tiktok-auth --token "
+         "<التوكن> — يُحفظ في tiktok-token.json بصلاحية 600 "
+         "ولا يُعرض.",
+         "تحقق من الربط بـ: python3 studio.py doctor --accounts",
+         "أعد النشر بعدها: python3 studio.py publish --video "
+         "<مسار الفيديو> --title <العنوان> --platforms tiktok"]),
+    _entry(
+        "tiktok_publish_failed",
+        "فشل النشر على TikTok",
+        "أُرسل الفيديو إلى TikTok لكن النشر لم يُؤكَّد — رُفض "
+        "الطلب أو تعذّر تأكيد حالته (توكن، نص أطول من الحد، "
+        "أو فيديو غير مقبول).",
+        "راجع النص والفيديو والتوكن، ثم أعد النشر مرة واحدة.",
+        ["تأكد أن نص النشر أقل من 2200 حرف وأن الفيديو عمودي "
+         "9:16 وأقل من 10 دقائق.",
+         "افحص الفيديو بـ: python3 studio.py check --video "
+         "<مسار الفيديو>",
+         "تأكد أن التوكن سارٍ بـ: python3 studio.py doctor "
+         "--accounts — وإن كان منتهيًا أعد tiktok-auth.",
+         "أعد النشر مرة واحدة؛ وإن تكرر الفشل راجع حالة "
+         "التطبيق في developers.tiktok.com."]),
+    _entry(
+        "instagram_token",
+        "توكن Instagram غير صالح أو غير مربوط",
+        "لا يوجد توكن Instagram محفوظ وصالح — الحساب غير مربوط "
+        "بعد، أو التوكن منتهٍ/مرفوض — فلم يُرسل أي شيء إلى "
+        "Instagram.",
+        "أكمل ربط Instagram مرة واحدة، ثم أعد النشر.",
+        ["شغّل: python3 studio.py instagram-auth — لطباعة خطوات "
+         "الربط (حساب Business/Creator مربوط بصفحة فيسبوك).",
+         "احفظ التوكن بـ: python3 studio.py instagram-auth "
+         "--token <التوكن> — يُحفظ في instagram-token.json "
+         "بصلاحية 600 ولا يُعرض.",
+         "تحقق من الربط بـ: python3 studio.py doctor --accounts",
+         "أعد النشر بعدها: python3 studio.py publish --video "
+         "<مسار الفيديو> --title <العنوان> --platforms instagram"]),
+    _entry(
+        "instagram_user_id_missing",
+        "معرّف حساب Instagram مفقود",
+        "توكن Instagram موجود لكن معرّف الحساب (instagram_user_id) "
+        "غير مضبوط — وبدونه لا يعرف Graph API أي حساب ينشر "
+        "الريل، فلم يُرسل أي شيء.",
+        "اضبط معرّف الحساب في الإعداد، ثم أعد النشر.",
+        ["اعرف معرّف حساب Instagram (instagram_business_account "
+         "id) من Graph API.",
+         "اضبطه في config.yaml تحت publish.instagram_user_id، "
+         "أو مرّر --ig-user-id مع أمر النشر.",
+         "تحقق بـ: python3 studio.py doctor --accounts — يجب أن "
+         "يظهر «مربوط» لا «ناقص إعداد»."]),
+    _entry(
+        "instagram_publish_failed",
+        "فشل النشر على Instagram",
+        "أُرسل الريل إلى Instagram لكن النشر لم يُؤكَّد — رُفض "
+        "الطلب أو فشلت معالجة الحاوية أو تعذّر تأكيد حالتها.",
+        "راجع النص والفيديو والتوكن، ثم أعد النشر مرة واحدة.",
+        ["تأكد أن الكابشن أقل من 2200 حرفًا وبحد أقصى 30 وسمًا، "
+         "وأن الفيديو عمودي 9:16 وأقل من 90 ثانية.",
+         "افحص الفيديو بـ: python3 studio.py check --video "
+         "<مسار الفيديو>",
+         "تأكد أن التوكن سارٍ ومعرّف الحساب مضبوط بـ: "
+         "python3 studio.py doctor --accounts",
+         "أعد النشر مرة واحدة؛ وإن تكرر الفشل راجع صلاحيتي "
+         "instagram_basic وinstagram_content_publish في تطبيق "
+         "Meta للمطورين."]),
+    _entry(
         "youtube_token_expired",
         "توكن يوتيوب منتهٍ أو مرفوض",
         "رفضت Google بيانات اعتماد يوتيوب: التوكن منتهي أو "
@@ -257,9 +334,10 @@ _RULES = [
     _entry(
         "llm_all_failed",
         "كل مزودات الذكاء فشلت",
-        "جرّب studio كل مزود ذكاء متاح (OmniRoute ثم Gemini) "
-        "ولم يرد أي واحد — غالبًا انقطاع شبكة أو حصة مستنفدة "
-        "أو مفتاح مصادقة مرفوض. لا ملفات تضررت؛ والأمر توقف "
+        "جرّب studio كل مزود ذكاء متاح (OmniRoute ثم Gemini ثم "
+        "Ollama المحلي كاحتياطي أخير) ولم يرد أي واحد — غالبًا "
+        "انقطاع شبكة أو حصة مستنفدة أو مفتاح مصادقة مرفوض أو "
+        "خادم Ollama غير شغال. لا ملفات تضررت؛ والأمر توقف "
         "قبل أي إنتاج.",
         "تحقق من حالة المزودين ثم أعد الأمر نفسه.",
         ["شغّل: python3 studio.py llm-status — لترى أي مزود "
@@ -268,6 +346,9 @@ _RULES = [
          "بوابة OmniRoute ومساعد Gemini موجودان.",
          "إن كان الخطأ «حصة» (429) انتظر انتهاء التهدئة "
          "(10 دقائق) ثم أعد المحاولة.",
+         "للاحتياطي المحلي: تأكد أن Ollama شغال "
+         "(`ollama serve`) وأن الموديل مثبّت "
+         "(`ollama pull qwen2.5:7b`).",
          "أعد الأمر الذي فشل كما هو."]),
 ]
 
@@ -334,6 +415,38 @@ _PATTERNS = [
         r"facebook.*(publish|post).*fail",
         r"publish.*fail.*facebook",
         r"\(\#200\)",  # رفض صلاحية النشر على الصفحة
+    ]),
+    ("tiktok_token", [
+        r"توكن tiktok",
+        r"tiktok.*token",
+        r"tiktok.*غير مربوط",
+        r"لا يوجد توكن tiktok",
+    ]),
+    ("tiktok_publish_failed", [
+        r"فشل (النشر|الرفع).*tiktok",
+        r"فشل نشر tiktok",
+        r"فشل رفع مقطع tiktok",
+        r"open\.tiktokapis\.com",
+        r"tiktok.*(publish|upload).*fail",
+    ]),
+    ("instagram_token", [
+        r"توكن instagram",
+        r"instagram.*token",
+        r"instagram.*غير مربوط",
+        r"لا يوجد توكن instagram",
+    ]),
+    ("instagram_user_id_missing", [
+        r"معرّف حساب instagram مفقود",
+        r"instagram_user_id.*مفقود",
+        r"معرّف حساب instagram.*غير مضبوط",
+    ]),
+    ("instagram_publish_failed", [
+        r"فشل (النشر|الرفع).*instagram",
+        r"معالجة حاوية instagram فشلت",
+        r"فشل رفع مقطع instagram",
+        r"graph\.facebook\.com",
+        r"rupload\.facebook\.com",
+        r"instagram.*(publish|upload).*fail",
     ]),
     ("youtube_token_expired", [
         r"invalid_grant",
@@ -431,6 +544,11 @@ def _detect_category(text, context=None):
             return "facebook_token"
         if ctx in ("youtube", "yt", "google"):
             return "youtube_token_expired"
+        if "tiktok" in low or "تيك توك" in low:
+            return "tiktok_token"
+        if ("instagram" in low or "إنستغرام" in low
+                or "انستغرام" in low):
+            return "instagram_token"
         if any(m in low for m in _FACEBOOK_MARKERS):
             return "facebook_token"
         if any(m in low for m in _YOUTUBE_MARKERS):
@@ -457,6 +575,10 @@ def _detect_category(text, context=None):
             return "youtube_upload_failed"
         if ctx in ("facebook", "fb"):
             return "facebook_publish_failed"
+        if ctx in ("tiktok",):
+            return "tiktok_publish_failed"
+        if ctx in ("instagram", "ig"):
+            return "instagram_publish_failed"
 
     # 3) الأنماط المرتبة — وأولوية للسياق داخل الفئة نفسها.
     for cat, regexes in _COMPILED:
