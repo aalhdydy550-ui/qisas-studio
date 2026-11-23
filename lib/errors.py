@@ -46,6 +46,7 @@ CATEGORIES = (
     "file_missing",
     "veo_balance_low",
     "veo_balance_stale",
+    "llm_all_failed",
     "unknown",
 )
 
@@ -253,6 +254,21 @@ _RULES = [
          "حدّث veo.balance_units في config.yaml بالقيمة "
          "المقروءة (وveo.renews بتاريخ التجديد إن تغيّر).",
          "تأكد بـ: python3 studio.py balance"]),
+    _entry(
+        "llm_all_failed",
+        "كل مزودات الذكاء فشلت",
+        "جرّب studio كل مزود ذكاء متاح (OmniRoute ثم Gemini) "
+        "ولم يرد أي واحد — غالبًا انقطاع شبكة أو حصة مستنفدة "
+        "أو مفتاح مصادقة مرفوض. لا ملفات تضررت؛ والأمر توقف "
+        "قبل أي إنتاج.",
+        "تحقق من حالة المزودين ثم أعد الأمر نفسه.",
+        ["شغّل: python3 studio.py llm-status — لترى أي مزود "
+         "في تهدئة (حصة) وأي مزود آخر خطأ أصابه.",
+         "شغّل: python3 studio.py doctor --llm — للتأكد أن "
+         "بوابة OmniRoute ومساعد Gemini موجودان.",
+         "إن كان الخطأ «حصة» (429) انتظر انتهاء التهدئة "
+         "(10 دقائق) ثم أعد المحاولة.",
+         "أعد الأمر الذي فشل كما هو."]),
 ]
 
 _RULE_BY_CATEGORY = {r["category"]: r for r in _RULES}
@@ -372,6 +388,12 @@ _PATTERNS = [
         r"رصيد veo.*(غير محدَّث|قديم|مسجَّل وليس حيًا)",
         r"veo.*balance.*(not (recorded|updated)|stale|missing)",
         r"رصيد.*غير مسجَّل في الإعداد",
+    ]),
+    ("llm_all_failed", [
+        r"فشلت كل مزودات",
+        r"كل مزودات الذكاء فشلت",
+        r"all llm providers?.*failed",
+        r"llm.*all.*failed",
     ]),
 ]
 

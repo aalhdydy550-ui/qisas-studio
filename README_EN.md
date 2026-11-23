@@ -79,6 +79,43 @@ and its python3-missing hint suggests `apt-get` (Debian/Ubuntu).
 
 See `README.md` (Arabic) for full documentation.
 
+## v0.1.38 — LLM fallback chain + talking-avatar prep
+
+- **LLM fallback chain:** every intelligence call tries providers in
+  order (OmniRoute: model then fallback, then Gemini
+  `gemini-3-flash-preview` via a safe helper with a surrogate key —
+  the raw key never appears in any file, argument, or log); quota
+  errors (429/402) put a provider on a 10-minute cooldown that is
+  skipped automatically; auth errors (401/403) get no cooldown; total
+  failure is an Arabic `llm_all_failed` error. State lives in
+  `runs/llm-provider-state.json` (persistent daily counters) with
+  `llm-status` and `doctor --llm` (4 separate checks — the main
+  doctor count stays 26). The serving model is recorded in six places
+  (script, publish-meta, ideas, ab, ab-variants, ab-eval-set) plus
+  the provider chain in run records (`llm_chain`).
+- **Talking avatar (LongCat) — prep only, no local rendering yet:**
+  a LongCat-schema job (`lib/avatar_job.py`: prompt, cond_image,
+  cond_audio person1/person2, audio_type para/add, settings,
+  audio.kind=narration — validated: image exists, audio ≤300s, para
+  needs matching durations ±0.1s, plus a "clean audio only" rule
+  that rejects only continuous audio ≥15s with zero silence and
+  mean >-30 dB — calibrated on 10 real narration files, all pass
+  since they are <15s), a structured 4-slot performance prompt for
+  three scene types, hardware profiles (t4x2-int8 default, a100-bf16,
+  rtx4090-int8; fp8+int8 rejected together), an audio-performance
+  profile (per-second energy curve + silence map + emphasized
+  phrases ≥6 dB above the median), and vertical-only aspects
+  divisible by 8 (default 720×1280; 720×1092 is the pilot portrait
+  input size, not an output size). Wiring: `avatar-job`
+  (--validate/--template/--list-profiles), `check --avatar-image`
+  (aspect rule in lib/check.py — warning only), and
+  `analyze --dna --audio-profile` (profile attached to the report;
+  its failure never fails DNA).
+- **CI fix:** the workflow installs ffmpeg (and melt best-effort);
+  machine-dependent tests skip cleanly when the environment is
+  missing, with regression tests proving the skip
+  (`tests/test_ci_skips.py`).
+
 ## License
 
 This orchestration layer only is licensed under the

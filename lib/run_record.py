@@ -49,6 +49,8 @@ def resolve_settings(cfg, extra=None):
         "atempo": narration.get("atempo", 1.0),
         "llm_model": omniroute.get("model"),
         "llm_fallback_model": omniroute.get("fallback_model"),
+        "llm_chain": [p.get("model") for p in
+                      _chain_providers(omniroute)],
         "backend": extra.get("backend", "concat"),
         "grade": extra.get("grade"),
         "watermark": extra.get("watermark", True),
@@ -63,10 +65,27 @@ def resolve_settings(cfg, extra=None):
     return settings
 
 
+def _chain_providers(omniroute):
+    """سلسلة المزودين من قسم omniroute (بلا استيراد دائري —
+    منطق providers_from_config مكرر هنا عمدًا بصيغة خفيفة)."""
+    try:
+        from lib import omniroute_client as _client
+        return _client.providers_from_config(omniroute or {})
+    except Exception:
+        providers = []
+        for key in ("model", "fallback_model"):
+            value = (omniroute or {}).get(key)
+            if value and value not in providers:
+                providers.append({"kind": "omniroute",
+                                  "model": value})
+        return providers
+
+
 def print_settings(settings):
     """اطبع الإعدادات المحلولة سطرًا سطرًا (للتشغيل التفاعلي)."""
     print("الإعدادات المحلولة:")
     for key in ("voice", "atempo", "llm_model", "llm_fallback_model",
+                "llm_chain",
                 "backend", "grade", "watermark", "video_size",
                 "duration_min_seconds", "duration_max_seconds",
                 "veo_balance_units"):

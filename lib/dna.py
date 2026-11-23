@@ -618,6 +618,23 @@ def format_report(dna):
     lines.append("-- الحكم --")
     for v in dna["verdict"]:
         lines.append("  - %s" % v)
+    ap = dna.get("audio_profile")
+    if ap:
+        # ملف أداء الصوت (جولة v0.1.38 §2) — يظهر فقط عند
+        # وجود المفتاح (analyze --dna --audio-profile).
+        lines.append("")
+        lines.append("-- أداء الصوت --")
+        lines.append("  الملف: %s" % ap["audio"])
+        lines.append("  المدة: %.1f ثانية — متوسط %.1f dB — "
+                     "أقصى %.1f dB"
+                     % (ap["duration_seconds"], ap["mean_db"],
+                        ap["max_db"]))
+        lines.append("  نسبة الصمت: %.3f (%d فترة صمت)"
+                     % (ap["silence_ratio"], len(ap["silences"])))
+        emphasized = [e.get("text") for e in (ap.get("emphasized")
+                                              or []) if e.get("text")]
+        lines.append("  عبارات مؤكَّدة: %s"
+                     % (", ".join(emphasized) if emphasized else "بلا"))
     return "\n".join(lines) + "\n"
 
 

@@ -13,6 +13,24 @@ omniroute:
   # إعادة محاولة تلقائية عند فشل الاستدعاء (قبل اللجوء للبديل)
   retries: 1
   retry_delay_seconds: 5
+  # ساق Gemini البديلة (أمر المستخدم 2026-11-22 «توصيل Gemini»):
+  # تُستدعى عبر مساعد آمن بمفتاح بديل (surrogate) من الـconnector
+  # — المفتاح الخام لا يظهر في أي ملف أو وسيط أو سجل أبدًا.
+  # عطّلها بـ gemini_enabled: false إن أردت OmniRoute وحده.
+  gemini_enabled: true
+  gemini_model: "gemini-3-flash-preview"
+
+# الأفاتار الناطق (LongCat) — جولة v0.1.38: تحضير فقط، بلا موفر
+# بعد (لا تشغيل على الـVM ولا دمج قبل نجاح اختبار Kaggle).
+# كلها افتراضيات تُطابِق ثوابت lib/avatar_settings — القسم
+# توثيق وتجاوز، لا مصدر وحيد. بلا مفاتيح أبدًا.
+avatar:
+  audio_cfg: 4.0        # معامل التوجيه الصوتي (3–5؛ ملاحظة: 4 قد
+                        # يسبب احمرار الشفاه في النسخة غير المقطرة)
+  steps: 8              # خطوات الاستدلال المقطّر (50 = المسار الكامل)
+  full_steps: false     # true ← 50 خطوة (سطحها الآن حقل الوظيفة فقط)
+  aspect_policy: native # native/crop/pad/rotate (pad مرفوضة للخط)
+  profile: t4x2-int8    # ملف العتاد الافتراضي (t4x2-int8/a100-bf16/rtx4090-int8)
 
 openmontage:
   root: "~/workspace/openmontage"

@@ -843,6 +843,23 @@ def _resolve_order_logo(order_dir, logo_path):
     return p
 
 
+def resolve_order_logo_choice(order):
+    """قرر شعار طلب عميل (قاعدة المستخدم 2026-11-22: شعار الصفحة
+    يظهر فقط على فيديوهات خط النشر الخاص بالمستخدم).
+
+    يرجع (logo_effective, apply_client_logo):
+    - "page" (قيمة قديمة في طلبات سابقة أو نموذج قديم) → ("none",
+      False) — بلا شعار صفحة أبدًا.
+    - "custom"/"client" → ("custom", True) — شعار العميل الخاص
+      يُطبَّق كما هو، لأنه شعاره هو لا شعار الصفحة.
+    - "none" أو غائب أو غير معروف → ("none", False).
+    """
+    logo = (order or {}).get("logo") or "none"
+    if logo in ("custom", "client"):
+        return "custom", True
+    return "none", False
+
+
 def cmd_client_run(cfg, order_id):
     """نفّذ طلب عميل واحد كاملًا: سيناريو → سرد → صور → فيديو."""
     order = get_order(order_id)
@@ -913,11 +930,16 @@ def cmd_client_run(cfg, order_id):
               % (len(manifest["images"]), manifest["narration_duration"],
                  len(manifest["phrases"])))
         out_video = os.path.join(order_dir, "video.mp4")
-        logo = order.get("logo") or "page"
-        watermark_on = (logo == "page")
+        logo, apply_client_logo = resolve_order_logo_choice(order)
+        # قاعدة 2026-11-22: شعار الصفحة (قصص وعبر) يظهر فقط على
+        # فيديوهات خط النشر الخاص بالمستخدم — طلبات العملاء تُسلَّم
+        # بلا شعار صفحة أبدًا، حتى لو اختار العميل "page" في النموذج
+        # (تُعامل معاملة "none"). watermark_on دائمًا False هنا؛
+        # وخط النشر الخاص (run/assemble) يمرّر True كما هو.
+        watermark_on = False
         out, _secs = studio.cmd_assemble(cfg, run_dir, story["hook"],
                                          out_video, watermark_on)
-        if logo in ("client", "custom"):
+        if apply_client_logo:
             logo_path = order.get("logo_path")
             try:
                 if not logo_path:

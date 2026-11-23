@@ -273,6 +273,56 @@ def run_checks(cfg=None):
     return checks
 
 
+# مساعد Gemini الآمن (مفتاح بديل عبر الـconnector).
+GEMINI_HELPER = os.path.expanduser(
+    "~/workspace/custom-connectors/custom.gemini/bin/gemini.py")
+
+
+def _gemini_live_check(timeout=30):
+    """فحص حي خفيف لـ Gemini: list-models عبر المساعد الآمن.
+
+    تحذير فقط عند الفشل (Gemini ساق بديلة لا أساسية)؛ ومهلة
+    30ث حتى لا يعلّق doctor.
+    """
+    name = "Gemini (مساعد آمن — ساق بديلة)"
+    if not os.path.isfile(GEMINI_HELPER):
+        return {"name": name, "ok": False, "level": "warn",
+                "detail": "غير موجود: %s" % GEMINI_HELPER,
+                "fix": "أعد ربط Gemini عبر الـconnector"}
+    try:
+        proc = subprocess.run(
+            [sys.executable, GEMINI_HELPER, "list-models"],
+            capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return {"name": name, "ok": False, "level": "warn",
+                "detail": "تعذر الاتصال (مهلة %dث)" % timeout,
+                "fix": "تحقق من الشبكة وأعد المحاولة"}
+    if proc.returncode == 0 and "models" in (proc.stdout or ""):
+        return {"name": name, "ok": True, "level": "warn",
+                "detail": "يعمل (list-models ناجح)", "fix": ""}
+    return {"name": name, "ok": False, "level": "warn",
+            "detail": "فشل list-models: %s"
+                      % ((proc.stderr or proc.stdout or "")
+                         .strip()[:200] or "بلا تفاصيل"),
+            "fix": "تحقق من ربط Gemini وأعد المحاولة"}
+
+
+def run_llm_checks(cfg=None):
+    """فحوصات سلسلة LLM فقط (لـ `doctor --llm`): بوابة
+    OmniRoute (CLI + خادم) ومساعد Gemini (ملف + حي).
+    قسم منفصل بعدّاده الخاص — لا تغيّر عدد فحوصات doctor
+    الأساسية (26)."""
+    return [
+        _check("omniroute", "OmniRoute CLI (بوابة الذكاء)",
+               level="warn"),
+        _omniroute_server_check(),
+        _file_check(GEMINI_HELPER,
+                    "مساعد Gemini الآمن (ملف)", level="warn",
+                    fix="أعد ربط Gemini عبر الـconnector"),
+        _gemini_live_check(),
+    ]
+
+
 def ensure_config(studio_dir=None):
     """أنشئ config.yaml من المثال إن غاب. يرجع True إن أُنشئ."""
     studio_dir = studio_dir or STUDIO_DIR

@@ -102,6 +102,83 @@ def probe(path):
             "has_audio": audio is not None}
 
 
+def _probe_image_size(path):
+    """أبعاد صورة عبر ffprobe (ffprobe يقرأ الصور).
+
+    يرجع (العرض، الارتفاع). يرفع CheckError عند غياب الملف
+    أو تعذر قراءته.
+    """
+    if not os.path.isfile(path):
+        raise CheckError("صورة الأفاتار غير موجودة: %s" % path)
+    proc = _run(["ffprobe", "-v", "error", "-show_streams",
+                 "-of", "json", path], timeout=30)
+    if proc.returncode != 0:
+        raise CheckError("تعذرت قراءة الصورة عبر ffprobe: %s" % path)
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except ValueError:
+        raise CheckError("مخرجات ffprobe ليست JSON صالحًا")
+    streams = data.get("streams") or []
+    video = next((s for s in streams if s.get("codec_type") == "video"),
+                 None)
+    if video is None or not video.get("width"):
+        raise CheckError("تعذرت قراءة أبعاد الصورة: %s" % path)
+    return int(video.get("width")), int(video.get("height"))
+
+
+# سياسات نسبة أبعاد الأفاتار (نفس مجموعة avatar_settings).
+AVATAR_ASPECT_POLICIES = ("native", "crop", "pad", "rotate")
+# حد فرق النسبة في سياسة native.
+_AVATAR_ASPECT_TOLERANCE = 0.02
+
+
+def check_avatar_aspect(video_path, image_path, policy="native"):
+    """قارن نسبة أبعاد الفيديو بنسبة صورة الأفاتار (جولة v0.1.38 §7).
+
+    يرجع {"level": "ok"|"warn", "detail": str}:
+    - native: تحذير إن |نسبة الفيديو − نسبة الصورة| > 0.02.
+    - crop: سليم إن كان الفيديو 720×1280 وإلا تحذير.
+    - pad: تحذير دائم (سياسة مرفوضة للخط).
+    - rotate: تحذير إن كان الفيديو أفقيًا.
+    كل النتائج تحذيرات — لا فشل أبدًا. صورة مفقودة →
+    CheckError.
+    """
+    if policy not in AVATAR_ASPECT_POLICIES:
+        raise CheckError("سياسة أبعاد غير معروفة: %s" % (policy,))
+    info = probe(video_path)
+    width, height = info["width"], info["height"]
+    img_w, img_h = _probe_image_size(image_path)
+    video_ratio = width / height if height else 0.0
+    image_ratio = img_w / img_h if img_h else 0.0
+    if policy == "pad":
+        return {"level": "warn",
+                "detail": "سياسة pad مرفوضة للخط — الأشرطة "
+                          "الجانبية تشبه أشرطة Veo السوداء"}
+    if policy == "crop":
+        if (width, height) == VERTICAL_SIZE:
+            return {"level": "ok",
+                    "detail": "الفيديو 720×1280 — سليم لسياسة crop"}
+        return {"level": "warn",
+                "detail": "الفيديو %d×%d وليس 720×1280 — "
+                          "سياسة crop" % (width, height)}
+    if policy == "rotate":
+        if width > height:
+            return {"level": "warn",
+                    "detail": "الفيديو أفقي (%d×%d) — سياسة rotate"
+                              % (width, height)}
+        return {"level": "ok",
+                "detail": "الفيديو عمودي — سليم لسياسة rotate"}
+    # native
+    if abs(video_ratio - image_ratio) > _AVATAR_ASPECT_TOLERANCE:
+        return {"level": "warn",
+                "detail": "نسبة الفيديو (%.4f) تختلف عن نسبة "
+                          "الصورة (%.4f) — السياسة native"
+                          % (video_ratio, image_ratio)}
+    return {"level": "ok",
+            "detail": "نسبة الفيديو (%.4f) تطابق نسبة الصورة "
+                      "(%.4f)" % (video_ratio, image_ratio)}
+
+
 def detect_silences(path, noise_db=SILENCE_NOISE_DB,
                     min_seconds=SILENCE_MIN_SECONDS):
     """كشف فترات الصمت عبر ffmpeg silencedetect.

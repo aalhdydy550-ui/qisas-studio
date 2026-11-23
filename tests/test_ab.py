@@ -82,6 +82,28 @@ class TestCreateAb(unittest.TestCase):
             saved = json.load(f)
         self.assertEqual(saved["hook_a"], "هوك أ!")
 
+    def test_llm_model_recorded_when_given(self):
+        record = ab.create_ab(
+            self.video, "هوك أ!", "هوك ب!", self.tmp,
+            title="قصة",
+            thumbnail_fn=_fake_thumbnail([]),
+            duration_fn=lambda v: 50.0,
+            llm_model="gemini-3-flash-preview")
+        self.assertEqual(record["llm_model"],
+                         "gemini-3-flash-preview")
+        with open(record["record_path"], encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved["llm_model"],
+                         "gemini-3-flash-preview")
+
+    def test_llm_model_defaults_to_none(self):
+        record = ab.create_ab(
+            self.video, "هوك أ!", "هوك ب!", self.tmp,
+            title="قصة",
+            thumbnail_fn=_fake_thumbnail([]),
+            duration_fn=lambda v: 50.0)
+        self.assertIsNone(record["llm_model"])
+
     def test_identical_hooks_rejected(self):
         with self.assertRaises(ValueError):
             ab.create_ab(self.video, "نفس الهوك", "نفس الهوك",

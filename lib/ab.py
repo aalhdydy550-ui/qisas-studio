@@ -149,7 +149,8 @@ def score_hooks(hooks, story_text=None):
 
 def create_ab_variants(video, hooks, out_dir, title=None,
                        cost_per_video=0, thumbnail_fn=None,
-                       duration_fn=None, story_text=None):
+                       duration_fn=None, story_text=None,
+                       llm_model=None):
     """ولّد مصغرة لكل نسخة من n هوكًا وسجّلها في ab-<وقت>.json.
 
     أوقات المصغرات موزعة بالتساوي بين 35% و65% من المدة
@@ -159,6 +160,8 @@ def create_ab_variants(video, hooks, out_dir, title=None,
     (لكل نسخة + المجموع) للتوافق مع ab-results.
     cost_per_video: تقدير وحدات Veo لإنتاج كل بديل من جديد
     (الافتراضي 0 — نفس الفيديو، هوك+مصغرة فقط بلا توليد جديد).
+    llm_model (اختياري): الموديل الذي خدم اقتراح الهوكات
+    فعلًا — يُسجَّل في السجل إن وُجد.
     """
     video = os.path.abspath(os.path.expanduser(video))
     if not os.path.isfile(video):
@@ -220,6 +223,7 @@ def create_ab_variants(video, hooks, out_dir, title=None,
         "video": video,
         "title": title or "",
         "duration": round(duration, 1),
+        "llm_model": llm_model,
         "hook_a": hooks[0],
         "hook_b": hooks[1],
         "thumb_a": os.path.join(ab_dir, "thumb-1.jpg"),
@@ -239,14 +243,17 @@ def create_ab_variants(video, hooks, out_dir, title=None,
 
 
 def create_ab(video, hook_a, hook_b, out_dir, title=None,
-              thumbnail_fn=None, duration_fn=None, cost_per_video=0):
+              thumbnail_fn=None, duration_fn=None, cost_per_video=0,
+              llm_model=None):
     """ولّد مصغرتين (أ عند 35% من المدة، ب عند 65%) وسجّل
     الزوج في ab-<وقت>.json داخل out_dir. يرجع السجل.
     thumbnail_fn(video, hook, out, at_seconds) -> مسار؛
     duration_fn(video) -> المدة بالثواني.
     cost_per_video: تقدير وحدات Veo لإنتاج كل بديل من جديد
     (الافتراضي 0 — نفس الفيديو، هوك+مصغرة فقط بلا توليد جديد؛
-    وتوليد جديد كامل = 120 وحدة: 6 مقاطع × 20)."""
+    وتوليد جديد كامل = 120 وحدة: 6 مقاطع × 20).
+    llm_model (اختياري): الموديل الذي خدم اقتراح الهوكات
+    فعلًا — يُسجَّل في السجل إن وُجد."""
     video = os.path.abspath(os.path.expanduser(video))
     if not os.path.isfile(video):
         raise ValueError("ملف الفيديو غير موجود: %s" % video)
@@ -285,6 +292,7 @@ def create_ab(video, hook_a, hook_b, out_dir, title=None,
         "video": video,
         "title": title or "",
         "duration": round(duration, 1),
+        "llm_model": llm_model,
         "hook_a": hook_a,
         "hook_b": hook_b,
         "thumb_a": thumb_a,

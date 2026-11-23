@@ -44,6 +44,9 @@ def _ass_file(directory, name, dialogue_lines):
 
 
 class TestRealCaptions(unittest.TestCase):
+    @unittest.skipUnless(
+        os.path.isdir(SUBS_DIR),
+        "كابشنات حقيقية غائبة (~/workspace/videos/subs) — بيئة CI")
     def test_real_aisha2_and_najjar_pass(self):
         """الكابشنات الحقيقية (12 ملفًا) تمرّ بلا مشاكل تشكيل."""
         total_lines = 0
@@ -56,6 +59,9 @@ class TestRealCaptions(unittest.TestCase):
             total_lines += res["lines_checked"]
         self.assertEqual(total_lines, 30)
 
+    @unittest.skipUnless(
+        os.path.isdir(SUBS_DIR),
+        "كابشنات حقيقية غائبة (~/workspace/videos/subs) — بيئة CI")
     def test_real_dir_audit(self):
         """تدقيق مجلد فيه نسخ الكابشنات الحقيقية الـ12 فقط."""
         tmp = tempfile.mkdtemp()

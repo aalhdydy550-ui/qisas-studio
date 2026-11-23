@@ -78,6 +78,10 @@ class TestSceneCoverage(unittest.TestCase):
             _manifest([], 10.0))
         self.assertTrue(skipped)
 
+    @unittest.skipUnless(
+        os.path.isfile(os.path.expanduser(
+            "~/workspace/studio/runs/anza-20261122-150031/manifest.json")),
+        "بيان إنتاج العنزة غائب — بيئة CI")
     def test_real_anza_manifest_passes(self):
         # قاعدة التبليط تمر على بيان إنتاج حقيقي (العنزة ج1):
         # فجوات التنفس 0.3ث مسموحة، والذيل 0.14ث مسموح.
@@ -158,6 +162,10 @@ class TestBoundariesAndPhraseAudio(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("5.00", detail)
 
+    @unittest.skipUnless(
+        os.path.isfile(os.path.expanduser(
+            "~/workspace/studio/runs/anza-20261122-150031/manifest.json")),
+        "بيان إنتاج العنزة غائب — بيئة CI")
     def test_real_anza_boundary_with_words_passes(self):
         # حالة العنزة ج1 الحقيقية: حد 48.926ث نهاية عبارة =
         # نهاية كلمة «إيه؟» وبداية «الجزء» — بين كلمتين لا
