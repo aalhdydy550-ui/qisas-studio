@@ -1,472 +1,255 @@
-# studio — خط إنتاج موحّد لفيديوهات القصص
+# studio — Unified Story-Video Production Pipeline
 
-مشروع تنسيق واحد يجمع ثلاث أدوات مثبّتة على نفس الجهاز في خط إنتاج
-واحد لفيديوهات قصص قصيرة (فيسبوك + يوتيوب Shorts)، بأمر واحد.
+**One command turns a short story into a vertical video ready to publish on
+Facebook and YouTube Shorts.**
 
-> هذا المشروع **طبقة تنسيق فقط**: لا يحتوي كود أي من الأدوات الثلاث،
-> ولا يعدّلها. كل أداة مشروع مستقل برابطها ورخصتها (انظر «الأدوات»
-> أدناه)، و`studio` يستدعيها كما هي.
+`studio` is an **orchestration layer only**: it unifies three tools installed
+on the same machine into a single pipeline for short Arabic moral-story
+videos. It contains no code from any of the three tools and does not modify
+them.
 
-## المعمارية
+> **العربية أولًا — Arabic first.** The project, its interface, and its main
+> documentation are Arabic. This file is the English gateway for new users.
+> The full Arabic README is [`README-AR.md`](README-AR.md).
+
+---
+
+## What it does
 
 ```
-القصة (نص قصير)
+Story text
    │
    ▼
-OmniRoute  — طبقة الذكاء: هوك/عنوان/كابشن عبر نماذج مجانية (مع fallback)
+OmniRoute   — intelligence: hook / title / caption via free models (with fallback)
    │
    ▼
-OpenMontage — خط الإنتاج: بحث، سيناريو، سرد Piper، صور مخزون، تركيب
+OpenMontage — production: research, script, Piper narration, stock images
    │
    ▼
-Concat     — التجميع النهائي: مشروع حقيقي قابل للتعديل + تصدير
+Concat      — final assembly: a real, editable project + export
    │
    ▼
-فيديو عمودي 720×1280 جاهز للنشر
+Vertical 720×1280 video ready to publish
 ```
 
-| الطبقة | الأداة | دورها | لغة |
+| Layer | Tool | Role | License |
 |---|---|---|---|
-| الذكاء | [OmniRoute](https://github.com/ChrisCompton/omniroute) (MIT) | بوابة نماذج OpenAI-compatible؛ توليد الهوك والعناوين والكابشن | TypeScript |
-| الإنتاج | [OpenMontage](https://github.com/OpenMontageInc/OpenMontage) (AGPL-3.0) | خطوط إنتاج بالوكلاء: سيناريو، سرد، صور، تركيب Remotion | Python/Node |
-| التجميع | [Concat](https://github.com/jub0t/Concat) (AGPL-3.0) | محرر فيديو محلي بخادم MCP بلا شاشة؛ مشروع قابل للتعديل وتصدير | Rust |
+| Intelligence | [OmniRoute](https://github.com/ChrisCompton/omniroute) | OpenAI-compatible model gateway; hook, title, caption generation | MIT |
+| Production | [OpenMontage](https://github.com/OpenMontageInc/OpenMontage) | Agent pipelines: script, narration, images, Remotion assembly | AGPL-3.0 |
+| Assembly | [Concat](https://github.com/jub0t/Concat) | Local headless video editor with an MCP server; editable project + export | AGPL-3.0 |
 
-## مميزات النظام
+## Who it is for
 
-**الإنتاج — من نص لفيديو جاهز**
-- بأمر واحد (`studio.py run`) تتحول القصة إلى فيديو عمودي 720×1280 جاهز للنشر على فيسبوك ويوتيوب Shorts.
-- توليد حسب الطلب: أي مستخدم يكتب وصف الفيديو (برومبت) والنظام يولّده كاملًا تلقائيًا — مثل Flow — عبر صفحة «طلب فيديو» وأمر `client-run` ومراقبة كل 15 دقيقة للطلبات الجديدة.
-- الهوك والعنوان والكابشن تُولَّد بالذكاء الاصطناعي من نماذج مجانية (DuckDuckGo AI عبر OmniRoute) بلا مفاتيح مدفوعة، مع بديل تلقائي عند الفشل — وسلسلة بدائل كاملة (OmniRoute ثم Gemini عبر مساعد آمن بمفتاح بديل، بلا مفتاح خام أبدًا) مع حالة حصة وتهدئة 10 دقائق بعد 429/402 وأمر `llm-status` وقسم `doctor --llm`.
-- سرد عربي بصوت رجل (Piper)، والكتابة على الشاشة تظهر متزامنة مع الكلام عبارة بعبارة (ملفات ASS).
-- صورة مصغرة لكل فيديو بنص الهوك أعلى الصورة، وشعار الصفحة يُضاف تلقائيًا أعلى اليمين.
-- 3 بطاقات اقتباس لكل قصة (عبرة وحكمة وموعظة) بأسلوب ذهبي، تُحفظ صورًا مستقلة.
-- فيديو طويل أسبوعي 8–12 دقيقة أفقي 1280×720 (`long-video`): مقدمة بهوك + فصل لكل قصة بعبرتها + خاتمة بدعوة اشتراك واحدة، مع ملفي طوابع الفصول ووصف يوتيوب — بلا رصيد Veo.
-- الأسبوع التلقائي (`long-video --auto-week`): يختار قصص الأسبوع المنشورة من الطابور ويبني الفيديو الطويل منها بلا تجميع يدوي، ويُسمّي ما ينقصه إن قلّ الصالح عن قصتين.
-- موسيقى خلفية مدمجة: نوكتورن شوبان رقم 20 (بيانو هادئ، ملكية عامة) يُشغَّل افتراضيًا في الفيديو الطويل ويُخفَّض تلقائيًا تحت السرد.
-- تحليل الأداء (`analyze`): آخر فيديو منشور بأرقام حقيقية من فيسبوك ويوتيوب جنبًا إلى جنب + اقتراحات تحسين مشتقة من الأرقام — بلا أرقام مخترعة أبدًا.
-- إضافة قصة للطابور بسطر واحد (`queue add --title ... --text-file ...`) مع رفض المكرر.
-- صوت ثانٍ اختياري (`--voice gtts` في `long-narration` و`long-video`)؛ والافتراضي يبقى الراوي الرجل (Piper).
-- مساعدة عربية لكل الأوامر (`studio.py help-ar`).
-- وجه ناطق: SadTalker (سرد صوتي ← شفاه متزامنة، يعمل على GPU المجاني في Kaggle في دقيقتين) وLivePortrait (فيديو قيادة ← صورة متحركة).
+- **Arabic story-page owners** who publish short moral stories (40–60 s,
+  vertical 9:16) twice a day on Facebook and YouTube Shorts.
+- **Anyone who wants a $0 daily video line**: the free path (Piper narration +
+  stock images + local assembly) costs nothing per video.
+- **Developers** who want a tested, self-healing CLI pipeline they can extend
+  (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
-**النشر والنمو**
-- أمر نشر موحّد (`publish`): فيديو واحد إلى فيسبوك (Reel على الصفحة) ويوتيوب (Data API v3) مع `--dry-run` يعرض الحمولة الدقيقة قبل النشر، وحد 1,024 حرفًا لكابشن فيسبوك وحزمة هاشتاجات ثابتة.
-- صيغة منشورات مثبتة: هوك صادم في أول ثانيتين، والعبرة في أول تعليق، وسؤال محيّر في الختام، وحزمة هاشتاجات ثابتة.
-- تحليل فيديو مرجعي (`analyze-ref`): يفكك أسلوب أي منافس (الهوك، سرعة السرد، سؤال الختام) من بياناته وتفريغ صوته — للتعلم من الأسلوب فقط، وليس لنسخ المحتوى.
-- 4 خلفيات تجميع: Concat (مشروع قابل للتعديل)، وheadless-editor (أسرع، بلا Vulkan)، وMLT (ملف `.mlt` يفتح في Kdenlive وShotcut)، وOpenReel (الوضع التلقائي لـOpenReel — يقبل مشاريع `openreel-edit` من المحرر، أبطأ ~3× بلا GPU).
+## Highlights (v0.1.40)
 
-**الربح**
-- نظام طلبات عملاء جاهز: صفحة «طلب فيديو» — العميل يكتب وصف الفيديو والنظام يولّده تلقائيًا، والدفع فودافون كاش.
-- أدوات مفاتيح API مجانية (`studio/free-keys/`): كتالوج وإعداد آمن لمفاتيح Groq وOpenRouter وHuggingFace المجانية.
+**Production — from text to a finished video**
+- One command (`python3 studio.py run`) turns a story into a 720×1280
+  vertical video for Facebook and YouTube Shorts.
+- On-demand generation: any user describes a video and the system builds it
+  end-to-end (like Flow) — a "request a video" page, a `client-run` command,
+  and a watcher that checks for new orders every 15 minutes.
+- AI hook / title / caption from free models (DuckDuckGo AI via OmniRoute),
+  with an automatic fallback chain:
+  `ddgw/gpt-5.4-mini` → `groq/openai/gpt-oss-120b` → `gemini-3.1-flash-lite` →
+  `gemini-3-flash-preview` → `ollama/qwen2.5:7b` — see `llm-status`.
+- Arabic narration in a fixed male voice (Piper, `ar_JO-kareem-medium`),
+  with on-screen writing synced phrase-by-phrase to the speech (ASS files),
+  **always below the picture — never at the top**.
+- A thumbnail for every video (hook text + page logo), 3 quote cards per
+  story, and a weekly long video (8–12 min, horizontal 1280×720) built
+  automatically from the week's published stories — no Veo credits.
+- 4 assembly backends: Concat (editable project, default), headless-editor
+  (fastest, no Vulkan), MLT (`.mlt` timeline that opens in Kdenlive/Shotcut),
+  OpenReel (accepts projects from the OpenReel editor).
 
-**التقنية**
-- إصلاح ذاتي: النظام يعيد تثبيت أدواته وملف الخدمة بنفسه بعد أي إعادة تشغيل للجهاز، بلا تدخل يدوي.
+**Publishing and growth**
+- One publish command (`publish`): one video to Facebook (Page Reel) and
+  YouTube (Data API v3), with `--dry-run` showing the exact payload first.
+- A proven post format: shocking hook in the first 2 seconds, the moral in
+  the first comment, a puzzling closing question, a fixed hashtag pack.
+- Real performance analysis (`analyze`): the last published video with real
+  numbers from Facebook and YouTube side by side — never invented numbers —
+  plus improvement suggestions derived from those numbers.
 
-**الجودة والتتبع (v0.1.37)**
-- قاعدة دائمة: كل نصوص الشاشة في الفيديو أسفل فقط — الهوك والعبارات أسفل الشاشة في كل خلفيات التجميع الأربع (Concat وheadless-editor وMLT وOpenReel)، بلا أي نص في الأعلى إطلاقًا؛ واختبار انحدار يثبت غياب أي موضع أعلى في المشاريع المولَّدة.
-- بيان مصدر (`<فيديو>.manifest.json`) مع كل فيديو: العنوان والهوك والقصة والعبرة والمصدر + المشاهد والعبارات الموقَّتة بتوقيتات الكلمات + بصمة sha256؛ و`check` يعرض حالته، و`publish` يرفض فيديو جديد بلا بيان (إلا مع `--allow-missing-manifest`)؛ والفيديوهات القديمة (قبل v0.1.37) تحذير «legacy» فقط لا فشل — وأمر `manifest` يولّد بيانًا لأي فيديو موجود.
-- تأكيدات تغطية وحدود آمنة في `check` (عند وجود بيان بمشاهد موقَّتة): المشاهد تبلّط السرد بلا فجوة ولا تداخل، وحد مشهد داخل كلمة منطوقة = فشل (بسماحية 80ms — يحكم بتوقيتات الكلمات لا بالصمت، فالسرد المتصل بلا صمت لا يُفشَل خطأً)، وكل عبارة ASS لها صوت؛ وكل فحص يستخرج عيّنة سلوكية (3 لقطات + معاينة 3ث في `runs/samples/<الفيديو>/`) بلا أثر على النجاح/الفشل.
-- مجموعة تقييم ثابتة ببذرة (`lib/eval_set.json`، بذرة 20261122، 5 فيديوهات حقيقية بأرقام مقاسة بأدوات المشروع نفسها): `analyze --snapshot` يعيد قياسها ويقارن بالأساس، و`ab --eval-set` يقترح هوكات بديلة ويقارنها بدرجات الأساس.
-- تحقق بنية الطابور (`queue validate`، قراءة فقط): سطور انتظار سليمة بلا أرقام أو عناوين مكررة وبلا مواعيد Unix مكررة وبلا ملفات mp4 مفقودة — طابور معطوب يوقف `daily` و`batch` قبل أي تخطيط، ويُفحص تلقائيًا ضمن `doctor` (صار 25 فحصًا).
-- حارس تسرّب أسرار (`lib/secret_guard.py`): مسح الشجرة بأنماط الأسرار + تحقق `.gitignore` قبل أي رفع؛ وقائمة سماح صريحة لرقم فودافون كاش ومعرّف الصفحة فقط.
-- لقطة خام لأداء الفيديو: أي `analyze` يحفظ الاستجابتين الخام حرفيًا في `runs/insights-<وقت>.json` مع بصمة sha256 قبل حساب أي ملخص — والملخص نفسه قابل لإعادة الاشتقاق من اللقطة.
-- سجل تشغيل (`runs/run-<وقت>-<أمر>.json`): الإعدادات المحلولة (الصوت وatempo والخلفية والتدرج والشعار والرصيد) + الحالة + الأوقات بتوقيت القاهرة + المخرجات؛ ويُطبع ملخص الإعدادات قبل كل تشغيل.
-- عيّنة المشهد الأول في التجريبي: `daily --dry-run` و`batch --dry-run` يطبعان بعد الخطة الكابشن الأول وأول جملة سرد ومدة المقطع وسرعة atempo — بلا أي إنفاق.
-- قص المخرجات الطويلة (رأس+ذيل) في رسائل الخطأ، وموجّه نظام واحد مشترك لكل استدعاءات LLM (`lib/prompts/story_system.md` — الراوي رجل، والهوك لا يبدأ برقم، و40–60 ث، و«بكرة 7 مساءً»، و«عندك قصة حصلتلك؟»، و#قصص_وعبر)، ومُثبِّتات عدائية (`tests/fixtures/adversarial/` + مولّد + `tests/test_demo_adversarial.py`)، وهوية اختبار مزروعة لبيانات العملاء الوهمية (أرقام واتساب مصرية بصيغها الثلاث من بذرة واحدة — وأصلح معها قبول بادئة `0020` في التحقق الحقيقي).
-- `grade --list-presets` يعمل وحده الآن (بلا `--video`)، و`melt` في MLT صار من حزمة apt أولًا (بعد أن كسرت إعادة تشغيل الـVM نسخة `~/opt/mlt` المنزلية) مع إصلاح إيقاف مهلة ريندر MLT: العملية اليتيمة تُقتل مع مجموعتها كاملة.
+**Quality and trust**
+- **1524/1524 automated tests green** (v0.1.40), `doctor` 26/26 checks,
+  CI on GitHub.
+- A provenance manifest (`<video>.manifest.json`) with every video: title,
+  hook, story, moral, source, scenes, word-timed phrases, sha256 fingerprint.
+- A secret-leak guard (`lib/secret_guard.py`) scans the tree before any
+  upload; secrets live in 600-permission files covered by `.gitignore`.
+- Self-healing: the system reinstalls its own tools and service file after
+  any machine restart, with no manual step.
 
-**سلسلة الذكاء والأفاتار (v0.1.38)**
-- سلسلة بدائل LLM: كل استدعاء ذكاء يجرّب المزودين بالترتيب (OmniRoute: الموديل ثم البديل، ثم Gemini `gemini-3-flash-preview` عبر مساعد آمن بمفتاح بديل — المفتاح الخام لا يظهر في أي ملف أو وسيط أو سجل أبدًا)؛ وخطأ الحصة (429/402) يُدخل المزود في تهدئة 10 دقائق تُتخطى تلقائيًا، وخطأ المصادقة (401/403) لا تهدئة له، والفشل الكلي فئة عربية `llm_all_failed`؛ والحالة في `runs/llm-provider-state.json` (عدادات يومية دائمة) مع أمر `llm-status` وقسم `doctor --llm` (4 فحوصات منفصلة — عدد فحوصات doctor الأساسية يبقى 26).
-- الموديل الذي خدم فعلًا يُسجَّل في المواضع الستة (script وpublish-meta وideas وab وab-variants وab-eval-set) + سلسلة المزودين في سجل التشغيل (`llm_chain`).
-- وحدات الأفاتار الناطق (LongCat — تحضير للاختبار على Kaggle، بلا ريندر محلي بعد): وظيفة بمخطط LongCat (`lib/avatar_job.py`: prompt وcond_image وcond_audio person1/person2 وaudio_type para/add وsettings وaudio.kind=narration — تحقق: صورة موجودة + صوت ≤300ث + para بمدتين متطابقتين ±0.1ث + قاعدة «الصوت النظيف فقط» التي ترفض فقط صوتًا مستمرًا ≥15ث بلا صمت ومتوسطه >-30dB — ومعايرة على 10 ملفات سرد حقيقية: كلها تمر لأن مدتها <15ث رغم صمت 0.000 في بعضها)، وبرومبت أداء منظَّم بأربع خانات (شخصية/تعبير/إيماءة/كاميرا) لثلاثة أنواع مشاهد، وملفات تعريف عتاد (t4x2-int8 الافتراضي وa100-bf16 وrtx4090-int8 مع رفض fp8+int8 معًا)، وملف أداء صوت (منحنى طاقة astats ثانية بثانية + خريطة صمت + عبارات مؤكَّدة ≥6dB فوق الوسيط)، ونسب عرض عمودية فقط قابلة للقسمة على 8 (الافتراضي 720×1280؛ و720×1092 حجم بورتريه المدخل في الاختبار لا أبعاد مخرج)؛ والتوصيل: أمر `avatar-job` (--validate/--template/--list-profiles) + علم `check --avatar-image` (قاعدة أبعاد في lib/check.py — تحذير فقط) + علم `analyze --dna --audio-profile` (ملف الأداء يُلحق بالتقرير، وفشله لا يُفشل DNA).
-- إصلاح CI الأحمر: سير العمل يثبّت ffmpeg (وmelt كمحاولة best-effort)؛ والاختبارات المعتمدة على بيئة المستخدم (فيديو الديمو والكابشنات ومشروع العنزة وPiper وملف الخدمة) تتخطى نظيفًا عند غيابها بدل الفشل، مع اختبارات انحدار تثبت التخطي (`tests/test_ci_skips.py`).
+**Earning**
+- A ready client-order system: a "request a video" page — the client writes
+  a description and the system generates the video automatically. The first
+  10 orders per client are free; payment is required from the 11th.
+- Free-API-key tooling (`studio/free-keys/`): catalogue and safe setup for
+  free Groq, OpenRouter, and HuggingFace keys.
 
-**الأمان (اختبار اختراق دفاعي 0.1.22، 2026-11-21)**
-- كل مسارات الإدخال محصورة: أسماء المشاهد والفصول والملفات (`--chapter-dir` و`--cover` و`--text-file` وملفات الفصول والموسيقى) تُرفض إن هربت خارج `~/workspace` — بما فيه عبر الروابط الرمزية (`lib/paths.py`).
-- نصوص القصص والعناوين لا تحقن وسوم ASS ولا أوامر shell: كل استدعاءات النظام قوائم وسائط بلا `shell=True`، والسرد عبر stdin؛ والهوك والكابشن يُهرَّبان قبل الريندر.
-- خادم OmniRoute على `127.0.0.1:20128` فقط (loopback) مع `REQUIRE_API_KEY=true` — و`status` يعرض عنوان الربط الفعلي؛ وبلا نسخ `.env` نائمة في حزمة npm.
-- جسر OpenCut: `Bearer` فقط (لا `?token=` في URL أبدًا) + روابط وسائط موقّعة HMAC قصيرة الأجل (10 دقائق) + `/api/assets` محصور في مجلدات الأصول المعروفة ومجلدات المشاريع + CORS لأصول loopback فقط.
-- طلبات العملاء: واتساب بصيغة مصرية صارمة، وكتابة ذرية مقفلة لملف الطلبات، ورفض الروابط في نصوص القصص المولّدة، وشعار العميل محصور داخل مجلد طلبه؛ وصفحة «طلب فيديو»: عمليتا المالك للمالك فقط، و`get_order` برقم الطلب + رمز وصول، وحدّ 3 طلبات/ساعة.
-- الأسرار (`client_secrets.json` و`youtube-token.json` و`.env` وملفات التوكنات) بصلاحيات 600 وفي `.gitignore` — وقبل أي رفع إلى GitHub تحقق أولًا: `git check-ignore client_secrets.json youtube-token.json config.yaml .env` (يجب أن تظهر كلها كمُتجاهَلة)؛ تذكير: الرفع عبر Contents API يتجاوز `.gitignore`، فالتحقق اليدوي قبل الرفع إلزامي.
-- 988 اختبارًا آليًا ناجحًا، منها 25 اختبار انحدار أمني (`tests/test_pentest_fixes.py`) + 17 فحصًا حيًا لجسر OpenCut (`bun run test-bridge-security` في `apps/mcp`) + 7 لخادم MCP في headless-editor.
-**للمستخدم الجديد**
-- مثبّت واحد (`bash setup.sh`): يفحص كل شيء — الأدوات، والموديلات، والخطوط، والشعار، والخادم — ويطبع PASS/FAIL صادقًا لكل فحص، وينشئ `config.yaml` من المثال إن غاب؛ آمن لإعادة التشغيل. أو فحص الحالة فقط: `studio.py doctor`.
-- قصة تجريبية مدمجة (`run --demo`): فيديو عمودي حقيقي 720×1280 في ~دقيقة بالمسار المجاني فقط (Piper + خلفيات مولّدة + شعار) — بلا مفاتيح ولا رصيد ولا إنترنت.
-- 988 اختبارًا آليًا ناجحًا، وCI على GitHub، ومحرر OpenCut من المتصفح بخادم MCP.
-- المسار المجاني (OpenMontage) يعمل بلا رصيد؛ ومقاطع Veo الواقعية تحتاج حساب Google AI Pro الخاص بالمستخدم.
-- المنصات: النظام مبني على لينكس (أوبونتو). على ويندوز استخدم WSL2 + أوبونتو — هذه هي الطريقة المدعومة. على macOS يعمل عمومًا، لكن طبقة الاستعادة التلقائية (`setup-env.sh`) لينكس فقط: تثبّت حزم apt (مثل ffmpeg وmesa-vulkan-drivers وmelt وxvfb) وتعيد روابط `/usr/local/bin`، فعلى macOS ثبّت مكافئاتها يدويًا (مثلًا عبر Homebrew) ولا تعمل الاستعادة التلقائية؛ ورسالة `setup.sh` عند غياب python3 تقترح `apt-get` (دبيان/أوبونتو).
+**Independent comparison (2026-11-23): qisas-studio ranked 1st, 9.0/10** —
+the only project covering the full daily Arabic line (generation + assembly +
+publishing + scheduling + client orders + Arabic). Nearest rival
+MoneyPrinterTurbo scored 7.0, AutoContent.Live 5.5. Full comparison (Arabic):
+`~/workspace/comparison-2026-11-23/COMPARISON-AR.md` (outside this repo).
 
-## التشغيل السريع
+## Quick start
 
 ```bash
-# 1) تأكد أن الخادم والثنائيات جاهزة
-python3 studio.py status
-
-# 2) خط الإنتاج الكامل لقصة (مثال: العنزة من مشروع OpenMontage الجاهز)
-python3 studio.py run --story anza --project anza-part1 \
-    --out ~/workspace/videos/studio-test.mp4 --allow-fallback
-```
-
-الخطوات المنفصلة (نفس ما يفعله `run` بالترتيب):
-
-```bash
-python3 studio.py script   --story anza --allow-fallback
-python3 studio.py produce  --project anza-part1 --run <RUN_ID>
-python3 studio.py assemble --run <RUN_ID> --out ~/workspace/videos/out.mp4
-# أو تجميع بنواة headless-editor بدل Concat (نفس الأصول والنتيجة، أسرع):
-python3 studio.py assemble --run <RUN_ID> --out ~/workspace/videos/out.mp4 \
-    --backend headless
-# أو تجميع بتايم لاين MLT/melt (ملف .mlt يفتح في Kdenlive/Shotcut):
-python3 studio.py assemble --run <RUN_ID> --out ~/workspace/videos/out.mp4 \
-    --backend mlt
-# أو تجميع بالوضع التلقائي لـOpenReel (يقبل مشاريع openreel-edit من المحرر):
-python3 studio.py assemble --run <RUN_ID> --out ~/workspace/videos/out.mp4 \
-    --backend openreel
-# ونفس الخيار في `run` الكامل: --backend headless | --backend mlt | --backend openreel
-# وتدرج لوني بعد الريندر وقبل الشعار (أي خلفية):
-python3 studio.py assemble --run <RUN_ID> --out ~/workspace/videos/out.mp4 \
-    --grade warm
-```
-
-كل تشغيل ينشئ مجلدًا في `runs/<story>-<وقت>/` فيه:
-`script-ai.json` (الهوك والكابشن)، `manifest.json` (الأصول)،
-`assets/` (صور + سرد + كتابة)، `concat-mcp.jsonl` (سجل التجميع)،
-`headless-project.json` (مشروع JSON عند استخدام `--backend headless`)،
-`mlt-project.mlt` (تايم لاين MLT عند استخدام `--backend mlt`)،
-`openreel-project.json` (مشروع openreel-auto v1 عند استخدام
-`--backend openreel`)،
-`run-log.json` (الخطوات والأزمنة والحالة).
-
-```bash
-# صورة مصغرة 720×1280 للفيديو (لقطة + نص الهوك أعلى الصورة)
-python3 studio.py thumbnail --video ~/workspace/videos/hamati-full.mp4 \
-    --hook "طردتني في نص الليل… وبعد سنة باست إيدي!"
-# أو من تشغيل سابق (يأخذ الفيديو والهوك من سجله)
-python3 studio.py thumbnail --run anza-20261120-210931
-# صورة أفقية 1280×720 للفيديو الطويل (نفس الأسلوب، خط أكبر)
-python3 studio.py thumbnail --video ~/workspace/videos/long-video-test.mp4 \
-    --hook "3 قصص مؤثرة | القصة الكاملة" --long
-
-# الفيديو الطويل الأسبوعي (أفقي 1280×720، 8–12 دقيقة، بلا رصيد Veo):
-# مقدمة بهوك + فصل لكل قصة (بطاقة عنوان + محتوى بعبرته) + خاتمة باشتراك
-# واحد. السرد Piper مقسّم (رجل)، الكتابة كلمة-بكلمة، الشعار تلقائي،
-# وبلا بطاقات اقتباس أبدًا. ينتج أيضًا طوابع الفصول ووصف يوتيوب
-# بجانب الفيديو (-timestamps.txt و-description.txt).
-python3 studio.py long-video --out ~/workspace/videos/long-week.mp4 \
-    --title "5 قصص مؤثرة | القصة الكاملة" \
-    --hook "5 قصص هزّت الأسبوع ده… اسمعهم كاملين" \
-    --project anza-part1 \
-    --chapter-dir ~/workspace/studio/runs/long-video-test/chapters/hamati \
-    --chapter-dir ~/workspace/studio/runs/long-video-test/chapters/najjar
-# أو بملف فصول JSON (نفس الخيارات: story/project/run/chapter-dir/text)
-python3 studio.py long-video --out ~/workspace/videos/long-week.mp4 \
-    --chapters-file ~/workspace/studio/runs/long-video-test/chapters.json
-# مصادر الفصول: --story (قصة من الطابور بمشروع جاهز)، --project (مشروع
-# OpenMontage)، --run (تشغيل سابق)، --chapter-dir (مجلد فصل مُعدّ:
-# title.txt + narration.wav/scene*.wav + phrases.ass/scene*.ass +
-# images/ أو cover.jpg)، --chapter-text + --text-file + --cover (فصل نصي
-# يُركَّب سرده بـPiper). --music اختياري (موسيقى خلفية تُخفض تلقائيًا؛
-# القصيرة تُكرَّر حتى تغطي الفيديو — والافتراضي ملف شوبان المدمج).
-# --atempo 1.25 لإيقاع Kwai السريع. --voice gtts لصوت ثانٍ اختياري.
-#
-# أو الأسبوع تلقائيًا من الطابور (بلا تجميع يدوي):
-# python3 studio.py long-video --auto-week --out ~/workspace/videos/long-week.mp4
-
-# سرد طويل مقسّم وحده (يُستخدم داخل long-video، أو مستقلًا):
-python3 studio.py long-narration --text-file ~/workspace/story.txt \
-    --out /tmp/long-narr.wav --gap 0.35 --atempo 1.0
-
-# وضع تجريبي: يطبع الخطوات دون تنفيذ
-python3 studio.py run --story anza --project anza-part1 \
-    --out ~/workspace/videos/out.mp4 --dry-run
-
-# لمستخدم جديد: مثبّت واحد يفحص كل شيء (آمن لإعادة التشغيل)
+# 1) One installer checks everything (safe to re-run)
 bash setup.sh
-# أو فحص الحالة فقط (بلا إصلاح):
+# ...or check status only (no repairs):
 python3 studio.py doctor
 
-# القصة التجريبية المدمجة — فيديو عمودي حقيقي في ~دقيقة، بلا مفاتيح
+# 2) A real built-in demo video — vertical 720×1280 in ~1 minute,
+#    free path only (Piper + generated backgrounds + logo).
+#    No keys, no credits, no internet.
 python3 studio.py run --demo
 
-# النشر: فيسبوك (Reel) + يوتيوب — --dry-run يعرض الحمولة دون نشر
+# 3) The full pipeline for a story (example: the goat, from a ready
+#    OpenMontage project)
+python3 studio.py run --story anza --project anza-part1 \
+    --out ~/workspace/videos/studio-test.mp4 --allow-fallback
+
+# 4) Publish (dry-run shows the exact payload before anything goes live)
 python3 studio.py publish --video ~/workspace/videos/demo-*.mp4 \
-    --title "باع بقرته ووزّع البذور | قصة قصيرة" --dry-run
-# النشر الحقيقي (بدون --dry-run): فيسبوك يُنشر فورًا عبر facebook-cli،
-# ويوتيوب يحتاج إعداد OAuth لمرة واحدة (انظر «النشر على يوتيوب» أدناه).
-
-# الجولة 7 (0.1.31) — دفعات + نشر أوسع + تحليل DNA + سقف Veo:
-# دفعة جماعية من الطابور (تجريبي افتراضي يطبع الخطة؛ التنفيذ فقط مع --execute):
-python3 studio.py batch --count 3 --source openmontage
-python3 studio.py batch --count 2 --source veo --execute
-# نشر TikTok/Instagram (تجريبي افتراضي؛ الرفع الحقيقي غير مختبَر — لا حسابات مربوطة):
-python3 studio.py publish --video ~/workspace/videos/demo-*.mp4 \
-    --title "عنوان الفيديو" --platforms tiktok,instagram --dry-run
-# خطوات الربط اليدوي (تطبع الخطوات وتحفظ أي توكن في ملف 600):
-python3 studio.py tiktok-auth
-python3 studio.py instagram-auth
-# تحليل DNA الفيروسي لفيديو (هوك 0–10 + إيقاع + صمت + كثافة كلمات + حكم):
-python3 studio.py analyze --dna --video ~/workspace/videos/najjar-full.mp4
-# سقف إنفاق Veo بالوحدات (الرفض فوق السقف برسالة عربية قبل أي إنفاق):
-python3 studio.py balance --cap 600
-# خطة مشاهد قصة قبل إنفاق أي رصيد (تُطبع وتُحفظ؛ توقف تفاعلي للموافقة أو --auto-approve):
-python3 studio.py scene-plan --story 4
-
-# دفعة جماعية من ملف الطابور (القصص الجاهزة فقط — بلا مشروع تُتخطى)
-python3 studio.py run-queue --limit 2 --dry-run
-python3 studio.py run-queue --limit 2 --allow-fallback
-# النتائج في runs/queue-<تاريخ>.json + خلاصة تُلحق بملف الطابور
-# ملحوظة: `batch --count N` هو مسار الدفعات الحالي — يفحص رصيد Veo
-# (120 وحدة للفيديو) والسقف قبل التخطيط، وتجريبي افتراضيًا (التنفيذ
-# فقط مع --execute). أما `run-queue` فأمر إرثي للتوافق فقط: ينتج من
-# ملف الطابور مباشرةً بلا فحص رصيد أو سقف، ويبقى يعمل كما هو.
-
-# تحليل فيديو مرجعي (هوك/إيقاع/ختام) — تحليل خاص فقط، بلا إعادة نشر
-python3 studio.py analyze-ref --url "https://www.youtube.com/shorts/3IH3H8wWPw8"
-# النتيجة JSON في runs/ref-<id>.json؛ الصوت المنزّل يُحذف بعد التحليل
-
-# كابشنات ASS من faster-whisper — خيار تجريبي فقط (انظر WHISPER-TEST.md)
-# يعمل من بيئة faster-whisper الخاصة بالمشروع، وليس من python3 النظامي.
-# يُستخدم فقط حين يكون النص المعروض مطابقًا للنص المنطوق؛
-# راجع النص المسموع قبل النشر (small يخطئ في ~22% من الكلمات).
-~/workspace/studio/.venv-whisper/bin/python studio.py whisper-ass \
-    --audio ~/workspace/videos/narration-male/hamati-scene1.wav \
-    --out /tmp/scene1-whisper.ass --model small
-
-# تنظيف صمت الصوت الخام (قبل التجميع فقط — أبدًا على السرد النهائي)
-python3 studio.py clean-audio --input /tmp/raw.wav --out /tmp/clean.wav
-# مرفوض تلقائيًا على ملفات narration/ وnarration-male/ إلا مع --force
-
-# تركيبة MoviePy اختيارية: Ken Burns + نص عربي متحرك + صوت
-# (من بيئة MoviePy فقط — TextClip لا يشكّل العربية، فالنص يُرسم
-# بـPillow مع direction=rtl داخل الوحدة)
-~/workspace/studio/.venv-moviepy/bin/python studio.py fx \
-    --image <صورة> --audio <سرد.wav> --text "عنزة صغيرة هزّت القاهرة" \
-    --out /tmp/fx.mp4 --duration 5
-
-# كابشنات كاريوكي كلمة-بكلمة (منطق Capite مُعاد تنفيذه — انظر CAPITE-TEST.md)
-# للعربية: تمييز الكلمة النشطة باللون فقط (بلا {\kf})؛ خيار تجريبي فقط
-~/workspace/studio/.venv-whisper/bin/python studio.py karaoke-ass \
-    --audio ~/workspace/videos/narration-male/hamati-scene1.wav \
-    --out /tmp/scene1-karaoke.ass --model small
-
-# قص مقطع بلا إعادة ترميز (ما يعادل LosslessCut — انظر LOSSLESSCUT-TEST.md)
-# يلتصق بحدود الإطارات (±~0.2 ث)؛ --exact يعيد الترميز لقطع دقيق
-python3 studio.py trim --input <مقطع.mp4> --out /tmp/cut.mp4 \
-    --start 2.0 --end 6.0
-
-# الاختبارات الآلية
-python3 -m unittest discover -s tests -v
+    --title "He sold his cow and shared the seeds | Short story" --dry-run
 ```
 
-## الإعداد
+New here? Follow **[docs/getting-started.md](docs/getting-started.md)**
+(also in English: [docs/getting-started-en.md](docs/getting-started-en.md)) —
+from install to your first video, step by step.
 
-الأفضل: شغّل `bash setup.sh` — يفحص كل شيء وينشئ `config.yaml` من
-`config.example.yaml` إن غاب (أو انسخه يدويًا وعدّل المسارات عند الحاجة).
-لا تضع أي مفاتيح في ملفات الإعداد أبدًا؛ مفتاح بوابة OmniRoute (لو وُجد)
-يمرَّر عبر متغير البيئة `OMNIROUTE_API_KEY` فقط.
+More commands and the full reference live in the Arabic README:
+[`README-AR.md`](README-AR.md) — including the daily queue, batches,
+long video, thumbnails, `analyze`, `batch`, `scene-plan`, `balance`,
+and troubleshooting.
 
-## النشر على يوتيوب (إعداد لمرة واحدة)
+## Requirements
 
-فيسبوك يعمل مباشرة عبر `facebook-cli` المتصل. أما يوتيوب فيحتاج OAuth
-لمرة واحدة (مجاني، بلا خدمة مدفوعة):
+- **Linux (Ubuntu)** — built for it. On Windows use WSL2 + Ubuntu (the
+  supported way). On macOS it generally works, but the auto-restore layer
+  (`setup-env.sh`) is Linux-only: install its equivalents manually
+  (e.g. via Homebrew) and the auto-restore will not run.
+- Python 3, ffmpeg, and the three orchestrated tools (the installer checks
+  them all and reports PASS/FAIL honestly per check).
+- Never put secrets in config files: copy `config.example.yaml` to
+  `config.yaml` to change paths/endpoints; an OmniRoute gateway key (if any)
+  goes through the `OMNIROUTE_API_KEY` environment variable only.
 
-1. في Google Cloud Console: أنشئ مشروعًا، وفعّل **YouTube Data API v3**،
-   وأنشئ بيانات اعتماد **OAuth client ID** من نوع **Desktop app**،
-   وحمّل ملف `client_secrets.json` إلى مجلد studio.
-2. شغّل `python3 studio.py youtube-auth` — يفتح رابطًا في المتصفح؛ سجّل
-   دخولك بحساب القناة ووافق، فيُحفظ التوكن في `youtube-token.json`.
-3. بعدها `studio.py publish` يرفع على يوتيوب تلقائيًا.
-   بلا توكن: يُنشئ `publish` حزمة رفع يدوي (فيديو + وصف + خطوات)
-   بدل ادعاء رفع لم يحدث.
+## Known limits (verified)
 
-### خيار: نشر تطبيق OAuth إلى Production (اختياري — لا يُفعل تلقائيًا)
+- **Concat does not generate video** — it is an assembly editor only. Veo
+  clips still come from Google Flow (Veo 3.1); OpenMontage images come from
+  stock.
+- **Free LLM path that works**: DuckDuckGo AI Chat via `ddgw/gpt-5.4-mini`
+  (verified 2026-11-20: Arabic reply in ~5 s). Pollinations now needs a real
+  API key; `g4f-pollinations` has exhausted its free quota (402).
+- **Slow export without a GPU**: Concat needs Vulkan; on a headless machine
+  `mesa-vulkan-drivers` (lavapipe) is required. Exporting 55 s took ~119 s.
+  The `headless` and `mlt` backends are faster on CPU-only machines.
+- **The machine is small** (1.5 CPU units, ~6 GB RAM): steps run one after
+  another, not in parallel, and no servers are left running when done.
 
-التوكن الحالي في **وضع الاختبار (Testing)**، فينتهي صلاحيته بعد 7 أيام
-من إنشائه، ويحذّرك `doctor --accounts` عند ≤3 أيام ويخطئ عند ≤يومين،
-وعندها تعيد الموافقة بأمر واحد: `python3 studio.py youtube-reauth`.
-
-البديل الدائم هو نشر التطبيق إلى **Production** من Google Cloud Console
-(شاشة موافقة OAuth ← Publish app) فيتوقف انتهاء الـ7 أيام. **لكن لا
-تضغط Publish إلا وأنت تعرف ما يترتب عليه**: نطاق `youtube.upload`
-نطاق **حساس**، فعند النشر إلى Production قد تطلب Google **التحقق من
-التطبيق (verification)** — عملية قد تستغرق أسابيع، وقد تُرفض إن لم
-يستوفِ التطبيق شروطها، وخلالها قد تظهر للمستخدمين شاشة تحذير «تطبيق
-غير موثَّق». لهذا يبقى وضع الاختبار هو الافتراضي الآمن لقناة شخص
-واحد (أنت المستخدم الاختباري الوحيد)، وإعادة الموافقة كل أسبوع
-أخف من التحقق. إن قررت النشر إلى Production فافعلها بنفسك من
-المتصفح (الاستوديو لا ينشر التطبيق نيابة عنك أبدًا).
-
-## الحدود (مُتحقَّق منها)
-
-- **Concat لا يولّد فيديو**: محرر تجميع فقط. مقاطع Veo ما زالت تأتي
-  من Google Flow (Veo 3.1)، وصور OpenMontage من المخزون.
-- **OmniRoute — المسار المجاني العامل**: DuckDuckGo AI Chat عبر
-  `ddgw/gpt-5.4-mini` (اتحقق 2026-11-20: رد بالعربي في ~5 ثوانٍ).
-  أما Pollinations الأصلي فصار يطلب مفتاح API حقيقي
-  (حساب على enter.pollinations.ai)، وg4f-pollinations نفد رصيده
-  المجاني (402). عند فشل الاستدعاء يستخدم `run` `--allow-fallback`
-  هوكًا من سيناريو OpenMontage الجاهز ويسجّل ذلك في `script-ai.json`
-  بدل ادعاء توليد لم يحدث.
-  لفتح بدائل أخرى: أنشئ مفتاح Pollinations مجاني وأضفه بـ
-  `omniroute providers add pollinations --credential-env KEY_ENV`.
-  ملحوظة أمان: خادم OmniRoute يستمع على `0.0.0.0` افتراضيًا بلا
-  اشتراط مفتاح لواجهة الويب — شغّله للاختبار فقط وأوقفه بعده
-  (`omniroute stop`)، أو فعّل `REQUIRE_API_KEY` للتشغيل الدائم.
-- **التصدير بطيء بلا كارت شاشة**: Concat يحتاج Vulkan؛ على جهاز بلا
-  شاشة يلزم `mesa-vulkan-drivers` (lavapipe). تصدير 55 ثانية أخذ
-  ~119 ثانية. تجميع مقاطع Veo بـ ffmpeg أسرع، لكن Concat يبقي
-  المشروع قابلًا للتعديل اللاحق.
-- **خلفية تجميع بديلة — headless-editor** (`--backend headless`):
-  نواة محرر مستقلة في `~/workspace/headless-editor/` (نموذج مشروع
-  JSON + ريندر ffmpeg + خادم MCP) — نفس أصول Concat ونفس الناتج
-  (55.4 ث، 720×1280، هوك + كابشنات متزامنة) لكن أسرع (25 ث ريندر
-  مقابل 35 ث تصدير Concat) وبلا حاجة لـVulkan. الفرق الوحيد: لا
-  يُنتج ملف مشروع قابلًا للتعديل اللاحق (مشروع JSON فقط)، فـConcat
-  يبقى الافتراضي حتى يثبت البديل تفوقه.
-- **خلفية تجميع بديلة — MLT/melt** (`--backend mlt`، v0.1.12، وملء
-  الإطار v0.1.13): تايم لاين XML حقيقي (صور + سرد + هوك وكابشنات
-  dynamictext) يُريندر عبر `melt` 7.22.0 تحت `xvfb-run -a`
-  (منتجات Qt تحتاج X11) — 55.4 ث، 720×1280 في 28–30 ث، والناتج
-  3.1 ميجا. ميزته: ملف `.mlt` يفتح في Kdenlive/Shotcut للتعديل
-  اللاحق، والصور تُقص مسبقًا لتملأ الإطار (بلا أشرطة سوداء).
-  حدوده: لا شيء في التثبيت — `melt` نفسه يأتي من حزمة apt (`melt`
-  7.22.0، `/usr/bin/melt`، و`/usr/local/bin/melt` رابط إليه) وتُعاد
-  روابط `/usr/local/bin` وحزم apt المفقودة تلقائيًا عند الإقلاع عبر
-  خدمة `studio-env-restore.service` وسكربت `~/workspace/setup-env.sh`.
-  نسخة `~/opt/mlt` المنزلية القديمة ما زالت على القرص لكنها مكسورة
-  (مكتبات النظام التي ترتبط بها مُسحت مع إعادة تشغيل الـVM) ولا
-  تُستخدم إلا كملاذ أخير عند فشل apt؛ وريندر MLT يُقتل مع مجموعة
-  عملياته كاملة عند انتهاء المهلة فلا تبقى عملية يتيمة.
-  وملف الخدمة نفسه لا يحتاج خطوة يدوية أبدًا (v0.1.15): السكربت
-  يعيد تثبيته من نسخة الـhome إن غاب، و`studio.py` يستدعي
-  السكربت تلقائيًا عند بدء التشغيل إن غابت أداة أو غاب الملف،
-  وخطاف في `~/.bashrc` و`~/.profile` يعيد تثبيته عند تسجيل الدخول.
-- **خلفية تجميع بديلة — OpenReel** (`--backend openreel`، v0.1.36):
-  الوضع التلقائي لمحرر OpenReel Video في `~/workspace/openreel-auto/`
-  (ترجمة مشروع JSON إلى ffmpeg بلا متصفح وبلا GPU) — نفس أصول
-  Concat (صور + سرد + هوك وكابشنات متزامنة) لكن أبطأ (~3× الزمن
-  الحقيقي بلا GPU: فيديو 50ث يحتاج ~3 دقائق). ميزته: يقبل مشاريع
-  `openreel-edit` v3/v4 المصدَّرة من المحرر نفسه، فالمشروع يبقى
-  قابلًا للتعديل في واجهة المحرر. حدوده: بلا انتقالات/keyframes/
-  كاريوكي في الإصدار 1.
-- **تدرج لوني LUTs** (`grade` و`--grade`، v0.1.36): 4 ‏presets جاهزة
-  عبر فلتر ffmpeg ‏`lut3d` (ملفات `.cube` مولَّدة حتميًا في
-  `assets/luts/`): ‏`warm` دافئ ذهبي (هوية الصفحة)، و`vivid`،
-  و`cinematic`، و`soft`. تُطبَّق بعد الريندر وقبل الشعار.
-  الدخول التفاعلي — التفاصيل في CHANGELOG.
-  التفاصيل في MLT-TEST.md.
-- **الجهاز محدود** (1.5 وحدة CPU و~6 جيجا رام): الخطوات تعمل
-  بالتتابع لا بالتوازي، ولا تُترك خوادم شغالة بعد الانتهاء.
-- **تحليل فيديو مرجعي (`analyze-ref`) — تحليل خاص فقط**: الأمر
-  يحلل أسلوب فيديو منافس (هوك أول 10 ثوانٍ، سرعة السرد، سؤال
-  الختام) من بياناته وتفريغ صوته، **وليس** لإعادة نشر المحتوى أو
-  توزيعه أو نسخه. شروط استخدام يوتيوب تمنع تنزيل الفيديوهات؛
-  لذلك يُنزَّل الصوت إلى مجلد مؤقت ويُحذف فور انتهاء التحليل، ولا
-  يُحفظ أي صوت أو فيديو ولا يُشارك. استخدمه على فيديوهات عامة
-  متاحة فقط، واحترم حقوق صانعيها. التنبيه نفسه يظهر في مخرجات
-  الأمر وفي ملف JSON الناتج.
-- **الصوت**: السرد الحالي Piper (صوت عربي ذكوري واحد). التحويل
-  الصوتي واستنساخ الصوت والكتابة التلقائية في Concat لم تُختبر بعد.
-- **الكابشنات المتزامنة**: الافتراضي silencedetect على صوت السرد
-  (ملفات ASS في `subs/`)، لأن النص المعروض صياغة فصحى مختلفة عن
-  النص المنطوق بالعامية. اختُبر faster-whisper كبديل (التفاصيل في
-  `WHISPER-TEST.md`): توقيته أدق (~0.24ث متوسط خطأ الحدود) لكن
-  نصه يخطئ في ~22% من الكلمات حتى بموديل small، فهو خيار تجريبي
-  فقط (`studio.py whisper-ass`) حين يتطابق النص المعروض مع
-  المنطوق — وليس بديلًا عن الخط الافتراضي.
-
-## بنية المشروع
+## Project structure
 
 ```
 studio/
-├── studio.py            # نقطة الدخول (CLI)
-├── config.example.yaml  # إعدادات نموذجية (بلا أسرار)
-├── lib/
-│   ├── omniroute_client.py   # استدعاء البوابة (CLI ثم HTTP + إعادة محاولة)
-│   ├── openmontage_stage.py  # تجهيز أصول مشروع OpenMontage
-│   ├── concat_mcp.py         # قيادة Concat بلا شاشة عبر MCP
-│   ├── thumbnail.py          # توليد صورة مصغرة 720×1280 (ffmpeg + ASS)
-│   ├── whisper_captions.py   # كابشنات ASS من faster-whisper (خيار تجريبي)
-│   └── ref_analyzer.py       # تحليل فيديو مرجعي: yt-dlp + تفريغ + مقاييس
-├── tests/
-│   └── test_studio.py   # 39 اختبارًا آليًا (مكتبة قياسية فقط)
+├── studio.py            # Entry point (CLI)
+├── config.example.yaml  # Sample settings (no secrets)
+├── lib/                 # Pipeline stages (omniroute / openmontage / concat / ...)
+├── tests/               # 1524 automated tests (standard library only)
 ├── .github/workflows/
-│   └── ci.yml           # py_compile + اختبارات عند كل push
-├── runs/                # مخرجات التشغيل (مستثناة من النشر)
-├── README.md            # هذا الملف
-├── README_EN.md         # نسخة إنجليزية مختصرة
-├── WHISPER-TEST.md      # اختبار faster-whisper كبديل للكابشنات (الحكم: خيار تجريبي فقط)
-├── CHANGELOG.md         # سجل التغييرات (0.1.6: run-queue + تحليل مرجعي؛ 0.1.5: اختبار Ollama غير العملي)
-├── FIXES.md             # سجل إصلاحات مراجعة 0.1.1
-├── SUGGESTIONS.md       # اقتراحات مستقبلية (بلا تطبيق)
-└── LICENSE              # PolyForm Noncommercial 1.0.0 (لطبقة التنسيق هذه فقط)
+│   └── ci.yml           # py_compile + tests on every push
+├── .github/
+│   ├── ISSUE_TEMPLATE/  # bug report / feature request / question
+│   └── pull_request_template.md
+├── docs/
+│   ├── getting-started.md     # New-user guide (Arabic)
+│   └── getting-started-en.md  # New-user guide (English)
+├── examples/            # Example commands + expected output (text only)
+├── runs/                # Run outputs (excluded from publishing)
+├── README.md            # This file (English gateway)
+├── README-AR.md         # Full README (Arabic)
+├── CHANGELOG.md         # Change log
+├── FIXES.md             # Fix log from the 2026-11-20 review (v0.1.1)
+├── SUGGESTIONS.md       # Future ideas (not implemented)
+├── THIRD-PARTY-NOTICES.md
+└── LICENSE              # PolyForm Noncommercial 1.0.0 (this layer only)
 ```
 
-## الترخيص
+## Contributing
 
-طبقة التنسيق `studio` (الكود في هذا المستودع فقط) مرخّصة برخصة
-**PolyForm Noncommercial 1.0.0** (انظر ملف `LICENSE`):
-الاستخدام الشخصي وغير التجاري مجاني. إشعارات مشاريع الطرف الثالث
-(الأدوات المنسَّقة والمنطق المُعاد تنفيذه) في ملف `THIRD-PARTY-NOTICES.md`.
+Contributions are welcome — bug reports, feature requests, testing (no code
+needed), and pull requests. Please read
+**[CONTRIBUTING.md](CONTRIBUTING.md)** first: it explains how to report a
+bug, propose a feature, send a PR, and the rules that keep the full test
+suite green. The short version:
 
-### الترخيص التجاري
+```bash
+python3 -m unittest discover -s tests   # the full suite must stay green
+python3 studio.py doctor                # system checks
+python3 studio.py run --demo            # try the demo
+```
 
-الاستخدام التجاري يحتاج رخصة مدفوعة:
-- **للأفراد: 1000 جنيه مصري**
-- **للشركات: 5000 جنيه مصري**
+## Security
 
-**الدفع (فودافون كاش):** حوّل المبلغ إلى **01023468196**، ثم افتح
-Issue في هذا المستودع وأرفق لقطة شاشة للتحويل مع نوع الرخصة
-(أفراد أو شركات)، وسيُرسل لك ملف الترخيص.
+If you find a security vulnerability, **do not open a public issue**.
+Report it privately via GitHub's **"Report a vulnerability"** (private
+security advisory) on this repository. Details:
+**[SECURITY.md](SECURITY.md)**.
 
-### ادعم المشروع
+## Code of conduct
 
-لو المشروع وفّر عليك وقتًا أو مالًا، يمكنك دعمه شهريًا عبر
-[GitHub Sponsors](https://github.com/sponsors/aalhdydy550-ui) — زر
-«Sponsor» أعلى الصفحة. الدعم يموّل تطوير المزايا الجديدة، ولا يغيّر
-الترخيص: الاستخدام الشخصي يبقى مجانيًا.
+Be kind, be concrete, and respect the people behind the stories.
+Full text: **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)**.
 
-> ملحوظة: الأدوات الثلاث (OmniRoute وOpenMontage وConcat) مشاريع
-> مستقلة برخصها الخاصة (انظر جدول «المعمارية» أعلاه)، ولا تشملها
-> رخصة هذا المستودع.
+## License
+
+The `studio` orchestration layer (the code in this repository only) is
+licensed under **PolyForm Noncommercial 1.0.0** (see [`LICENSE`](LICENSE)):
+personal and non-commercial use is free. Third-party notices (the
+orchestrated tools and re-implemented logic) are in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+### Commercial license
+
+Commercial use needs a paid license:
+- **Individuals: 1000 EGP**
+- **Companies: 5000 EGP**
+
+**Payment (Vodafone Cash):** transfer the amount to **01023468196**, then
+open an Issue in this repository and attach a screenshot of the transfer
+with the license type (individual or company), and the license file will
+be sent to you.
+
+### Support the project
+
+If the project saved you time or money, you can support it monthly via
+[GitHub Sponsors](https://github.com/sponsors/aalhdydy550-ui) — the
+«Sponsor» button at the top of the page. Support funds new features; it
+does not change the license: personal use stays free.
+
+> Note: the three tools (OmniRoute, OpenMontage, Concat) are independent
+> projects with their own licenses (see the architecture table above) and
+> are not covered by this repository's license.
 >
-> الأدوات المنسَّقة (OpenMontage وConcat) يُستخدمان دون تعديل كما
-> أصدرهما أصحابهما، ويحصل عليهما المشتري بنفسه من مصدريهما تحت
-> AGPL-3.0 بكل حقوقها (الاستخدام والدراسة والتعديل والمشاركة):
-> [OpenMontage](https://github.com/OpenMontageInc/OpenMontage) و
+> The orchestrated tools (OpenMontage and Concat) are used unmodified, as
+> released by their owners, and the buyer obtains them directly from their
+> sources under AGPL-3.0 with all its rights (use, study, modify, share):
+> [OpenMontage](https://github.com/OpenMontageInc/OpenMontage) and
 > [Concat](https://github.com/jub0t/Concat).
 
-## اختبار الشمول (smoke test)
+## Changelog
 
-آخر تشغيل موثّق: قصة «العنزة المباركة — الجزء 1» من أصول مشروع
-OpenMontage الجاهز (`anza-part1`)، والفيديو النهائي
-`~/workspace/videos/studio-test.mp4` (55.4 ثانية، 720×1280،
-‏~4.4 ميجا). التكلفة 0 دولار في كل التشغيلات.
-
-| التشغيل | النتيجة | الزمن الكلي | ملاحظات |
-|---|---|---|---|
-| 1 — `anza-20261120-210213` | نجح (fallback) | 44.3 ث | الخادم كان متوقفًا فاستُخدم هوك من السيناريو الجاهز؛ الفيديو طلع 60 ث (ذيل صامت ~4.6 ث) |
-| 2 — `anza-20261120-210434` | نجح جزئيًا | 44.9 ث | الهوك وُلّد فعلًا عبر `ddgw/gpt-5.4-mini` (3.7 ث)، والمدة صارت 55.4 ث بعد إصلاح المُسلسل — لكن سطر ضجيج CLI («Loaded env from…») تسرّب إلى عنوان الفيديو |
-| 3 — `anza-20261120-210931` | **نجح بالكامل** | **39.8 ث** | بعد فلترة ضجيج CLI: العنوان «عنزة صغيرة هزّت القاهرة.. والناس سجدت لها!»، والكابشن «فيه شيخ قلب الحكاية كلها، والجاي أغرب مما تتخيل.»؛ الفيديو مُتحقَّق منه بصريًا (العنوان والكتابة والـ CTA سليمة) |
-
-تفاصيل كل تشغيل في `runs/<story>-<وقت>/run-log.json` (مستثناة من النشر).
-
-## سجل الإصلاحات
-
-انظر [FIXES.md](FIXES.md) — مراجعة 2026-11-20 (v0.1.1): 14 إصلاحًا
-موثقًا مع إعادة التحقق. وسجل التغييرات الأحدث (v0.1.2: اختبارات
-آلية + فحص تلقائي + أمر thumbnail + وضع تجريبي + إعادة محاولة)
-في [CHANGELOG.md](CHANGELOG.md). واقتراحات تحديثات مستقبلية
-(بلا تطبيق) في [SUGGESTIONS.md](SUGGESTIONS.md).
-
-## استكشاف الأخطاء
-
-- **«أمر omniroute غير موجود في PATH»**: ثنائي OmniRoute غير مثبّت
-  على الجهاز — أعد التثبيت بـ `npm install -g omniroute` ثم شغّل
-  الخادم بـ `omniroute serve --no-open --daemon --port 20128`.
-- **«الخادم لا يرد»**: شغّل الخادم بالأمر أعلاه؛ وتأكد بـ
-  `python3 studio.py status`. أوقفه بعد الانتهاء بـ `omniroute stop`.
-- **«لا يوجد تشغيل بهذا المعرّف»**: شغّل `produce` أولًا
-  (أو `run` كاملًا) قبل `assemble`.
-- **الذاكرة ضيقة**: التصدير يحتاج الجهاز فاضيًا؛ لا تشغّل بناء APK
-  أو ريندر آخر بالتوازي.
+See [CHANGELOG.md](CHANGELOG.md) — latest: **0.1.40 (2026-11-23)**:
+fast-anything extraction, new Groq and Gemini Flash-Lite LLM legs, and the
+`llm-status` date fix. Full test suite **1524/1524**, `doctor` 26/26.

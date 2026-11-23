@@ -7,18 +7,32 @@ omniroute:
   base_url: "http://localhost:20128"
   # الموديل المجاني المفضل (DuckDuckGo AI Chat — يعمل بلا مفتاح، اتحقق 2026-11-20)
   model: "ddgw/gpt-5.4-mini"
-  # بديل g4f المجاني (رصيده ينفد سريعًا وقد يرجع 402)
-  fallback_model: "g4fpol/deepseek"
+  # بديل Groq الرسمي المجاني (gpt-oss-120b — جولة v0.1.40،
+  # يحل محل g4fpol الذي نفد رصيده): يحتاج إضافة اتصال المزود
+  # في OmniRoute بالمفتاح — والمفتاح معلّق بعد.
+  fallback_model: "groq/openai/gpt-oss-120b"
   timeout_seconds: 120
   # إعادة محاولة تلقائية عند فشل الاستدعاء (قبل اللجوء للبديل)
   retries: 1
   retry_delay_seconds: 5
+  # Ollama المحلي — ساق أخيرة في السلسلة بعد Gemini ($0 بلا
+  # حدود، لكنه يحتاج `ollama serve` + `ollama pull qwen2.5:7b`
+  # يدويًا؛ والخادم المتوقف يُتخطى بهدوء بلا كسر للسلسلة).
+  # ollama_enabled: false ← لإسقاط الساق من السلسلة تمامًا.
+  ollama_enabled: true
+  ollama_base_url: "http://localhost:11434"
+  ollama_model: "qwen2.5:7b"
   # ساق Gemini البديلة (أمر المستخدم 2026-11-22 «توصيل Gemini»):
   # تُستدعى عبر مساعد آمن بمفتاح بديل (surrogate) من الـconnector
   # — المفتاح الخام لا يظهر في أي ملف أو وسيط أو سجل أبدًا.
   # عطّلها بـ gemini_enabled: false إن أردت OmniRoute وحده.
   gemini_enabled: true
   gemini_model: "gemini-3-flash-preview"
+  # ساق Gemini Flash-Lite (جولة v0.1.40): تُجرَّب قبل Flash
+  # الرئيسي — الحد المجاني 500 طلب/يوم مقابل ~20 لـ Flash.
+  # عطّلها بـ gemini_lite_enabled: false إن أردت Flash وحده.
+  gemini_lite_enabled: true
+  gemini_lite_model: "gemini-3.1-flash-lite"
 
 # الأفاتار الناطق (LongCat) — جولة v0.1.38: تحضير فقط، بلا موفر
 # بعد (لا تشغيل على الـVM ولا دمج قبل نجاح اختبار Kaggle).
@@ -95,9 +109,22 @@ schedule:
   morning: "09:00"
   evening: "19:00"
 
+# اللغة (جولة v0.1.41): لغة رسائل CLI — "ar" (العربية،
+# الافتراضي دائمًا) أو "en" (الإنجليزية). مفتاح --lang يغلب
+# هذا المفتاح، وLANG من البيئة يغلبه أيضًا؛ وبلا أي منها
+# تبقى كل الرسائل عربية كما اليوم.
+lang: "ar"
+
 narration:
   # صوت الراوي الافتراضي: piper (رجل، الافتراضي) أو gtts (ثانٍ).
   voice: "piper"
+  # موديلات Piper للراوي (ذكورية فقط — الراوي رجل دائمًا):
+  # العربي ar_JO-kareem-medium (الافتراضي) والإنجليزي
+  # en_US-ryan-medium (ذكوري أمريكي — تحقَّق من توثيق Piper:
+  # Ryan ذكوري وLessac أنثى فلا تصلح راويًا؛ والملف نُزّل
+  # وتحقِّق منه حيًا في ~/workspace/tts-models/).
+  piper_model_ar: "ar_JO-kareem-medium"
+  piper_model_en: "en_US-ryan-medium"
 
 # whisper (خيار تجريبي — معلَّق افتراضيًا؛ التفاصيل في WHISPER-TEST.md):
 # يولّد ASS من word timestamps عبر `studio.py whisper-ass`، ويعمل فقط
