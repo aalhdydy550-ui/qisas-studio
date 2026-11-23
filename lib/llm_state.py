@@ -158,8 +158,15 @@ def provider_status(state, provider):
 
 
 def status_lines(state, providers=None, now=None):
-    """سطور عربية لحالة المزودين (لأمر llm-status)."""
+    """سطور عربية لحالة المزودين (لأمر llm-status).
+
+    تدوير يومي أولًا في الذاكرة (بلا كتابة ملف): حالة
+    بتاريخ الأمس تطبع تاريخ اليوم وعدادات صفرية لا تاريخ
+    الأمس وعداداته — وإلا بدا «اليوم» قديمًا والعدادات
+    منقولة من أمس (علة 2026-11-23).
+    """
     now = now if now is not None else time.time()
+    _rollover_daily(state, now)
     names = list(providers or [])
     if not names:
         names = sorted((state.get("providers") or {}).keys())

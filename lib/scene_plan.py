@@ -25,6 +25,7 @@ import sys
 import time
 
 from lib import balance as balance_lib
+from lib import story_templates
 
 VEO_UNITS_PER_CLIP = 20
 VEO_CLIP_SECONDS = 8
@@ -85,11 +86,17 @@ def story_text_path(cfg, story, studio_dir=None):
     return path if os.path.isfile(path) else None
 
 
-def build_scene_plan(cfg, story, clips=DEFAULT_CLIPS):
+def build_scene_plan(cfg, story, clips=DEFAULT_CLIPS,
+                     template=None, template_hero=None,
+                     template_situation=None, template_moral=None):
     """ابنِ خطة مشاهد Veo لقصة من الطابور. يرجع قاموس الخطة.
 
     يرفع CapError إن تجاوز الإنفاق المتوقع السقف أو الرصيد،
-    وValueError إن كان عدد المقاطع خارج 1–12.
+    وValueError إن كان عدد المقاطع خارج 1–12 أو كان القالب
+    غير معروف. مع template (اسم قالب من lib.story_templates)
+    وغياب نص الطابور تُؤخذ الموجهات من القالب بدل المسودة
+    (hero افتراضيًا العنوان، وsituation افتراضيًا أول جملة
+    نص أو العنوان)؛ ومع وجود نص يبقى النص هو المصدر.
     """
     if isinstance(clips, bool) or not isinstance(clips, int) \
             or clips < MIN_CLIPS or clips > MAX_CLIPS:
@@ -107,26 +114,45 @@ def build_scene_plan(cfg, story, clips=DEFAULT_CLIPS):
     sentences = _split_sentences(text)
     scenes = []
     draft = False
-    for i in range(clips):
-        if i < len(sentences):
-            prompt = sentences[i]
-        else:
-            # نص أقصر من عدد المقاطع (أو غائب): موجِّه مسودة من
-            # العنوان — مع تنبيه صريح في الخطة أنها تحتاج صياغة.
-            prompt = ("مشهد %d من قصة «%s»" % (i + 1, title.strip()))
-            draft = True
-        if len(prompt) > 200:
-            prompt = prompt[:200].rstrip() + "…"
-        scenes.append({"scene": i + 1,
-                       "prompt": prompt,
-                       "duration_seconds": VEO_CLIP_SECONDS,
-                       "units": VEO_UNITS_PER_CLIP})
+    template_name = None
+    template_beats = None
+    if template and not text_path:
+        # قالب بنية قصة بدل موجِّهات المسودة (الجولة v0.1.39):
+        # النص الغائب لا يعني موجِّهًا فارغًا بعد الآن.
+        outline = story_templates.build_scene_outline(
+            template, title,
+            template_hero or title.strip(),
+            template_situation or (sentences[0] if sentences
+                                   else title.strip()),
+            moral=template_moral, clips=clips)
+        template_name = outline["template"]
+        template_beats = [s["beat"] for s in outline["scenes"]]
+        for s in outline["scenes"]:
+            scenes.append({"scene": s["scene"],
+                           "prompt": s["prompt"],
+                           "duration_seconds": VEO_CLIP_SECONDS,
+                           "units": VEO_UNITS_PER_CLIP})
+    else:
+        for i in range(clips):
+            if i < len(sentences):
+                prompt = sentences[i]
+            else:
+                # نص أقصر من عدد المقاطع (أو غائب): موجِّه مسودة من
+                # العنوان — مع تنبيه صريح في الخطة أنها تحتاج صياغة.
+                prompt = ("مشهد %d من قصة «%s»" % (i + 1, title.strip()))
+                draft = True
+            if len(prompt) > 200:
+                prompt = prompt[:200].rstrip() + "…"
+            scenes.append({"scene": i + 1,
+                           "prompt": prompt,
+                           "duration_seconds": VEO_CLIP_SECONDS,
+                           "units": VEO_UNITS_PER_CLIP})
     total_units = clips * VEO_UNITS_PER_CLIP
     veo_cfg = (cfg.get("veo") or {}) if isinstance(cfg, dict) else {}
     ok, reason = balance_lib.check_cap(total_units, veo_cfg)
     if not ok:
         raise CapError(reason)
-    return {
+    plan = {
         "story_number": (story or {}).get("number"),
         "story_title": title.strip(),
         "slug": slug,
@@ -141,6 +167,27 @@ def build_scene_plan(cfg, story, clips=DEFAULT_CLIPS):
         "scenes": scenes,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if template_name:
+        plan["template"] = template_name
+        plan["template_beats"] = template_beats
+    return plan
+
+
+def build_scene_plan_from_template(cfg, template, title, hero,
+                                   situation, moral=None,
+                                   clips=DEFAULT_CLIPS):
+    """ابنِ خطة مشاهد Veo من قالب قصة مباشرة (بلا قصة طابور).
+
+    غلاف رقيق فوق `build_scene_plan`: يبني قصة اصطناعية من
+    العنوان ويمرّر القالب وبطله وموقفه وعبرته. يرفع CapError
+    عند تجاوز السقف/الرصيد وValueError عند قالب أو مدخلات
+    غير صالحة — مثل `build_scene_plan` تمامًا.
+    """
+    story = {"title": title}
+    return build_scene_plan(cfg, story, clips=clips,
+                            template=template, template_hero=hero,
+                            template_situation=situation,
+                            template_moral=moral)
 
 
 def save_plan(plan, runs_dir):
@@ -172,6 +219,10 @@ def format_plan(plan):
                      % (s["scene"], s["duration_seconds"], s["units"],
                         s["prompt"]))
     lines.append("")
+    if plan.get("template"):
+        lines.append("القالب: %s (%s)"
+                     % (plan["template"],
+                        "، ".join(plan.get("template_beats") or [])))
     if plan["draft_prompts"]:
         lines.append("تنبيه: بعض الموجهات مسودة من العنوان فقط — "
                      "صِغها في Flow قبل التوليد.")

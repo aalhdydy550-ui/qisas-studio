@@ -21,6 +21,8 @@
 """
 import os
 
+from lib import ensure_env
+
 
 class MoviePyFxError(Exception):
     """خطأ في مساعد MoviePy (رسالته عربية جاهزة للعرض)."""
@@ -101,6 +103,9 @@ def _require_moviepy():
         from moviepy import (AudioFileClip, CompositeVideoClip, ImageClip,
                              VideoClip)
     except ImportError:
+        # تثبيت كسول (جولة v0.1.41): جهّز البيئة عند أول حاجة
+        # لها — فتنجح المحاولة التالية من البيئة نفسها.
+        ensure_env.ensure("moviepy")
         raise MoviePyFxError(
             "moviepy غير مثبّت في بايثون الحالي — شغّل الأمر من بيئة "
             "MoviePy:\n  ~/workspace/studio/.venv-moviepy/bin/python "

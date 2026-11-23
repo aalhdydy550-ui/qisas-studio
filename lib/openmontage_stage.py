@@ -21,7 +21,7 @@ def _validate_project_name(name):
 
     نفس منطق studio.validate_run_component (منسوخ هنا لأن استيراد
     studio من هذه الوحدة يخلق استيرادًا دائريًا: studio يستورد
-    openmontage_stage). يرفض فواصل المسارات (`/` أو `\`)، أو `..`،
+    openmontage_stage). يرفض فواصل المسارات (`/` أو `\\`)، أو `..`،
     أو حرف NUL، أو البدء بنقطة — بنفس رسائل ValueError العربية.
     """
     what = "اسم المشروع"

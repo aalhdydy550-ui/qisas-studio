@@ -22,6 +22,7 @@ import subprocess
 import tempfile
 
 from lib import whisper_captions
+from lib import ensure_env
 
 
 class RefError(Exception):
@@ -111,6 +112,9 @@ def transcribe_via_venv(audio_path, model="small", timeout=600):
     يُستخدم حين يعمل studio من بايثون النظام (بلا faster-whisper).
     يرجع (كلمات، نص كامل) بنفس صيغة whisper_captions.
     """
+    # تثبيت كسول (جولة v0.1.41): ثبّت البيئة عند أول حاجة لها
+    # بدل الفشل الفوري بغيابها.
+    ensure_env.ensure("whisper")
     if not os.path.isfile(VENV_PYTHON):
         raise RefError("بيئة faster-whisper غير موجودة: %s — راجع "
                        "WHISPER-TEST.md" % VENV_PYTHON)

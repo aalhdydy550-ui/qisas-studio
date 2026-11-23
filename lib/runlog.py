@@ -13,6 +13,37 @@ import os
 
 _OK_STATUSES = ("ok", "passed", "done", "success")
 
+# حالات سجلات التشغيل run-*.json (جولة v0.1.41 — بند 6):
+# crashed هي حالة التشغيل المنقطع (ريستارت VM) القابل للاستئناف.
+_RECORD_STATUSES = {"running": "جارٍ", "crashed": "تعطّل",
+                    "done": "ناجح", "failed": "فشل"}
+
+
+def _parse_run_record(path):
+    """سجل تشغيل run-*.json: حالته + آخر نقطة تفتيش إن تعطّل."""
+    with open(path, encoding="utf-8") as f:
+        d = json.load(f)
+    if not isinstance(d, dict):
+        return None
+    status = _RECORD_STATUSES.get(d.get("status"), d.get("status") or "؟")
+    settings = d.get("settings") or {}
+    title = (settings.get("story") or d.get("command")
+             or d.get("run_id") or "؟")
+    detail = ""
+    checkpoint = d.get("checkpoint") or {}
+    if d.get("status") == "crashed" and checkpoint.get("step"):
+        detail = ("آخر نقطة: %s — استأنف بـ run --resume %s"
+                  % (checkpoint["step"], d.get("run_id") or "؟"))
+    elif d.get("error"):
+        detail = str(d.get("error"))[:120]
+    started = d.get("started_at") or ""
+    return {"date": (started[:16].replace("T", " ") if started else "؟"),
+            "date_key": started[:10] if started else "",
+            "kind": "تشغيل",
+            "title": title,
+            "status": status, "detail": detail,
+            "run_id": d.get("run_id") or ""}
+
 
 def _status_from_steps(steps):
     if not isinstance(steps, dict) or not steps:
@@ -89,6 +120,13 @@ def collect_runs(runs_dir, today_only=False, limit=20, today=None):
     for path in glob.glob(os.path.join(runs_dir, "*", "run-log.json")):
         try:
             e = _parse_run_log(path)
+        except (ValueError, OSError):
+            continue
+        if e:
+            entries.append(e)
+    for path in glob.glob(os.path.join(runs_dir, "run-*.json")):
+        try:
+            e = _parse_run_record(path)
         except (ValueError, OSError):
             continue
         if e:

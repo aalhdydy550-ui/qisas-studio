@@ -23,6 +23,7 @@
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -41,6 +42,141 @@ BACKUP_DIR_NAME = "backups"
 BACKUP_PREFIX = "backup-"
 # نسخة أحدث من يومين = سليمة؛ أقدم = تحذير (الكرون اليومي 03:51).
 BACKUP_MAX_AGE_DAYS = 2
+
+# ------------------------------------------------------------------
+# بوابة مخاطر كارثية مطلقة (جولة v0.1.41 — بند 4 من استخراج
+# AlphaCLI، REPORT-AR.md §4.1، مقتبسة من
+# src/alphacode_command_risk/gate.rs):
+# طبقة Deny دائمة بلا مبرر يفتحها لمسارات التدمير الكارثية
+# (rm -rf ~ و/etc وعقد الأجهزة)، وAllow لما عداها مع مطالبات
+# إذن للخطِر. اعتراف صريح من المصدر نفسه ننقله كما هو:
+# «هذا دفاع بالعمق لا sandbox» — البوابة تمنع الكارثي فقط،
+# ولا تعزل التنفيذ ولا تحل محل نسخة احتياطية أو مراجعة.
+# ------------------------------------------------------------------
+
+class ProtectDeniedError(Exception):
+    """رفض حذف مطلق من بوابة المخاطر الكارثية (رسالته عربية)."""
+
+
+# جذور نظام يُرفض حذف أي شيء داخلها ("/" مطابق تمامًا فقط —
+# فهي جذر كل شيء؛ أما الباقي فيُرفض الجذر نفسه وما تحته).
+_CATASTROPHIC_TREES = ("/bin", "/boot", "/dev", "/etc", "/proc",
+                       "/sbin", "/sys", "/usr")
+
+# الطابور الحقيقي (المسار الافتراضي في config — يمرَّر المسار
+# الفعلي عبر extra_protected عند اختلافه).
+DEFAULT_PROTECTED_QUEUE = os.path.join(
+    os.path.expanduser("~"), "workspace", "goals", "goal",
+    "hidden_files", "story-queue-2026-11-20.md")
+
+
+def _is_within(path, root):
+    """True إن كان path هو root نفسه أو تحته (بعد الـresolve)."""
+    path = os.path.realpath(path)
+    root = os.path.realpath(root)
+    return path == root or path.startswith(root + os.sep)
+
+
+def deny_catastrophic(path, studio_dir=None, extra_protected=()):
+    """True = يُرفض حذف هذا المسار رفضًا مطلقًا بلا استثناء.
+
+    يُرفض: مسار فارغ/غير نصي (بلا معنى آمن)؛ المجلد الرئيسي
+    ~ نفسه؛ ‎~/.ssh وما تحته؛ ‎/ وما تحته من جذور نظام
+    (/etc و/dev — عقد الأجهزة — و/bin و/sbin و/usr و/boot
+    و/proc و/sys)؛ وجذر الاستوديو نفسه؛ والمسارات المحمية
+    في الاستوديو (مجلد الطابور queue/، ومجلد النسخ الاحتياطية
+    backups/ وما تحته، وclient-orders/orders.jsonl ونسخته
+    ‎.bad، وسجل المهام runs/jobs.jsonl، والطابور الحقيقي
+    الافتراضي)؛ وأي مسار إضافي في extra_protected (ملف
+    يُطابَق تمامًا، ومجلد يُطابَق هو وما تحته).
+
+    الروابط الرمزية تُحلّ قبل الحكم (realpath) فلا يتجاوزها
+    رابط يشير إلى مسار محمي. أي مسار آخر = False (مسموح،
+    مع مطالبات الإذن المعتادة للخطِر خارج هذه الدالة).
+    """
+    if not isinstance(path, str) or not path.strip():
+        return True
+    target = os.path.realpath(os.path.expanduser(path.strip()))
+    home = os.path.realpath(os.path.expanduser("~"))
+    if target == home:
+        return True
+    if _is_within(target, os.path.join(home, ".ssh")):
+        return True
+    if target == os.sep:
+        return True
+    for root in _CATASTROPHIC_TREES:
+        if _is_within(target, root):
+            return True
+    root = studio_dir or STUDIO_DIR
+    studio = os.path.realpath(root)
+    if target == studio:
+        return True
+    dir_trees = (os.path.join(studio, "queue"),
+                 os.path.join(studio, "backups"))
+    for tree in dir_trees:
+        if _is_within(target, tree):
+            return True
+    exact_files = (
+        os.path.join(studio, "client-orders", "orders.jsonl"),
+        os.path.join(studio, "client-orders", "orders.jsonl.bad"),
+        os.path.join(studio, "runs", "jobs.jsonl"),
+        os.path.realpath(DEFAULT_PROTECTED_QUEUE),
+    )
+    if target in {os.path.realpath(p) for p in exact_files}:
+        return True
+    for extra in (extra_protected or ()):
+        if isinstance(extra, str) and extra.strip():
+            extra_path = os.path.realpath(
+                os.path.expanduser(extra.strip()))
+            if target == extra_path or (
+                    os.path.isdir(extra_path)
+                    and _is_within(target, extra_path)):
+                return True
+    return False
+
+
+def safe_delete(path, studio_dir=None, extra_protected=()):
+    """احذف ملفًا بعد بوابة المخاطر؛ ارجع True عند الحذف.
+
+    يرفع ProtectDeniedError على أي مسار ترفضه
+    deny_catastrophic، وFileNotFoundError على مسار غائب،
+    وIsADirectoryError على مجلد (استخدم safe_rmtree له).
+    """
+    if deny_catastrophic(path, studio_dir=studio_dir,
+                         extra_protected=extra_protected):
+        raise ProtectDeniedError(
+            "رفض مطلق: حذف المسار المحمي %s مرفوض دائمًا — "
+            "بوابة المخاطر الكارثية (دفاع بالعمق لا sandbox)"
+            % path)
+    if not os.path.lexists(path):
+        raise FileNotFoundError("الملف غير موجود: %s" % path)
+    if os.path.isdir(path) and not os.path.islink(path):
+        raise IsADirectoryError(
+            "المسار مجلد لا ملف — استخدم safe_rmtree: %s" % path)
+    os.remove(path)
+    return True
+
+
+def safe_rmtree(path, studio_dir=None, extra_protected=()):
+    """احذف مجلدًا وشجرته بعد بوابة المخاطر؛ ارجع True.
+
+    نفس الرفض المطلق في deny_catastrophic؛ ويرفض أيضًا
+    حذف ملف عادي (استخدم safe_delete له).
+    """
+    if deny_catastrophic(path, studio_dir=studio_dir,
+                         extra_protected=extra_protected):
+        raise ProtectDeniedError(
+            "رفض مطلق: حذف المسار المحمي %s مرفوض دائمًا — "
+            "بوابة المخاطر الكارثية (دفاع بالعمق لا sandbox)"
+            % path)
+    if not os.path.lexists(path):
+        raise FileNotFoundError("المجلد غير موجود: %s" % path)
+    if os.path.islink(path) or not os.path.isdir(path):
+        raise NotADirectoryError(
+            "المسار ليس مجلدًا — استخدم safe_delete: %s" % path)
+    shutil.rmtree(path)
+    return True
+
 
 _TOOL_TIMEOUT = 120
 
