@@ -334,5 +334,140 @@ class TestDuckingWiring(unittest.TestCase):
             self.assertIn("sidechaincompress", proc.stdout)
 
 
+class TestMotionModes(unittest.TestCase):
+    """أوضاع الحركة في build_project (v0.1.44).
+
+    الافتراضي الجديد clips (بلا Ken Burns)؛ وkenburns الصريح يعيد
+    السلوك القديم تمامًا؛ وstill صور ثابتة بلا أي حركة.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ch1 = _fake_chapter(self.tmp.name, "القصة الأولى", 2.0)
+        self.ch2 = _fake_chapter(self.tmp.name, "القصة الثانية", 2.0)
+        self.intro_wav = os.path.join(self.tmp.name, "intro.wav")
+        _make_wav(self.intro_wav, seconds=2)
+        self.video = os.path.join(self.tmp.name, "clip.mp4")
+        _make_video(self.video, seconds=2)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _spec(self, chapters=None, motion=None):
+        spec = {
+            "title": "5 قصص مؤثرة",
+            "hook": "5 قصص هزّت الأسبوع ده",
+            "intro": {"text": "5 قصص هزّت الأسبوع ده",
+                      "narration": self.intro_wav, "duration": 2.0},
+            "outro": {"text": "اشترك في القناة",
+                      "narration": self.intro_wav, "duration": 2.0},
+            "chapters": chapters or [self.ch1, self.ch2], "music": None,
+            "width": 1280, "height": 720, "fps": 30}
+        if motion is not None:
+            spec["motion"] = motion
+        return spec
+
+    def _image_tracks(self, project):
+        return [t for t in project["tracks"] if t["type"] == "image"]
+
+    def test_default_mode_is_clips_without_ken_burns(self):
+        project, meta = long_video.build_project(self._spec())
+        self.assertEqual(meta["motion"], "clips")
+        self.assertFalse(any("ken_burns" in t
+                             for t in project["tracks"]),
+                         "الافتراضي clips يجب ألا يحمل أي ken_burns")
+        self.assertFalse(any("ken_burns" in t
+                             for t in self._image_tracks(project)))
+
+    def test_still_mode_has_no_ken_burns(self):
+        project, meta = long_video.build_project(
+            self._spec(motion="still"))
+        self.assertEqual(meta["motion"], "still")
+        self.assertFalse(any("ken_burns" in t
+                             for t in project["tracks"]))
+
+    def test_kenburns_mode_restores_old_behavior(self):
+        ch = _fake_chapter(self.tmp.name, "قصة طويلة", 12.0)
+        project, meta = long_video.build_project(
+            self._spec(chapters=[ch], motion="kenburns"))
+        self.assertEqual(meta["motion"], "kenburns")
+        images = self._image_tracks(project)
+        # مقدمة in + بطاقة عنوان in + محتوى in/out + خاتمة out
+        self.assertEqual(images[0]["ken_burns"], "in")
+        self.assertEqual(images[1]["ken_burns"], "in")
+        content = images[2:-1]
+        self.assertEqual([t["ken_burns"] for t in content],
+                         ["in", "out"])
+        self.assertEqual(images[-1]["ken_burns"], "out")
+
+    def test_clips_with_motion_segments(self):
+        ch = dict(self.ch1)
+        ch["motion_segments"] = [
+            {"kind": "video", "src": self.video, "in": 0.0, "out": 1.0},
+            {"kind": "image", "src": self.ch1["images"][0],
+             "duration": 1.0}]
+        project, meta = long_video.build_project(
+            self._spec(chapters=[ch]))
+        videos = [t for t in project["tracks"] if t["type"] == "video"]
+        self.assertEqual(len(videos), 1)
+        self.assertEqual(videos[0]["volume"], 0)
+        self.assertEqual(videos[0]["in"], 0.0)
+        self.assertEqual(videos[0]["out"], 1.0)
+        self.assertEqual(videos[0]["transition_in"], "none")
+        self.assertFalse(any("ken_burns" in t
+                             for t in project["tracks"]))
+        self.assertEqual(meta["chapters"][0]["motion"]["mode"], "clips")
+
+    def test_clips_without_segments_falls_back_to_still_images(self):
+        project, meta = long_video.build_project(
+            self._spec(chapters=[self.ch1]))
+        content = [t for t in project["tracks"]
+                   if t["type"] == "image" and t["start"] >= 6.0]
+        self.assertTrue(content)
+        self.assertFalse(any("ken_burns" in t for t in content))
+        self.assertEqual(meta["chapters"][0]["motion"]["mode"], "clips")
+
+    def test_unknown_motion_raises(self):
+        with self.assertRaises(long_video.LongVideoError):
+            long_video.build_project(self._spec(motion="spin"))
+
+    def test_segments_duration_mismatch_raises(self):
+        ch = dict(self.ch1)
+        ch["motion_segments"] = [
+            {"kind": "video", "src": self.video, "in": 0.0, "out": 1.0}]
+        with self.assertRaises(long_video.LongVideoError):
+            long_video.build_project(self._spec(chapters=[ch]))
+
+    def test_unresolved_freeze_raises(self):
+        ch = dict(self.ch1)
+        ch["motion_segments"] = [
+            {"kind": "freeze", "src": self.video, "duration": 2.0}]
+        with self.assertRaises(long_video.LongVideoError):
+            long_video.build_project(self._spec(chapters=[ch]))
+
+    def test_meta_carries_motion_warnings_and_chapter_modes(self):
+        ch = dict(self.ch1)
+        ch["motion_report"] = {"mode": "still",
+                               "warnings": ["تحذير تجريبي"]}
+        _, meta = long_video.build_project(self._spec(chapters=[ch]))
+        self.assertIsInstance(meta["motion_warnings"], list)
+        self.assertIn("تحذير تجريبي", meta["motion_warnings"])
+        self.assertEqual(meta["chapters"][0]["motion"]["mode"], "still")
+        self.assertEqual(meta["chapters"][0]["motion"]["warnings"],
+                         ["تحذير تجريبي"])
+
+    def test_cli_long_video_help_lists_motion_flag(self):
+        # نمط test_version_help_round8: فحص أعلام argparse عبر --help.
+        studio_dir = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.run(
+            [sys.executable, "studio.py", "long-video", "--help"],
+            cwd=studio_dir, capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("--motion", proc.stdout)
+        self.assertIn("clips", proc.stdout)
+        self.assertIn("--motion-manifest", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -38,6 +38,14 @@
   studio.py long-video --out PATH --title TITLE [--story NAME | --project NAME
       | --run RUN_ID | --chapter-dir DIR | --chapter-text TITLE --text-file FILE
       --cover IMG ...] [--chapters-file FILE] [--music PATH] [--atempo X]
+      [--motion clips|still|kenburns] [--motion-manifest FILE]
+      [--motion-dir DIR]
+      # فيديو طويل أفقي 1280×720 (8–12 دقيقة) من عدة قصص: مقدمة بهوك
+      # + فصل لكل قصة (بطاقة عنوان + محتوى بعبرته) + خاتمة باشتراك واحد.
+      # --motion الافتراضي clips: مقاطع حركة مولّدة من مانيفست الحركة
+      # (--motion-manifest) مع رجوع لصورة ثابتة بلا Ken Burns عند غياب
+      # المقاطع؛ still = صور ثابتة بلا أي حركة؛ kenburns = السلوك القديم
+      # (Ken Burns) — اختياري صريح فقط.
       # فيديو طويل أفقي 1280×720 (8–12 دقيقة) من عدة قصص: مقدمة بهوك
       # + فصل لكل قصة (بطاقة عنوان + محتوى بعبرته) + خاتمة باشتراك واحد.
       # سرد Piper مقسّم، كتابة كلمة-بكلمة، شعار الصفحة تلقائي، وبلا
@@ -115,6 +123,7 @@ from lib import ref_analyzer
 from lib import watermark
 from lib import long_narration
 from lib import long_video
+from lib import motion_clips
 from lib import doctor
 from lib import protect as protect_lib
 from lib import demo
@@ -184,7 +193,7 @@ def _print_translated(prefix, exc, context, lang="ar"):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.43"
+VERSION = "0.1.44"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
 # مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،
@@ -2313,10 +2322,33 @@ def _validate_chapters_spec(spec):
             if key in entry and not isinstance(entry[key], str):
                 raise long_video.LongVideoError(
                     "الفصل %d حقل «%s» يجب أن يكون نصًا" % (i + 1, key))
+        if "motion_clips" in entry:
+            mc = entry["motion_clips"]
+            if not isinstance(mc, list) or not mc or any(
+                    not isinstance(x, str) or not x.strip() for x in mc):
+                raise long_video.LongVideoError(
+                    "الفصل %d حقل «motion_clips» يجب أن يكون قائمة نصوص "
+                    "غير فارغة" % (i + 1))
     for key in ("title", "hook", "intro", "outro", "music"):
         if key in spec and not isinstance(spec[key], str):
             raise long_video.LongVideoError(
                 "حقل «%s» في ملف الفصول يجب أن يكون نصًا" % key)
+    if "motion" in spec:
+        if spec["motion"] not in ("clips", "still", "kenburns"):
+            raise long_video.LongVideoError(
+                "حقل «motion» في ملف الفصول غير معروف: %s (المسموح: "
+                "clips/still/kenburns)" % spec["motion"])
+    for key in ("motion_manifest", "motion_dir"):
+        if key in spec and not isinstance(spec[key], str):
+            raise long_video.LongVideoError(
+                "حقل «%s» في ملف الفصول يجب أن يكون نصًا" % key)
+
+
+def _attach_motion_clips(ch, entry):
+    """انسخ motion_clips من مدخل الفصل إلى قاموس الفصل المُرجَع."""
+    if isinstance(entry, dict) and entry.get("motion_clips"):
+        ch["motion_clips"] = list(entry["motion_clips"])
+    return ch
 
 
 def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper"):
@@ -2345,20 +2377,23 @@ def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper"):
                     "جهّز مشروعها أولًا أو استخدم --chapter-dir"
                     % (slug, e))
             project = slug
-        return _stage_project_chapter(cfg, project, work_dir,
-                                      title=title, moral=moral)
+        return _attach_motion_clips(
+            _stage_project_chapter(cfg, project, work_dir,
+                                   title=title, moral=moral), entry)
     if kind == "project":
         proj = entry.get("project")
         if not isinstance(proj, str) or not proj.strip():
             raise long_video.LongVideoError(
                 "فصل project بلا حقل «project»")
-        return _stage_project_chapter(cfg, proj, work_dir,
-                                      title=title, moral=moral)
+        return _attach_motion_clips(
+            _stage_project_chapter(cfg, proj, work_dir,
+                                   title=title, moral=moral), entry)
     if kind == "run":
         run = entry.get("run")
         if not isinstance(run, str) or not run.strip():
             raise long_video.LongVideoError("فصل run بلا حقل «run»")
-        return _run_chapter(cfg, run, title=title, moral=moral)
+        return _attach_motion_clips(
+            _run_chapter(cfg, run, title=title, moral=moral), entry)
     if kind == "chapter-dir":
         # إصلاح اختبار اختراق 2026-11-21: مجلد فصل خارج مساحة العمل
         # كان يُقرأ وتُكتب فيه ملفات عمل (.long-video) — احصره.
@@ -2372,10 +2407,10 @@ def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper"):
                                                     "مجلد الفصل")
         except ValueError as e:
             raise long_video.LongVideoError(str(e))
-        return long_video.load_chapter_dir(
+        return _attach_motion_clips(long_video.load_chapter_dir(
             chapter_path,
             work_dir=os.path.join(work_dir, "chapters", "ch%d" % index),
-            atempo=atempo, title=title, moral=moral or None)
+            atempo=atempo, title=title, moral=moral or None), entry)
     if kind == "text":
         from lib.paths import resolve_inside_workspace
         text = entry.get("text")
@@ -2421,8 +2456,9 @@ def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper"):
         os.makedirs(os.path.dirname(wav), exist_ok=True)
         info = long_narration.synthesize_long(text, wav, atempo=atempo,
                                               voice=voice)
-        return long_video.chapter_from_text(title, text, info, images,
-                                            moral=moral)
+        return _attach_motion_clips(
+            long_video.chapter_from_text(title, text, info, images,
+                                         moral=moral), entry)
     raise long_video.LongVideoError(
         "نوع فصل غير معروف: %s (المسموح: story/project/run/"
         "chapter-dir/text)" % kind)
@@ -2449,6 +2485,16 @@ def _loop_music_to_cover(music, total, run_dir):
     print("الموسيقى الخلفية أقصر من الفيديو (%.1f ث < %.1f ث) — كُرّرت"
           % (dur, total))
     return looped
+
+
+def _cli_flag_present(flag):
+    """هل مُرّر علم CLI صريح (بصيغتي --flag X و--flag=X)؟
+
+    يميّز تمرير --motion صريحًا عن قيمته الافتراضية في argparse،
+    حتى يتجاوز العلم مفاتيح ملف الفصول فقط عند تمريره فعلًا.
+    """
+    return any(a == flag or a.startswith(flag + "=")
+               for a in sys.argv[1:])
 
 
 def cmd_long_video(cfg, args):
@@ -2602,6 +2648,81 @@ def cmd_long_video(cfg, args):
             log["steps"]["chapter-%d" % (i + 1)] = {
                 "status": "ok", "seconds": round(time.time() - t0, 1),
                 "title": ch["title"], "duration": ch["duration"]}
+        # 1ب) مقاطع الحركة (v0.1.44): أعلام CLI تتجاوز مفاتيح ملف
+        # الفصول (motion/motion_manifest/motion_dir) عند تمريرها.
+        if _cli_flag_present("--motion"):
+            motion = getattr(args, "motion", None) or "clips"
+        elif isinstance(spec.get("motion"), str):
+            motion = spec["motion"]
+        else:
+            motion = getattr(args, "motion", None) or "clips"
+        motion_manifest = getattr(args, "motion_manifest", None) \
+            or spec.get("motion_manifest")
+        motion_dir = getattr(args, "motion_dir", None) \
+            or spec.get("motion_dir")
+        motion_log = {"mode": motion, "warnings": [], "chapters": []}
+        if motion == "clips":
+            if motion_manifest:
+                manifest_path = expand(motion_manifest)
+                try:
+                    manifest = motion_clips.load_motion_manifest(
+                        manifest_path)
+                except motion_clips.MotionError as e:
+                    raise long_video.LongVideoError(str(e))
+                if motion_dir:
+                    motion_dir = expand(motion_dir)
+                else:
+                    motion_dir = os.path.dirname(
+                        os.path.abspath(manifest_path))
+                freeze_dir = os.path.join(run_dir, "motion-freezes")
+                for i, ch in enumerate(chapters):
+                    resolved = motion_clips.resolve_chapter_motion(
+                        ch, manifest, motion_dir, i + 1)
+                    ch_warnings = list(resolved["warnings"])
+                    segments = []
+                    for j, seg in enumerate(resolved["segments"]):
+                        if seg["kind"] == "freeze":
+                            out_jpg = os.path.join(
+                                freeze_dir,
+                                "ch%d-%d.jpg" % (i + 1, j))
+                            try:
+                                motion_clips.extract_last_frame(
+                                    seg["src"], out_jpg)
+                                segments.append({
+                                    "kind": "image", "src": out_jpg,
+                                    "duration": seg["duration"]})
+                            except motion_clips.MotionError as e:
+                                ch_warnings.append(
+                                    "تعذّر تجميد آخر إطار للمقطع في "
+                                    "الفصل %s (%s) — صورة ثابتة بدلًا منه"
+                                    % (ch["title"], e))
+                                segments.append({
+                                    "kind": "image",
+                                    "src": ch["images"][0],
+                                    "duration": seg["duration"]})
+                        else:
+                            segments.append(seg)
+                    ch["motion_segments"] = segments
+                    ch["motion_report"] = {"mode": resolved["mode"],
+                                           "warnings": ch_warnings}
+                    motion_log["chapters"].append(
+                        {"title": ch["title"], "mode": resolved["mode"],
+                         "warnings": ch_warnings})
+                    motion_log["warnings"].extend(ch_warnings)
+            else:
+                msg = ("وضع clips بلا --motion-manifest — كل الفصول "
+                       "صور ثابتة بلا Ken Burns")
+                motion_log["warnings"].append(msg)
+                for ch in chapters:
+                    motion_log["chapters"].append(
+                        {"title": ch["title"], "mode": "still",
+                         "warnings": [msg]})
+        elif motion == "kenburns":
+            print("وضع الحركة kenburns: السلوك القديم (Ken Burns) — "
+                  "اختياري صريح")
+        for w in motion_log["warnings"]:
+            print("تحذير حركة: %s" % w)
+        log["motion"] = motion_log
         # 2) سرد المقدمة والخاتمة (Piper مقسّم افتراضيًا؛ أو gTTS)
         narr_dir = os.path.join(run_dir, "narration")
         os.makedirs(narr_dir, exist_ok=True)
@@ -2621,6 +2742,7 @@ def cmd_long_video(cfg, args):
                       "narration": outro_info["output"],
                       "duration": outro_info["duration"]},
             "chapters": chapters, "music": music,
+            "motion": motion,
             "width": 1280, "height": 720,
             "fps": int(cfg["video"]["fps"])})
         if music:
@@ -2681,6 +2803,7 @@ def cmd_long_video(cfg, args):
                 source="long-video", scenes=_lv_scenes,
                 narration={"voice": voice},
                 extra={"chapters": len(chapters),
+                       "motion": motion,
                        "timestamps": ts_path,
                        "description": desc_path})
             _mp = manifest_lib.write_manifest(out, _man)
@@ -4742,6 +4865,19 @@ def main():
                    help="صوت السرد: piper (الراوي الرجل) أو gtts أو "
                         "supertonic-M1 (صوت ثانٍ اختياري) — الافتراضي "
                         "من الإعداد (narration.voice)")
+    p.add_argument("--motion", default="clips",
+                   choices=["clips", "still", "kenburns"],
+                   help="وضع الحركة: clips (الافتراضي) = مقاطع حركة "
+                        "مولّدة من المانيفست (--motion-manifest) مع رجوع "
+                        "لصورة ثابتة بلا Ken Burns عند غياب المقاطع؛ "
+                        "still = صور ثابتة بلا أي حركة؛ kenburns = "
+                        "السلوك القديم (Ken Burns) — اختياري صريح فقط")
+    p.add_argument("--motion-manifest",
+                   help="مسار مانيفست الحركة JSON أو CSV (مع --motion "
+                        "clips)")
+    p.add_argument("--motion-dir",
+                   help="مجلد ملفات mp4 المولّدة (الافتراضي: مجلد ملف "
+                        "المانيفست)")
     p.add_argument("--atempo", type=float, default=1.0,
                    help="سرعة السرد (1.0 افتراضيًا؛ 1.25 لإيقاع Kwai)")
     p.add_argument("--no-watermark", action="store_true",

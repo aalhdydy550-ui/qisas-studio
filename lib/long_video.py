@@ -382,17 +382,80 @@ def _content_images(images, duration):
     return clips
 
 
+MOTION_MODES = ("clips", "still", "kenburns")
+
+
+def _segment_duration(seg):
+    """مدة مقطع motion محلول (فيديو: out-in، صورة: duration)."""
+    if seg.get("kind") == "video":
+        return round(float(seg["out"]) - float(seg["in"]), 3)
+    return round(float(seg["duration"]), 3)
+
+
+def _check_motion_segments(ch, duration):
+    """تحقق من motion_segments فصل: فيديو/صورة فقط، وتملأ المدة."""
+    segs = ch.get("motion_segments")
+    if not isinstance(segs, list) or not segs:
+        raise LongVideoError(
+            "motion_segments الفصل %s يجب أن تكون قائمة غير فارغة"
+            % ch.get("title"))
+    total = 0.0
+    for seg in segs:
+        if not isinstance(seg, dict):
+            raise LongVideoError(
+                "مقطع حركة في الفصل %s ليس كائنًا" % ch.get("title"))
+        kind = seg.get("kind")
+        if kind == "freeze":
+            raise LongVideoError(
+                "مقطع freeze في الفصل %s يجب حلّه قبل build_project "
+                "(استخرج آخر إطار أولًا)" % ch.get("title"))
+        if kind not in ("video", "image"):
+            raise LongVideoError(
+                "نوع مقطع حركة غير معروف في الفصل %s: %s"
+                % (ch.get("title"), kind))
+        if not seg.get("src") or not os.path.isfile(seg["src"]):
+            raise LongVideoError(
+                "ملف مقطع حركة غير موجود في الفصل %s: %s"
+                % (ch.get("title"), seg.get("src")))
+        if kind == "video":
+            try:
+                seg_in = float(seg["in"])
+                seg_out = float(seg["out"])
+            except (KeyError, TypeError, ValueError):
+                raise LongVideoError(
+                    "مقطع فيديو في الفصل %s بلا in/out صالحين"
+                    % ch.get("title"))
+            if seg_out <= seg_in:
+                raise LongVideoError(
+                    "مقطع فيديو في الفصل %s: out يجب أن تكون بعد in"
+                    % ch.get("title"))
+        total = round(total + _segment_duration(seg), 3)
+    if abs(total - duration) > 0.01:
+        raise LongVideoError(
+            "مدة motion_segments الفصل %s (%.3f ث) لا تملأ مدة الفصل "
+            "(%.3f ث)" % (ch.get("title"), total, duration))
+    return segs
+
+
 def build_project(spec):
     """ابنِ مشروع headless-editor كاملًا للفيديو الطويل.
 
     spec: {"title", "hook", "intro": {"text","narration","duration"},
     "outro": {...}, "chapters": [فصل], "music": مسار|None,
-    "width": 1280, "height": 720, "fps": 30}.
+    "width": 1280, "height": 720, "fps": 30,
+    "motion": "clips"|"still"|"kenburns" (الافتراضي "clips")}.
+    الفصول قد تحمل "motion_segments" (مقاطع محلولة مسبقًا من النوعين
+    video/image فقط — لا freeze) و"motion_report" (mode/warnings).
     يرجع (مشروع JSON، meta) — وmeta فيه توقيتات الفصول للطوابع والوصف.
     """
     chapters = spec.get("chapters") or []
     if not chapters:
         raise LongVideoError("الفيديو الطويل يحتاج فصلًا واحدًا على الأقل")
+    motion = spec.get("motion", "clips")
+    if motion not in MOTION_MODES:
+        raise LongVideoError(
+            "وضع الحركة غير معروف: %s (المسموح: clips/still/kenburns)"
+            % motion)
     width = int(spec.get("width", 1280))
     height = int(spec.get("height", 720))
     fps = int(spec.get("fps", 30))
@@ -427,9 +490,12 @@ def build_project(spec):
     cursor = 0.0
     intro_dur = max(float(intro["duration"]), MIN_CARD_SECONDS)
     intro_img = chapters[0]["images"][0]
-    tracks.append({"type": "image", "src": intro_img, "start": 0.0,
-                   "duration": round(intro_dur, 3), "transition_in": "none",
-                   "ken_burns": "in"})
+    intro_track = {"type": "image", "src": intro_img, "start": 0.0,
+                   "duration": round(intro_dur, 3),
+                   "transition_in": "none"}
+    if motion == "kenburns":
+        intro_track["ken_burns"] = "in"
+    tracks.append(intro_track)
     tracks.append({"type": "audio", "src": intro["narration"], "start": 0.0,
                    "duration": round(float(intro["duration"]), 3),
                    "volume": 1.0})
@@ -444,10 +510,13 @@ def build_project(spec):
     for idx, ch in enumerate(chapters):
         ch_start = cursor
         title_img = ch["images"][0]
-        tracks.append({"type": "image", "src": title_img,
+        title_track = {"type": "image", "src": title_img,
                        "start": round(cursor, 3),
                        "duration": TITLE_CARD_SECONDS,
-                       "transition_in": "none", "ken_burns": "in"})
+                       "transition_in": "none"}
+        if motion == "kenburns":
+            title_track["ken_burns"] = "in"
+        tracks.append(title_track)
         tracks.append({"type": "text", "text": ch["title"],
                        "start": round(cursor, 3),
                        "end": round(cursor + TITLE_CARD_SECONDS, 3),
@@ -455,14 +524,36 @@ def build_project(spec):
         cursor += TITLE_CARD_SECONDS
         content_start = cursor
         dur = float(ch["duration"])
-        kb = "in"
-        for img, clip_dur in _content_images(ch["images"], dur):
-            tracks.append({"type": "image", "src": img,
-                           "start": round(cursor, 3),
-                           "duration": round(clip_dur, 3),
-                           "transition_in": "none", "ken_burns": kb})
-            kb = "out" if kb == "in" else "in"
-            cursor += clip_dur
+        if ch.get("motion_segments"):
+            for seg in _check_motion_segments(ch, dur):
+                seg_dur = _segment_duration(seg)
+                if seg["kind"] == "video":
+                    tracks.append({
+                        "type": "video", "src": seg["src"],
+                        "start": round(cursor, 3),
+                        "duration": round(seg_dur, 3),
+                        "in": round(float(seg["in"]), 3),
+                        "out": round(float(seg["out"]), 3),
+                        "volume": 0, "transition_in": "none"})
+                else:
+                    tracks.append({
+                        "type": "image", "src": seg["src"],
+                        "start": round(cursor, 3),
+                        "duration": round(seg_dur, 3),
+                        "transition_in": "none"})
+                cursor += seg_dur
+        else:
+            kb = "in"
+            for img, clip_dur in _content_images(ch["images"], dur):
+                track = {"type": "image", "src": img,
+                         "start": round(cursor, 3),
+                         "duration": round(clip_dur, 3),
+                         "transition_in": "none"}
+                if motion == "kenburns":
+                    track["ken_burns"] = kb
+                    kb = "out" if kb == "in" else "in"
+                tracks.append(track)
+                cursor += clip_dur
         tracks.append({"type": "audio", "src": ch["narration"],
                        "start": round(content_start, 3),
                        "duration": round(dur, 3), "volume": 1.0})
@@ -479,19 +570,29 @@ def build_project(spec):
                      "end": round(content_start + float(w["end"]), 3)}
                     for w in p["words"]]
             tracks.append(track)
+        report = ch.get("motion_report")
+        if isinstance(report, dict) and "mode" in report:
+            ch_motion = {"mode": report.get("mode") or motion,
+                         "warnings": list(report.get("warnings") or [])}
+        else:
+            ch_motion = {"mode": motion, "warnings": []}
         meta_chapters.append({
             "index": idx + 1, "title": ch["title"],
             "moral": ch.get("moral") or "",
             "start": round(ch_start, 3), "end": round(cursor, 3),
-            "content_start": round(content_start, 3)})
+            "content_start": round(content_start, 3),
+            "motion": ch_motion})
 
     outro_dur = max(float(outro["duration"]), MIN_CARD_SECONDS)
     outro_img = chapters[-1]["images"][-1]
     outro_start = cursor
-    tracks.append({"type": "image", "src": outro_img,
+    outro_track = {"type": "image", "src": outro_img,
                    "start": round(cursor, 3),
                    "duration": round(outro_dur, 3),
-                   "transition_in": "none", "ken_burns": "out"})
+                   "transition_in": "none"}
+    if motion == "kenburns":
+        outro_track["ken_burns"] = "out"
+    tracks.append(outro_track)
     tracks.append({"type": "audio", "src": outro["narration"],
                    "start": round(cursor, 3),
                    "duration": round(float(outro["duration"]), 3),
@@ -508,7 +609,11 @@ def build_project(spec):
                        "volume": 0.3})
     project = {"name": spec.get("title", "long-video"), "width": width,
                "height": height, "fps": fps, "tracks": tracks}
+    motion_warnings = []
+    for mc in meta_chapters:
+        motion_warnings.extend(mc["motion"]["warnings"])
     meta = {"title": spec.get("title", ""), "total_duration": total,
+            "motion": motion, "motion_warnings": motion_warnings,
             "intro": intro_meta,
             "chapters": meta_chapters,
             "outro": {"start": round(outro_start, 3), "end": total}}

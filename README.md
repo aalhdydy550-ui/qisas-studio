@@ -166,7 +166,7 @@ studio/
 ├── studio.py            # Entry point (CLI)
 ├── config.example.yaml  # Sample settings (no secrets)
 ├── lib/                 # Pipeline stages (omniroute / openmontage / concat / ...)
-├── tests/               # 1524 automated tests (standard library only)
+├── tests/               # 1896 automated tests (standard library only)
 ├── .github/workflows/
 │   └── ci.yml           # py_compile + tests on every push
 ├── .github/
@@ -265,6 +265,20 @@ venv once: `python3 -m venv .venv-supertonic &&
 .venv-supertonic/bin/pip install supertonic` (the model downloads once
 to `~/.cache/supertonic3`).
 
+### Real motion in long videos
+
+`long-video` now moves its scenes with real generated motion clips
+instead of Ken Burns: `--motion clips` (the default) takes motion clips
+from a manifest (`--motion-manifest manifest.json|csv`,
+`--motion-dir dir/` with the generated mp4s) — take `a` first, then the
+opening of take `b` (takes are independent, both from the same first
+frame); a missing `b` freezes the last frame of `a`. Any chapter without
+a clip falls back to a still image with no Ken Burns at all, with a clear
+warning in the log and run record. `--motion still` uses still images
+only; `--motion kenburns` keeps the old slow zoom/pan — explicit opt-in
+only, never the default. The chapters file accepts `motion`,
+`motion_manifest`, `motion_dir`, and per-chapter `motion_clips`.
+
 ### Support the project
 
 If the project saved you time or money, you can support it monthly via
@@ -284,6 +298,7 @@ does not change the license: personal use stays free.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) — latest: **0.1.40 (2026-11-23)**:
-fast-anything extraction, new Groq and Gemini Flash-Lite LLM legs, and the
-`llm-status` date fix. Full test suite **1524/1524**, `doctor` 26/26.
+See [CHANGELOG.md](CHANGELOG.md) — latest: **0.1.44 (2026-11-23)**:
+real motion in long videos (`--motion clips` by default, from a Wan 2.2
+motion manifest, with still-image fallback and no Ken Burns). Full test
+suite **1896/1896**, `doctor` 28/28.
