@@ -114,9 +114,35 @@ class TestPersistence(unittest.TestCase):
     def test_status_lines_arabic(self):
         state = state_lib.default_state()
         state_lib.record_attempt(state, PROVIDER, True, now=1000000.0)
-        lines = state_lib.status_lines(state, [PROVIDER])
+        # نفس يوم المحاولة (1970) — وإلا صفّر التدوير اليومي
+        # العدادات قبل قراءتها (جولة v0.1.40)
+        lines = state_lib.status_lines(state, [PROVIDER],
+                                       now=1000000.0 + 10)
         self.assertTrue(any(PROVIDER in l for l in lines))
         self.assertTrue(any("سليم" in l for l in lines))
+
+    def test_status_lines_rolls_over_yesterday(self):
+        """انحدار (جولة v0.1.40): حالة بتاريخ الأمس ←
+        status_lines تطبع تاريخ اليوم وعدادات صفرية، لا
+        تاريخ الأمس وعداداته."""
+        today = time.strftime("%Y-%m-%d")
+        yesterday = time.strftime(
+            "%Y-%m-%d", time.localtime(time.time() - 86400))
+        self.assertNotEqual(today, yesterday)
+        state = state_lib.default_state()
+        state["daily"] = {"date": yesterday,
+                          "calls": {PROVIDER: 7},
+                          "successes": {PROVIDER: 5},
+                          "failures": {PROVIDER: 2}}
+        lines = state_lib.status_lines(state, [PROVIDER])
+        self.assertIn(today, lines[0])
+        self.assertNotIn(yesterday, lines[0])
+        provider_line = [l for l in lines if PROVIDER in l][0]
+        self.assertIn("مكالمات اليوم 0", provider_line)
+        self.assertIn("ناجحة 0", provider_line)
+        # التدوير في الذاكرة فقط — الحالة نفسها تحدّثت
+        self.assertEqual(state["daily"]["date"], today)
+        self.assertEqual(state["daily"]["calls"], {})
 
 
 if __name__ == "__main__":

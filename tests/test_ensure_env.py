@@ -12,8 +12,13 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 STUDIO = os.path.dirname(HERE)
 WORKSPACE = os.path.dirname(STUDIO)
-GUARD = os.path.join(WORKSPACE, "ensure-env.sh")
-SETUP = os.path.join(WORKSPACE, "setup-env.sh")
+# جولة v0.1.41 (إصلاح CI): سكربتا الإعداد يعيشان داخل شجرة
+# المستودع (جذر الاستوديو) بعدما كانا في ~/workspace/ خارجها
+# فيغيبان عن نسخة CI. أما restore-system-tools.sh و
+# update-clamav-db.sh فيبقيان سكربتي مضيف في ~/workspace/ فقط،
+# فالاختبارات التي تقرأهما تتخطى نظيفًا عند غيابهما (CI).
+GUARD = os.path.join(STUDIO, "ensure-env.sh")
+SETUP = os.path.join(STUDIO, "setup-env.sh")
 RESTORE = os.path.join(WORKSPACE, "restore-system-tools.sh")
 UPDATE_DB = os.path.join(WORKSPACE, "update-clamav-db.sh")
 STUDIO_PY = os.path.join(STUDIO, "studio.py")
@@ -28,6 +33,22 @@ FULL_PATH = ":".join([
 def _read(path):
     with open(path, encoding="utf-8") as f:
         return f.read()
+
+
+# أدوات apt للحماية + قاعدة ClamAV: موجودة على آلة المستخدم
+# المهيأة فقط؛ غيابها في CI لا يعني عطلًا في الحارس نفسه،
+# فالفحص الجاف «الصحي» يتخطى عند غيابها (جولة v0.1.41).
+_APT_PROTECT_TOOLS = ("lynis", "clamscan", "rkhunter", "chkrootkit",
+                      "fail2ban-client", "ufw")
+
+
+def _protection_tools_present():
+    import glob
+    import shutil
+    if any(shutil.which(t) is None for t in _APT_PROTECT_TOOLS):
+        return False
+    return bool(glob.glob("/var/lib/clamav/*.cvd")
+                + glob.glob("/var/lib/clamav/*.cld"))
 
 
 class TestGuardDryRun(unittest.TestCase):
@@ -50,6 +71,10 @@ class TestGuardDryRun(unittest.TestCase):
         self.assertIn("apt-tools missing: none", r.stdout)
         self.assertIn("clamav-db: OK", r.stdout)
 
+    @unittest.skipUnless(
+        _protection_tools_present(),
+        "آلة غير مهيأة بالكامل (أدوات apt للحماية أو قاعدة "
+        "ClamAV غائبة) — بيئة CI")
     def test_dry_run_apt_only_healthy(self):
         env = dict(os.environ, PATH=FULL_PATH)
         r = subprocess.run(["/bin/bash", GUARD, "--apt-only", "--dry-run"],
@@ -132,6 +157,10 @@ class TestGuardFixesPresent(unittest.TestCase):
         self.assertNotIn('BG_LOG="/tmp/ensure-env-bg.log"', src)
         self.assertIn('BG_LOG="$WORKSPACE/ensure-env-bg.log"', src)
 
+    @unittest.skipUnless(
+        os.path.isfile(RESTORE),
+        "restore-system-tools.sh سكربت مضيف في ~/workspace/ فقط — "
+        "بيئة CI")
     def test_restore_retries_and_proxy_and_exit_code(self):
         src = _read(RESTORE)
         self.assertIn("apt_retry", src)
@@ -152,6 +181,10 @@ class TestGuardFixesPresent(unittest.TestCase):
         self.assertIn("ensure_apt_proxy", src)
         self.assertIn("/etc/environment", src)
 
+    @unittest.skipUnless(
+        os.path.isfile(UPDATE_DB),
+        "update-clamav-db.sh سكربت مضيف في ~/workspace/ فقط — "
+        "بيئة CI")
     def test_update_db_proxy_fallback(self):
         self.assertIn("/etc/environment", _read(UPDATE_DB))
 
@@ -162,7 +195,15 @@ class TestGuardFixesPresent(unittest.TestCase):
         self.assertIn("find_spec", src)
 
     def test_all_guard_scripts_parse(self):
-        for path in (GUARD, SETUP, RESTORE, UPDATE_DB):
+        # سكربتا الإعداد داخل الشجرة فيجب وجودهما وفحصهما دائمًا؛
+        # أما سكربتا المضيف فيُفحصان إن وُجدا فقط (غيابهما في CI
+        # متوقَّع وتغطيه حراسات التخطي في اختباراتهما المخصصة).
+        for path in (GUARD, SETUP):
+            self.assertTrue(os.path.isfile(path),
+                            "سكربت الإعداد مفقود: %s" % path)
+        scripts = [p for p in (GUARD, SETUP, RESTORE, UPDATE_DB)
+                   if os.path.isfile(p)]
+        for path in scripts:
             r = subprocess.run(["/bin/bash", "-n", path],
                                capture_output=True, text=True, timeout=30)
             self.assertEqual(r.returncode, 0, "%s: %s" % (path, r.stderr))
@@ -216,6 +257,10 @@ class TestRound4EnvFixes(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), "127.0.0.1")
 
+    @unittest.skipUnless(
+        os.path.isfile(UPDATE_DB),
+        "update-clamav-db.sh سكربت مضيف في ~/workspace/ فقط — "
+        "بيئة CI")
     def test_clamav_proxy_writes_creds_only_with_at(self):
         """M6 حيًا (محاكاة منطق السكربت نفسه): بروكسي بلا '@' لا يكتب
         بيانات اعتماد وهمية، وبروكسي فيه '@' يكتبها صحيحة."""
@@ -247,6 +292,10 @@ class TestRound4EnvFixes(unittest.TestCase):
                 self.assertNotIn("HTTPProxyUsername", r.stdout)
                 self.assertNotIn("HTTPProxyPassword", r.stdout)
 
+    @unittest.skipUnless(
+        os.path.isfile(UPDATE_DB),
+        "update-clamav-db.sh سكربت مضيف في ~/workspace/ فقط — "
+        "بيئة CI")
     def test_proxy_fallback_keeps_inner_quotes(self):
         """L9 حيًا: بديل البروكسي من /etc/environment يزيل زوج علامات
         محيطة واحدًا فقط — كلمة سر فيها علامة اقتباس تبقى سليمة."""
@@ -321,6 +370,10 @@ class TestRound4EnvFixes(unittest.TestCase):
         self.assertIn("bad=1", r.stdout)
         self.assertIn("bad-deleted", r.stdout)
 
+    @unittest.skipUnless(
+        os.path.isfile(UPDATE_DB),
+        "update-clamav-db.sh سكربت مضيف في ~/workspace/ فقط — "
+        "بيئة CI")
     def test_freshclam_config_is_mktemp(self):
         """L7: ملف إعداد freshclam عبر mktemp + umask 077 + حذف عند الخروج."""
         src = _read(UPDATE_DB)
@@ -329,6 +382,10 @@ class TestRound4EnvFixes(unittest.TestCase):
         self.assertIn('trap \'rm -f "$CFG"\' EXIT', src)
         self.assertNotIn("CFG=/tmp/freshclam-runtime.conf", src)
 
+    @unittest.skipUnless(
+        os.path.isfile(GUARD) and os.path.isfile(SETUP)
+        and os.path.isfile(RESTORE) and os.path.isfile(UPDATE_DB),
+        "أحد سكربتات المضيف غائب — بيئة CI")
     def test_predictable_locks_and_tmps_gone(self):
         """L9: لا مسارات قفل /tmp متوقعة ولا ملفات .tmp متوقعة،
         وrestore يفشل سريعًا، ولا tr -d '\"' في أي سكربت."""
@@ -350,6 +407,37 @@ class TestRound4EnvFixes(unittest.TestCase):
                 line for line in _read(path).splitlines()
                 if not line.strip().startswith("#"))
             self.assertNotIn("| tr -d '\"'", code, path)
+
+
+class TestGuardScriptsInSync(unittest.TestCase):
+    """نسختا سكربتي الإعداد (المستودع + ~/workspace/) متزامنتان.
+
+    النسخة الحية التي يستدعيها studio.py والخطافات تعيش في
+    ~/workspace/ (لا يمكن نقلها: studio.py يشير إليها بمسار
+    مطلق)؛ ونسخة المستودع هي المُلزَمة في GitHub. أي تعديل
+    على إحداهما يجب أن يُنسخ إلى الأخرى — هذا الاختبار يمنع
+    الانجراف صامتًا. يتخطى في CI حيث لا توجد نسخة
+    ~/workspace/ أصلًا (جولة v0.1.41).
+    """
+
+    @unittest.skipUnless(
+        os.path.isfile(os.path.join(WORKSPACE, "ensure-env.sh"))
+        and os.path.isfile(os.path.join(WORKSPACE, "setup-env.sh")),
+        "نسختا ~/workspace/ غائبتان — بيئة CI")
+    def test_repo_copies_match_workspace_copies(self):
+        import hashlib
+        for name in ("ensure-env.sh", "setup-env.sh"):
+            repo = os.path.join(STUDIO, name)
+            live = os.path.join(WORKSPACE, name)
+            self.assertTrue(os.path.isfile(repo),
+                            "نسخة المستودع مفقودة: %s" % repo)
+            with open(repo, "rb") as f:
+                repo_hash = hashlib.sha256(f.read()).hexdigest()
+            with open(live, "rb") as f:
+                live_hash = hashlib.sha256(f.read()).hexdigest()
+            self.assertEqual(
+                repo_hash, live_hash,
+                "%s انحرف بين المستودع و~/workspace/ — زامنهما" % name)
 
 
 if __name__ == "__main__":

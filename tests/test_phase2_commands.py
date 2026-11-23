@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """اختبارات أوامر المرحلة 2 (preview/logs/balance/queue import/
 الصوت الافتراضي) — بلا نشر وبلا لمس للطابور الحقيقي."""
+import datetime
 import io
 import json
 import os
@@ -134,18 +135,24 @@ class TestPreviewCmd(unittest.TestCase):
 
 class TestLogsCmd(unittest.TestCase):
     def _setup(self, td):
+        # التواريخ نسبية لليوم الحقيقي: كان الاختبار مثبّتًا على
+        # 2026-11-22 ففشل في أي يوم آخر (اليوم = anza، أمس = hamati).
+        today = datetime.date.today()
+        yesterday = today - datetime.timedelta(days=1)
         runs = Path(td) / "runs"
-        (runs / "anza-20261122-070000").mkdir(parents=True)
-        (runs / "anza-20261122-070000" / "run-log.json").write_text(
-            json.dumps({"run": "anza-20261122-070000", "story": "anza",
-                        "started": "2026-11-22T07:00:00",
+        anza_day = today.strftime("%Y%m%d")
+        (runs / ("anza-%s-070000" % anza_day)).mkdir(parents=True)
+        (runs / ("anza-%s-070000" % anza_day) / "run-log.json").write_text(
+            json.dumps({"run": "anza-%s-070000" % anza_day, "story": "anza",
+                        "started": "%sT07:00:00" % today.isoformat(),
                         "steps": {"render": {"status": "ok"}}},
                        ensure_ascii=False), encoding="utf-8")
-        (runs / "hamati-20261121-190000").mkdir(parents=True)
-        (runs / "hamati-20261121-190000" / "run-log.json").write_text(
-            json.dumps({"run": "hamati-20261121-190000",
+        hamati_day = yesterday.strftime("%Y%m%d")
+        (runs / ("hamati-%s-190000" % hamati_day)).mkdir(parents=True)
+        (runs / ("hamati-%s-190000" % hamati_day) / "run-log.json").write_text(
+            json.dumps({"run": "hamati-%s-190000" % hamati_day,
                         "story": "hamati",
-                        "started": "2026-11-21T19:00:00",
+                        "started": "%sT19:00:00" % yesterday.isoformat(),
                         "steps": {"script": {"status": "failed",
                                              "error": "خطأ تجريبي"}}},
                        ensure_ascii=False), encoding="utf-8")

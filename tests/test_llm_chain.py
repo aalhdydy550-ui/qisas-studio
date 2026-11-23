@@ -47,26 +47,86 @@ class TestClassify(unittest.TestCase):
 
 
 class TestProvidersFromConfig(unittest.TestCase):
-    def test_default_chain_includes_gemini(self):
+    def test_default_chain_includes_gemini_and_ollama_last(self):
         providers = client_lib.providers_from_config(
             {"model": "ddgw/gpt-5.4-mini",
-             "fallback_model": "g4fpol/deepseek"})
+             "fallback_model": "groq/openai/gpt-oss-120b"})
         self.assertEqual(
             [(p["kind"], p["model"]) for p in providers],
             [("omniroute", "ddgw/gpt-5.4-mini"),
-             ("omniroute", "g4fpol/deepseek"),
+             ("omniroute", "groq/openai/gpt-oss-120b"),
+             ("gemini", "gemini-3.1-flash-lite"),
+             ("gemini", "gemini-3-flash-preview"),
+             ("ollama", "qwen2.5:7b")])
+        self.assertEqual(providers[-1]["base_url"],
+                         "http://localhost:11434")
+
+    def test_gemini_lite_disabled(self):
+        providers = client_lib.providers_from_config(
+            {"model": "ddgw/gpt-5.4-mini",
+             "fallback_model": "groq/openai/gpt-oss-120b",
+             "gemini_lite_enabled": False})
+        self.assertEqual(
+            [(p["kind"], p["model"]) for p in providers],
+            [("omniroute", "ddgw/gpt-5.4-mini"),
+             ("omniroute", "groq/openai/gpt-oss-120b"),
+             ("gemini", "gemini-3-flash-preview"),
+             ("ollama", "qwen2.5:7b")])
+
+    def test_gemini_lite_custom_model(self):
+        providers = client_lib.providers_from_config(
+            {"model": "m", "gemini_enabled": False,
+             "gemini_lite_enabled": False,
+             "gemini_lite_model": "gemini-2.0-flash-lite",
+             "ollama_enabled": False})
+        # النموذج المخصص لا يظهر مع تعطيل الساق
+        self.assertEqual(
+            [(p["kind"], p["model"]) for p in providers],
+            [("omniroute", "m")])
+        providers = client_lib.providers_from_config(
+            {"model": "m", "ollama_enabled": False,
+             "gemini_lite_model": "gemini-2.0-flash-lite"})
+        self.assertEqual(
+            [(p["kind"], p["model"]) for p in providers],
+            [("omniroute", "m"),
+             ("gemini", "gemini-2.0-flash-lite"),
              ("gemini", "gemini-3-flash-preview")])
 
     def test_gemini_disabled(self):
         providers = client_lib.providers_from_config(
             {"model": "ddgw/gpt-5.4-mini", "gemini_enabled": False})
-        self.assertEqual(len(providers), 1)
+        # المفتاح الرئيسي يُسقط ساقي Gemini معًا (Lite + رئيسي)
+        self.assertEqual(
+            [(p["kind"], p["model"]) for p in providers],
+            [("omniroute", "ddgw/gpt-5.4-mini"),
+             ("ollama", "qwen2.5:7b")])
+
+    def test_ollama_disabled(self):
+        providers = client_lib.providers_from_config(
+            {"model": "ddgw/gpt-5.4-mini", "ollama_enabled": False})
+        self.assertEqual(
+            [(p["kind"], p["model"]) for p in providers],
+            [("omniroute", "ddgw/gpt-5.4-mini"),
+             ("gemini", "gemini-3.1-flash-lite"),
+             ("gemini", "gemini-3-flash-preview")])
+
+    def test_ollama_custom_model_and_url(self):
+        providers = client_lib.providers_from_config(
+            {"model": "m", "gemini_enabled": False,
+             "ollama_model": "llama3.1:8b",
+             "ollama_base_url": "http://127.0.0.1:11434"})
+        self.assertEqual(providers[-1],
+                         {"kind": "ollama", "model": "llama3.1:8b",
+                          "base_url": "http://127.0.0.1:11434"})
 
     def test_dedup(self):
         providers = client_lib.providers_from_config(
             {"model": "m", "fallback_model": "m",
              "gemini_enabled": False})
-        self.assertEqual(len(providers), 1)
+        # الموديل المكرر ساق واحدة فقط + ساق Ollama الافتراضية
+        self.assertEqual(
+            [(p["kind"], p["model"]) for p in providers],
+            [("omniroute", "m"), ("ollama", "qwen2.5:7b")])
 
 
 class TestChatChain(unittest.TestCase):
@@ -145,12 +205,106 @@ class TestChatChain(unittest.TestCase):
             client_lib.chat_chain("مرحبا", [])
 
 
+class TestGroqAndLiteInChain(unittest.TestCase):
+    """جولة v0.1.40: Groq ركنًا ثانيًا بدل g4fpol، وFlash-Lite
+    قبل Flash الرئيسي — كلها mock، بلا شبكة حية."""
+
+    def test_groq_success_returns_groq_reply(self):
+        providers = [{"kind": "omniroute",
+                      "model": "groq/openai/gpt-oss-120b"},
+                     {"kind": "gemini",
+                      "model": "gemini-3.1-flash-lite"}]
+        with mock.patch.object(
+                client_lib, "chat_cli",
+                return_value="رد Groq") as cli, \
+             mock.patch.object(client_lib, "chat_gemini") as gem:
+            text, via, model = client_lib.chat_chain(
+                "مرحبا", providers, retries=0)
+        self.assertEqual((text, via, model),
+                         ("رد Groq", "cli",
+                          "groq/openai/gpt-oss-120b"))
+        cli.assert_called_once()
+        gem.assert_not_called()
+
+    def test_groq_auth_failure_skips_to_lite(self):
+        """خطأ مصادقة محاكى من chat_cli عند Groq → السلسلة
+        تتخطاه للركن التالي (Flash-Lite) بلا كسر."""
+        providers = [{"kind": "omniroute",
+                      "model": "groq/openai/gpt-oss-120b"},
+                     {"kind": "gemini",
+                      "model": "gemini-3.1-flash-lite"},
+                     {"kind": "gemini",
+                      "model": "gemini-3-flash-preview"}]
+        with mock.patch.object(
+                client_lib, "chat_cli",
+                side_effect=OmniRouteError(
+                    "HTTP 401 Unauthorized — invalid api key")), \
+             mock.patch.object(
+                 client_lib, "chat_gemini",
+                 return_value="رد لايت") as gem:
+            text, via, model = client_lib.chat_chain(
+                "مرحبا", providers, retries=0)
+        self.assertEqual((text, via, model),
+                         ("رد لايت", "gemini",
+                          "gemini-3.1-flash-lite"))
+        gem.assert_called_once()
+        # الاستدعاء الوحيد كان لـ Lite لا لـ Flash الرئيسي
+        self.assertEqual(gem.call_args[1]["model"],
+                         "gemini-3.1-flash-lite")
+
+    def test_lite_wins_before_main_gemini(self):
+        """chat_gemini يُستدعى أولًا بنموذج Lite؛ نجاحه يمنع
+        الوصول لـ Flash الرئيسي."""
+        providers = [{"kind": "gemini",
+                      "model": "gemini-3.1-flash-lite"},
+                     {"kind": "gemini",
+                      "model": "gemini-3-flash-preview"}]
+        seen_models = []
+
+        def fake_gemini(prompt, model=None, **kwargs):
+            seen_models.append(model)
+            return "رد لايت"
+
+        with mock.patch.object(client_lib, "chat_gemini",
+                               side_effect=fake_gemini):
+            text, via, model = client_lib.chat_chain(
+                "مرحبا", providers, retries=0)
+        self.assertEqual((text, via, model),
+                         ("رد لايت", "gemini",
+                          "gemini-3.1-flash-lite"))
+        self.assertEqual(seen_models, ["gemini-3.1-flash-lite"])
+
+    def test_lite_failure_falls_through_to_main_gemini(self):
+        providers = [{"kind": "gemini",
+                      "model": "gemini-3.1-flash-lite"},
+                     {"kind": "gemini",
+                      "model": "gemini-3-flash-preview"}]
+        calls = []
+
+        def fake_gemini(prompt, model=None, **kwargs):
+            calls.append(model)
+            if model == "gemini-3.1-flash-lite":
+                raise OmniRouteError("HTTP 429 quota")
+            return "رد Flash"
+
+        with mock.patch.object(client_lib, "chat_gemini",
+                               side_effect=fake_gemini):
+            text, via, model = client_lib.chat_chain(
+                "مرحبا", providers, retries=0)
+        self.assertEqual((text, via, model),
+                         ("رد Flash", "gemini",
+                          "gemini-3-flash-preview"))
+        self.assertEqual(calls, ["gemini-3.1-flash-lite",
+                                 "gemini-3-flash-preview"])
+
+
 class TestChatLegacy(unittest.TestCase):
     def test_cli_success_unchanged(self):
         with mock.patch.object(client_lib, "chat_cli",
                                return_value="رد") as cli:
             text, via, model = client_lib.chat(
-                "مرحبا", "ddgw/gpt-5.4-mini", "g4fpol/deepseek",
+                "مرحبا", "ddgw/gpt-5.4-mini",
+                "groq/openai/gpt-oss-120b",
                 retries=0)
         self.assertEqual((text, via, model),
                          ("رد", "cli", "ddgw/gpt-5.4-mini"))

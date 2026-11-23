@@ -15,6 +15,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib import daily
+from lib import publish
 
 QUEUE_TEXT = """# طابور قصص
 
@@ -121,6 +122,14 @@ class TestPlan(unittest.TestCase):
         plan = daily.plan_daily(cfg, "morning", ready_fn=_ready)
         self.assertEqual(plan["path"], "openmontage")
 
+    @unittest.skipUnless(
+        # جولة v0.1.41 (إصلاح CI) — السبب الجذري: plan_daily يبني
+        # fb_argv عبر facebook_argv الذي يرفع PublishError إن غاب
+        # ثنائي facebook-cli (في /opt/hatch/bin محليًا فقط، لا
+        # يُثبَّت في CI) فيرجع fb_argv ‏None. الاختبار يفحص بناء
+        # الحمولات على آلة مهيأة، لا في نسخة CI عارية.
+        publish.find_facebook_bin() is not None,
+        "facebook-cli غائب — بيئة CI")
     def test_ready_video_builds_payloads(self):
         videos = os.path.join(self.tmp, "videos")
         os.makedirs(videos, exist_ok=True)

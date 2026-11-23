@@ -128,6 +128,34 @@ class TestCiWorkflow(unittest.TestCase):
         self.assertIn("apt-get install -y ffmpeg", content)
         self.assertIn("python -m unittest discover -s tests", content)
 
+    def test_ci_installs_arabic_font_and_node24_actions(self):
+        """انحدار جولة v0.1.41 (إصلاح CI #247): سير العمل يثبّت
+        خط Noto Naskh Arabic، ويستخدم checkout v5 وsetup-python
+        v6 (أول نسختين على Node 24 — v4/v5 كانتا على Node 20)."""
+        path = os.path.join(STUDIO_DIR, ".github", "workflows",
+                            "ci.yml")
+        with open(path, encoding="utf-8") as fh:
+            content = fh.read()
+        self.assertIn("fonts-noto-core", content)
+        self.assertIn("actions/checkout@v5", content)
+        self.assertIn("actions/setup-python@v6", content)
+        self.assertNotIn("actions/checkout@v4", content)
+        self.assertNotIn("actions/setup-python@v5", content)
+
+    def test_setup_scripts_live_in_repo_and_parse(self):
+        """انحدار جولة v0.1.41: سكربتا الإعداد داخل شجرة
+        المستودع (لا في ~/workspace/ خارجها) ويمرّان bash -n —
+        غيابهما عن نسخة CI أسقط اختبار AGPL و~13 اختبار
+        test_ensure_env في #247."""
+        import subprocess
+        for name in ("setup-env.sh", "ensure-env.sh"):
+            path = os.path.join(STUDIO_DIR, name)
+            self.assertTrue(os.path.isfile(path),
+                            "سكربت الإعداد مفقود من المستودع: %s" % path)
+            r = subprocess.run(["/bin/bash", "-n", path],
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, "%s: %s" % (path, r.stderr))
+
 
 if __name__ == "__main__":
     unittest.main()
