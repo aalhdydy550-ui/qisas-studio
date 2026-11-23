@@ -32,6 +32,7 @@ import urllib.request
 import zipfile
 
 from lib.paths import resolve_inside
+from lib import protect as protect_lib
 
 GITHUB_API = "https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1"
 GITHUB_RAW = "https://raw.githubusercontent.com/{repo}/{branch}/{path}"
@@ -257,8 +258,8 @@ def apply_update(local_root, changes, fetch_fn, backup_fn=None,
             os.replace(tmp, target)
         except BaseException:
             try:
-                os.unlink(tmp)
-            except OSError:
+                protect_lib.safe_delete(tmp)
+            except (OSError, protect_lib.ProtectDeniedError):
                 pass
             raise
         written.append(change["path"])
@@ -350,8 +351,8 @@ def _write_zip_atomic(out_dir, zip_name, entries, manifest_lines):
         os.replace(tmp, final)
     except BaseException:
         try:
-            os.unlink(tmp)
-        except OSError:
+            protect_lib.safe_delete(tmp)
+        except (OSError, protect_lib.ProtectDeniedError):
             pass
         raise
     return final
@@ -442,8 +443,8 @@ def restore_backup(zip_path, local_root):
                 os.replace(tmp, target)
             except BaseException:
                 try:
-                    os.unlink(tmp)
-                except OSError:
+                    protect_lib.safe_delete(tmp)
+                except (OSError, protect_lib.ProtectDeniedError):
                     pass
                 raise
             restored.append(name)
@@ -566,8 +567,8 @@ def apply_user_restore(zip_path, local_root, plan):
                 os.replace(tmp, target)
             except BaseException:
                 try:
-                    os.unlink(tmp)
-                except OSError:
+                    protect_lib.safe_delete(tmp)
+                except (OSError, protect_lib.ProtectDeniedError):
                     pass
                 raise
             restored.append(name)
@@ -600,6 +601,11 @@ def prune_old_backups(out_dir, keep=BACKUP_KEEP):
     deleted = []
     for _mtime, _name, full in excess:
         try:
+            # استثناء مقصود من بوابة المخاطر (جولة v0.1.41):
+            # تدوير النسخ الاحتياطية القديمة هو المالك الشرعي
+            # لحذفها — safe_delete يرفض backups/ دائمًا، فتبقى
+            # os.unlink هنا عمدًا (حذف مقيَّد بـkeep ومقيَّد
+            # بنمط اسم ملف النسخة الاحتياطية فقط).
             os.unlink(full)
             deleted.append(full)
         except OSError:

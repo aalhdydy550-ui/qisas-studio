@@ -32,6 +32,8 @@ import subprocess
 import tempfile
 import wave
 
+from lib import ensure_env
+
 
 class WhisperError(Exception):
     pass
@@ -182,6 +184,10 @@ def transcribe_words(audio_path, model="small", language="ar",
     try:
         from faster_whisper import WhisperModel
     except ImportError:
+        # تثبيت كسول (جولة v0.1.41): جهّز البيئة عند أول حاجة
+        # لها — فتنجح المحاولة التالية (من البيئة نفسها أو عبر
+        # transcribe_via_venv في ref_analyzer).
+        ensure_env.ensure("whisper")
         raise WhisperError(
             "faster-whisper غير مثبّت في بيئة Python الحالية — شغّل "
             "الأمر من بيئة المشروع: "

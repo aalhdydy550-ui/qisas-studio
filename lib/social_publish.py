@@ -27,7 +27,31 @@ Instagram — Graph API (Reels):
   /{ig-user-id}/media_publish.
   (الرفع القابل للاستئناف متاح فقط لتطبيقات Facebook Login
   for Business — حسب توثيق Meta.)
+
+جولة v0.1.39 — إكمال المسارين كوديًا (بلا اختبار حي بعد):
+- `validate_social_payload`: تحقق كامل قبل أي شبكة — الفيديو
+  موجود وسليم (mp4 غير فارغ)، النص غير فارغ وضمن حد المنصة
+  (2200 حرفًا للمنصتين)، الوسوم ضمن حد إنستغرام (30 وسمًا)،
+  المدة والأبعاد (عمودي 9:16) والصوت عند توفر معلومات probe،
+  والمصغرة (إن أُعطيت) موجودة وبأبعاد 720×1280 — برسائل عربية.
+- `require_social_config`: تحقق من الإعدادات (توكن/معرّف حساب)
+  برسائل عربية عبر lib.errors عند النقص.
+- `dry_run_summary`: يبني الحمولة كاملة ويتحقق منها ويرجع
+  ملخصها دون أي طلب شبكة (لا يقرأ التوكن أصلًا).
+- `normalize_result` / `format_result`: شكل نتيجة موحّد مع
+  مسارات النشر القائمة (منصة + معرّف + حالة + رابط إن وُجد).
+- `build_social_payload`: موزّع واحد لبناء حمولة أي منصة.
 """
+import json
+import math
+import os
+import re
+import time
+import urllib.error
+import urllib.request
+
+from lib import errors as errors_lib
+
 import json
 import math
 import os
@@ -43,12 +67,19 @@ IG_RUPLOAD_BASE = "https://rupload.facebook.com/ig-api-upload"
 IG_API_VERSION = "v21.0"
 
 TIKTOK_TITLE_LIMIT = 2200
+IG_CAPTION_LIMIT = 2200
+# حد إنستغرام الموثّق: 30 وسمًا كحد أقصى في المنشور الواحد.
+IG_HASHTAG_LIMIT = 30
 TIKTOK_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB لكل مقطع رفع
 TIKTOK_MAX_DURATION = 600  # 10 دقائق حد Content Posting API
 IG_REEL_MAX_DURATION = 90  # 90 ثانية حد Reels عبر API
 IG_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB لكل مقطع رفع قابل للاستئناف
 IG_READY_TIMEOUT = 180  # ثوانٍ — أقصى انتظار لجاهزية الحاوية
 MIN_TOKEN_LENGTH = 10
+# المصغرة (إن أُعطيت): نفس مقاس مصغرات الاستوديو 720×1280.
+THUMBNAIL_SIZE = (720, 1280)
+THUMBNAIL_EXTS = (".jpg", ".jpeg", ".png")
+PLATFORM_NAMES = {"tiktok": "تيك توك", "instagram": "إنستغرام"}
 
 
 class SocialPublishError(Exception):
@@ -118,6 +149,308 @@ def _caption_text(title, caption):
     return "\n".join(lines)
 
 
+def _text_limit(platform):
+    """حد نص النشر بالحروف: 2200 للمنصتين."""
+    return (TIKTOK_TITLE_LIMIT if platform == "tiktok"
+            else IG_CAPTION_LIMIT)
+
+
+def _validate_text(platform, text):
+    """النص غير فارغ وضمن حد المنصة — قبل أي شبكة."""
+    name = PLATFORM_NAMES[platform]
+    if not (text or "").strip():
+        raise SocialPublishError(
+            "نص النشر على %s فارغ — اكتب عنوانًا أو كابشنًا قبل "
+            "النشر" % name)
+    limit = _text_limit(platform)
+    if len(text) > limit:
+        raise SocialPublishError(
+            "نص نشر %s أطول من حد المنصة (%d حرفًا): %d حرفًا — "
+            "قصّره %d حرفًا"
+            % (name, limit, len(text), len(text) - limit))
+    return text
+
+
+def extract_hashtags(text):
+    """وسوم النص (#كلمة) — عربي/لاتيني/أرقام وشرطة سفلية."""
+    return re.findall(r"#([\w\u0600-\u06FF]+)", text or "")
+
+
+def validate_hashtags(text, platform):
+    """عدد الوسوم ضمن حد المنصة.
+
+    إنستغرام: 30 وسمًا كحد أقصى (حد موثّق من Meta). تيك توك:
+    بلا حد عددي موثّق — الوسوم تُحسب ضمن حد 2200 حرفًا فقط
+    (يُفحص في _validate_text).
+    """
+    if platform != "instagram":
+        return extract_hashtags(text)
+    tags = extract_hashtags(text)
+    if len(tags) > IG_HASHTAG_LIMIT:
+        raise SocialPublishError(
+            "وسوم إنستغرام زائدة عن حد المنصة (%d وسمًا): %d وسمًا "
+            "— احذف %d وسمًا على الأقل"
+            % (IG_HASHTAG_LIMIT, len(tags),
+               len(tags) - IG_HASHTAG_LIMIT))
+    return tags
+
+
+def validate_thumbnail(path, probe_fn=None):
+    """تحقق من المصغرة (إن أُعطيت): موجودة، صورة، 720×1280.
+
+    probe_fn: دالة probe_fn(path) -> (width, height) — للاختبار؛
+    الافتراضي: lib.thumbnail.probe_image (ffprobe محلي، بلا شبكة).
+    يرجع (العرض، الارتفاع). None تعني: بلا مصغرة (اختياري).
+    """
+    if not path:
+        return None
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(path):
+        raise SocialPublishError(
+            "الصورة المصغرة غير موجودة: %s" % path)
+    if not path.lower().endswith(THUMBNAIL_EXTS):
+        raise SocialPublishError(
+            "صيغة الصورة المصغرة غير مدعومة (المطلوب jpg أو png): %s"
+            % path)
+    probe = probe_fn
+    if probe is None:
+        from lib import thumbnail as thumbnail_lib
+        probe = thumbnail_lib.probe_image
+    try:
+        width, height = probe(path)
+    except Exception as e:
+        raise SocialPublishError(
+            "تعذرت قراءة أبعاد الصورة المصغرة %s: %s" % (path, e))
+    if (width, height) != THUMBNAIL_SIZE:
+        raise SocialPublishError(
+            "أبعاد الصورة المصغرة غير صحيحة: %d×%d — المطلوب "
+            "%d×%d (مصغرة الاستوديو العمودية)"
+            % (width, height, THUMBNAIL_SIZE[0], THUMBNAIL_SIZE[1]))
+    return (width, height)
+
+
+def _duration_limit(platform):
+    return (TIKTOK_MAX_DURATION if platform == "tiktok"
+            else IG_REEL_MAX_DURATION)
+
+
+def validate_social_video(video, platform, duration=None,
+                          probe_info=None, thumbnail=None,
+                          thumbnail_probe=None):
+    """تحقق من الفيديو قبل أي شبكة: موجود، mp4 غير فارغ، المدة
+    والأبعاد والصوت عند توفر معلومات probe، والمصغرة إن أُعطيت.
+
+    duration: مدة معروفة بالثواني (أو None)؛ وprobe_info قاموس
+    probe من lib.check (duration/width/height/has_audio) — عند
+    غيابهما تُفحص المدة/الأبعاد في مسار الرفع عبر _check_duration
+    قبل أي طلب شبكة. يرجع معلومات الفيديو المفحوصة.
+    """
+    video = _check_video(video)
+    name = PLATFORM_NAMES[platform]
+    size = os.path.getsize(video)
+    if size <= 0:
+        raise SocialPublishError("ملف الفيديو فارغ: %s" % video)
+    info = {"video": video, "size": size, "duration": duration,
+            "width": None, "height": None, "has_audio": None,
+            "thumbnail": None}
+    probe_duration = None
+    if probe_info:
+        probe_duration = probe_info.get("duration")
+        info["width"] = probe_info.get("width")
+        info["height"] = probe_info.get("height")
+        info["has_audio"] = probe_info.get("has_audio")
+    seconds = duration if duration is not None else probe_duration
+    if seconds is not None:
+        info["duration"] = seconds
+        limit = _duration_limit(platform)
+        if seconds > limit:
+            raise SocialPublishError(
+                "مدة الفيديو (%.1f ثانية) تتجاوز حد %s (%d ثانية) — "
+                "قصّر الفيديو قبل الرفع" % (seconds, name, limit))
+    width, height = info["width"], info["height"]
+    if width and height:
+        # عمودي 9:16 (بتسامح 2% — يقبل 720×1280 و1080×1920).
+        ratio = width / height
+        if abs(ratio - 9.0 / 16.0) > 0.02:
+            raise SocialPublishError(
+                "أبعاد الفيديو ليست عمودية 9:16 (%d×%d) — %s يقبل "
+                "فيديو عموديًا فقط" % (width, height, name))
+    if info["has_audio"] is False:
+        raise SocialPublishError(
+            "الفيديو بلا مسار صوتي — %s يحتاج فيديو بسرد مسموع"
+            % name)
+    if thumbnail:
+        info["thumbnail"] = validate_thumbnail(
+            thumbnail, probe_fn=thumbnail_probe)
+    return info
+
+
+def validate_social_payload(platform, video, title, caption,
+                            ig_user_id=None, thumbnail=None,
+                            probe_info=None, duration=None,
+                            thumbnail_probe=None):
+    """التحقق الكامل من حمولة TikTok/Instagram قبل أي شبكة.
+
+    - المنصة معروفة؛ الفيديو موجود وسليم (mp4، مدة/أبعاد/صوت
+      عند توفر probe)؛ النص غير فارغ وضمن الحد؛ الوسوم ضمن حد
+      إنستغرام؛ معرّف حساب إنستغرام موجود (لأنه جزء من الحمولة
+      نفسها — بلا معرّف لا تُبنى حمولة كاملة)؛ المصغرة (إن
+      أُعطيت) بالأبعاد الصحيحة.
+    - التوكن لا يُفحص هنا: الـdry-run معاينة بلا شبكة ولا
+      يحتاج توكنًا (يُفحص في require_social_config قبل الرفع).
+    يرجع قاموس معلومات الحمولة المفحوصة. يرفع
+    SocialPublishError برسالة عربية عند أول نقص.
+    """
+    if platform not in ("tiktok", "instagram"):
+        raise SocialPublishError("منصة غير معروفة: %s" % platform)
+    name = PLATFORM_NAMES[platform]
+    text = _caption_text(title, caption)
+    _validate_text(platform, text)
+    tags = validate_hashtags(text, platform)
+    if platform == "instagram" and not (ig_user_id or "").strip():
+        raise SocialPublishError(
+            "معرّف حساب Instagram مفقود — اضبط "
+            "publish.instagram_user_id في config.yaml أو مرّر "
+            "--ig-user-id")
+    info = validate_social_video(video, platform, duration=duration,
+                                 probe_info=probe_info,
+                                 thumbnail=thumbnail,
+                                 thumbnail_probe=thumbnail_probe)
+    info.update({"platform": platform, "text": text,
+                 "text_length": len(text), "hashtags": tags,
+                 "ig_user_id": (ig_user_id or "").strip() or None})
+    return info
+
+
+def build_social_payload(platform, video, title, caption,
+                         ig_user_id=None):
+    """موزّع واحد: حمولة TikTok أو Instagram (بلا أي اتصال)."""
+    if platform == "tiktok":
+        return tiktok_init_payload(video, title, caption)
+    if platform == "instagram":
+        return instagram_reel_payload(video, title, caption, ig_user_id)
+    raise SocialPublishError("منصة غير معروفة: %s" % platform)
+
+
+def dry_run_summary(platform, video, title, caption, ig_user_id=None,
+                    thumbnail=None, probe_info=None, duration=None,
+                    thumbnail_probe=None):
+    """وضع تجريبي لمنصة واحدة: ابنِ الحمولة كاملة وتحقق منها
+    وارجع ملخصها — دون أي طلب شبكة ودون قراءة التوكن.
+
+    يرجع {"platform", "mode": "dry-run", "ok": True,
+    "network_calls": 0, "payload", "video": <معلومات مفحوصة>,
+    "checks": [...], "summary": "..."}. يرفع SocialPublishError
+    برسالة عربية عند أي نقص (فيديو/نص/وسوم/معرّف/مصغرة).
+    """
+    if platform not in ("tiktok", "instagram"):
+        raise SocialPublishError("منصة غير معروفة: %s" % platform)
+    name = PLATFORM_NAMES[platform]
+    validated = validate_social_payload(
+        platform, video, title, caption, ig_user_id=ig_user_id,
+        thumbnail=thumbnail, probe_info=probe_info, duration=duration,
+        thumbnail_probe=thumbnail_probe)
+    payload = build_social_payload(platform, video, title, caption,
+                                   ig_user_id)
+    checks = [
+        "الفيديو موجود بصيغة mp4 (%d بايت)" % validated["size"],
+        "النص ضمن حد المنصة (%d/%d حرفًا)"
+        % (validated["text_length"], _text_limit(platform)),
+        "الوسوم ضمن الحد (%d وسمًا)"
+        % len(validated["hashtags"]),
+    ]
+    if validated["duration"] is not None:
+        checks.append("المدة ضمن حد %s (%.1f/%d ثانية)"
+                      % (name, validated["duration"],
+                         _duration_limit(platform)))
+    else:
+        checks.append("المدة لم تُفحص (لا معلومات probe — تُفحص في "
+                      "مسار الرفع قبل أي شبكة)")
+    if validated["width"] and validated["height"]:
+        checks.append("الأبعاد عمودية 9:16 (%d×%d)"
+                      % (validated["width"], validated["height"]))
+    if validated["thumbnail"]:
+        checks.append("المصغرة بالأبعاد الصحيحة (720×1280)")
+    summary = ("وضع تجريبي — %s: الحمولة جاهزة للنشر (بلا أي طلب "
+               "شبكة) — %s" % (name, "؛ ".join(checks)))
+    return {"platform": platform, "mode": "dry-run", "ok": True,
+            "network_calls": 0, "payload": payload,
+            "video": validated, "checks": checks, "summary": summary}
+
+
+def normalize_result(platform, raw):
+    """وحّد نتيجة الرفع مع مسارات النشر القائمة.
+
+    TikTok يرجع {publish_id, status, public_url} وإنستغرام
+    {media_id, creation_id} — هنا يرجع الاثنان:
+    {"platform", "ok": True, "status", "id", "url",
+    "detail": "..."}. يرفع SocialPublishError إن لم يرجع
+    الرفع معرّفًا.
+    """
+    if platform not in ("tiktok", "instagram"):
+        raise SocialPublishError("منصة غير معروفة: %s" % platform)
+    raw = raw or {}
+    if platform == "tiktok":
+        post_id = raw.get("publish_id")
+        url = raw.get("public_url")
+        status = raw.get("status")
+        detail = "publish_id=%s" % post_id if post_id else ""
+    else:
+        post_id = raw.get("media_id") or raw.get("creation_id")
+        url = None
+        status = "published"
+        detail = "media_id=%s" % post_id if post_id else ""
+    if not post_id:
+        raise SocialPublishError(
+            "الرفع على %s لم يرجع معرّف منشور: %s"
+            % (PLATFORM_NAMES[platform], str(raw)[:200]))
+    return {"platform": platform, "ok": True, "status": status,
+            "id": post_id, "url": url, "detail": detail}
+
+
+def format_result(result):
+    """سطـر عربي واحد لنتيجة موحّدة (مثل «فيسبوك: نُشر ...»)."""
+    name = PLATFORM_NAMES[result["platform"]]
+    line = "%s: نُشر — %s" % (name, result["detail"])
+    if result.get("url"):
+        line += " (الرابط: %s)" % result["url"]
+    return line
+
+
+def require_social_config(platform, cfg=None, studio_dir=None,
+                          ig_user_id=None):
+    """تحقق من إعدادات المنصة قبل الرفع — توكن ومعرّف حساب.
+
+    يرجع {"platform", "token", "ig_user_id"}. يرفع
+    SocialPublishError برسالة عربية عبر lib.errors عند النقص
+    (توكن غير مربوط / معرّف حساب إنستغرام مفقود) — بلا أي
+    شبكة وبلا عرض قيمة التوكن. لا يتحقق من صلاحية التوكن عبر
+    الشبكة (ذلك في الرفع نفسه).
+    """
+    if platform not in ("tiktok", "instagram"):
+        raise SocialPublishError("منصة غير معروفة: %s" % platform)
+    name = PLATFORM_NAMES[platform]
+    uid = None
+    if platform == "instagram":
+        uid = ((ig_user_id or "")
+               or ((cfg or {}).get("publish") or {}).get(
+                   "instagram_user_id") or "").strip()
+        if not uid:
+            raise SocialPublishError(errors_lib.explain_error_text(
+                "معرّف حساب Instagram مفقود — اضبط "
+                "publish.instagram_user_id في config.yaml أو مرّر "
+                "--ig-user-id", "instagram"))
+    token = load_token(platform, studio_dir=studio_dir)
+    if not token or len(token.strip()) < MIN_TOKEN_LENGTH:
+        raise SocialPublishError(errors_lib.explain_error_text(
+            "توكن %s غير مربوط — لا يوجد ملف توكن صالح؛ أكمل "
+            "`studio.py %s-auth --token <التوكن>` مرة واحدة"
+            % (name, platform), platform))
+    return {"platform": platform, "token": token.strip(),
+            "ig_user_id": uid or None}
+
+
+
 def tiktok_init_payload(video, title, caption):
     """جسم طلب TikTok video/init + بيانات الرفع (بلا أي اتصال).
 
@@ -128,10 +461,8 @@ def tiktok_init_payload(video, title, caption):
     """
     video = _check_video(video)
     text = _caption_text(title, caption)
-    if len(text) > TIKTOK_TITLE_LIMIT:
-        raise SocialPublishError(
-            "نص نشر TikTok أطول من حد المنصة (2200 حرفًا): %d حرفًا"
-            % len(text))
+    _validate_text("tiktok", text)
+    validate_hashtags(text, "tiktok")
     size = os.path.getsize(video)
     chunk_size = TIKTOK_CHUNK_SIZE
     total_chunks = max(1, math.ceil(size / chunk_size))
@@ -187,6 +518,8 @@ def instagram_reel_payload(video, title, caption, ig_user_id=None):
     """
     video = _check_video(video)
     text = _caption_text(title, caption)
+    _validate_text("instagram", text)
+    validate_hashtags(text, "instagram")
     uid = (ig_user_id or "").strip() or "<معرّف حساب Instagram>"
     base = "%s/%s/%s" % (IG_API_BASE, IG_API_VERSION, uid)
     rupload = "%s/%s/<id من الخطوة 1>" % (IG_RUPLOAD_BASE,
@@ -242,9 +575,11 @@ def instagram_reel_payload(video, title, caption, ig_user_id=None):
 
 
 def _http_json(method, url, body=None, token=None, headers=None,
-               timeout=300):
+               timeout=300, context=None):
     """طلب JSON عبر urllib. يرجع القاموس المفكوك. يرفع
-    SocialPublishError برسالة عربية عند أي فشل (بلا تسريب توكن)."""
+    SocialPublishError برسالة عربية عند أي فشل (بلا تسريب توكن).
+    context: "tiktok"/"instagram" — تُلحق ترجمة lib.errors
+    العربية بالخطأ الخام (مثل مساري فيسبوك/يوتيوب)."""
     data = None
     hdrs = dict(headers or {})
     if body is not None:
@@ -259,10 +594,16 @@ def _http_json(method, url, body=None, token=None, headers=None,
             raw = resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
-        raise SocialPublishError(
-            "فشل طلب %s %s (HTTP %d): %s" % (method, url, e.code, detail))
+        msg = ("فشل طلب %s %s (HTTP %d): %s" % (method, url, e.code,
+                                                 detail))
+        if context in ("tiktok", "instagram"):
+            msg += "\n" + errors_lib.explain_error_text(msg, context)
+        raise SocialPublishError(msg)
     except urllib.error.URLError as e:
-        raise SocialPublishError("تعذر الاتصال بـ %s: %s" % (url, e))
+        msg = "تعذر الاتصال بـ %s: %s" % (url, e)
+        if context in ("tiktok", "instagram"):
+            msg += "\n" + errors_lib.explain_error_text(msg, context)
+        raise SocialPublishError(msg)
     try:
         return json.loads(raw)
     except ValueError:
@@ -343,7 +684,8 @@ def _wait_ig_container_ready(media_id, token, timeout=IG_READY_TIMEOUT,
                                            media_id)
     deadline = time.time() + max(timeout, 0)
     while True:
-        resp = _http_json("GET", url, token=token, timeout=60)
+        resp = _http_json("GET", url, token=token, timeout=60,
+                          context="instagram")
         code = (resp or {}).get("status_code")
         if code == "FINISHED":
             return True
@@ -367,10 +709,11 @@ def upload_tiktok(video, title, caption, token, timeout=600):
     يرفع SocialPublishError إن أعاد فحص الحالة FAILED (كان
     الكود يرجع بنجاح ويطبع «رُفع» حتى عند الفشل).
     """
+    validate_social_payload("tiktok", video, title, caption)
     _check_duration(video, TIKTOK_MAX_DURATION, "TikTok")
     payload = tiktok_init_payload(video, title, caption)
     resp = _http_json("POST", payload["url"], body=payload["body"],
-                      token=token, timeout=timeout)
+                      token=token, timeout=timeout, context="tiktok")
     data = resp.get("data") or {}
     publish_id = data.get("publish_id")
     upload_url = data.get("upload_url")
@@ -390,7 +733,8 @@ def upload_tiktok(video, title, caption, token, timeout=600):
             offset += len(chunk)
     status = _http_json(
         "POST", TIKTOK_API_BASE + TIKTOK_STATUS_PATH,
-        body={"publish_id": publish_id}, token=token, timeout=timeout)
+        body={"publish_id": publish_id}, token=token, timeout=timeout,
+        context="tiktok")
     status_data = (status or {}).get("data") or {}
     state = status_data.get("status")
     if state == "FAILED":
@@ -416,11 +760,13 @@ def upload_instagram(video, title, caption, ig_user_id, token,
             "معرّف حساب Instagram مفقود — اضبط "
             "publish.instagram_user_id في config.yaml أو مرّر "
             "--ig-user-id")
+    validate_social_payload("instagram", video, title, caption,
+                            ig_user_id=ig_user_id)
     _check_duration(video, IG_REEL_MAX_DURATION, "Instagram")
     payload = instagram_reel_payload(video, title, caption, ig_user_id)
     create = _http_json("POST", payload["steps"][0]["url"],
                         body=payload["steps"][0]["body"], token=token,
-                        timeout=timeout)
+                        timeout=timeout, context="instagram")
     # إنشاء الحاوية يرجع id فقط — بلا upload_url (كان الكود
     # يطلب upload_url فيرفض كل رد صحيح من Meta).
     media_id = create.get("id")
@@ -443,7 +789,8 @@ def upload_instagram(video, title, caption, ig_user_id, token,
     _wait_ig_container_ready(media_id, token)
     published = _http_json(
         "POST", payload["steps"][3]["url"],
-        body={"creation_id": media_id}, token=token, timeout=timeout)
+        body={"creation_id": media_id}, token=token, timeout=timeout,
+        context="instagram")
     return {"media_id": published.get("id") or media_id,
             "creation_id": media_id}
 

@@ -26,7 +26,10 @@ import sys
 import unittest
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SETUP_ENV = os.path.join(STUDIO_ROOT, "..", "setup-env.sh")
+# جولة v0.1.41 (إصلاح CI): سكربت الإعداد يعيش داخل شجرة
+# المستودع نفسها (setup-env.sh في الجذر) بعدما كان في
+# ~/workspace/ خارج الشجرة فيغيب عن نسخة CI.
+SETUP_ENV = os.path.join(STUDIO_ROOT, "setup-env.sh")
 
 # مجلدات تُستثنى من الفحص: مخرجات تشغيل وسجلات وبيئات افتراضية
 # (ليست جزءًا من المستودع المباع).

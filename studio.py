@@ -123,6 +123,7 @@ from lib import queue as queue_lib
 from lib import queue_check
 from lib import first_scene
 from lib import run_record
+from lib import run_resume
 from lib import manifest as manifest_lib
 from lib import coverage as coverage_lib
 from lib import autoweek
@@ -149,22 +150,39 @@ from lib import social_publish as social_lib
 from lib import ass_shaping as ass_shaping_lib
 from lib import script_meta as script_meta_lib
 from lib import schedule_watch as schedule_watch_lib
+from lib import publish_meta as publish_meta_lib
+from lib import story_templates as story_templates_lib
+from lib import job_registry as job_registry_lib
+from lib import shorts_cut as shorts_cut_lib
+from lib import avatar_aspect as avatar_aspect_lib
+from lib import cost_ledger as cost_ledger_lib
+from lib import i18n as i18n_lib
 
 
-def _print_translated(prefix, exc, context):
-    """اطبع خطأً مترجمًا للعربية؛ وإن لم تُعرف فئته اطبع الأصل."""
+def _print_translated(prefix, exc, context, lang="ar"):
+    """اطبع خطأً مترجمًا للعربية؛ وإن لم تُعرف فئته اطبع الأصل.
+
+    مع lang="en" (الجولة v0.1.41): بادئة الخطأ تُترجم، ورسالة
+    «فشلت كل مزودات الذكاء» تُترجم حرفيًا؛ وجسم الخطأ المترجم
+    في lib/errors.py يبقى عربيًا (خارج هذه الحزمة)."""
     from lib import errors as errors_lib
     text = str(exc)
+    shown_prefix = i18n_lib.translate_prefix(prefix, lang)
+    if i18n_lib.normalize_lang(lang) == "en":
+        translated = i18n_lib.translate_llm_all_failed(text, "en")
+        if translated != text:
+            print("%s: %s" % (shown_prefix, translated))
+            return
     if "ماذا حدث:" in text:
-        print("%s: %s" % (prefix, text))  # مترجم أصلًا في lib/ — لا تكرر
+        print("%s: %s" % (shown_prefix, text))  # مترجم أصلًا في lib/ — لا تكرر
         return
     explained = errors_lib.explain_error(exc, context)
     if explained["category"] == "unknown":
-        print("%s: %s" % (prefix, text))
+        print("%s: %s" % (shown_prefix, text))
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.38"
+VERSION = "0.1.41"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
 # مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،
@@ -216,7 +234,7 @@ DEFAULT_MUSIC = os.path.join(
 DEFAULTS = {
     "omniroute": {"base_url": "http://localhost:20128",
                   "model": "ddgw/gpt-5.4-mini",
-                  "fallback_model": "g4fpol/deepseek",
+                  "fallback_model": "groq/openai/gpt-oss-120b",
                   "timeout_seconds": 120,
                   "retries": 1,
                   "retry_delay_seconds": 5},
@@ -379,7 +397,7 @@ def write_log(run_dir, log):
 
 
 # ---------------------------------------------------------------- status
-def _omniroute_bind_address(port=20128):
+def _omniroute_bind_address(port=20128, lang="ar"):
     """عنوان ربط خادم OmniRoute من /proc/net/tcp.
 
     يقرأ المنفذ 20128 ويعيد عنوان الاستماع الفعلي؛ تحذير صريح
@@ -404,25 +422,26 @@ def _omniroute_bind_address(port=20128):
                 ip = ".".join(str(int(addr[i:i + 2], 16))
                               for i in (6, 4, 2, 0))
                 if ip == "127.0.0.1":
-                    return "127.0.0.1 فقط (loopback — آمن)"
-                return "%s — تحذير: ليس loopback!" % ip
+                    return i18n_lib.t("status_loopback", lang)
+                return i18n_lib.t("status_bind_warn", lang, ip)
     except OSError:
         pass
-    return "غير معروف (الخادم متوقف أو بلا /proc/net/tcp)"
+    return i18n_lib.t("status_bind_unknown", lang)
 
 
-def cmd_status(cfg):
+def cmd_status(cfg, lang="ar"):
     ok = True
-    print("== OmniRoute (الذكاء) ==")
+    print(i18n_lib.t("status_llm_section", lang))
     base = cfg["omniroute"]["base_url"]
     try:
         req = urllib.request.Request(base.rstrip("/") + "/")
         with urllib.request.urlopen(req, timeout=8) as resp:
-            print("  الخادم يعمل على %s (HTTP %s)" % (base, resp.status))
+            print(i18n_lib.t("status_server_up", lang, base, resp.status))
     except Exception as e:
-        print("  الخادم لا يرد على %s: %s" % (base, e))
+        print(i18n_lib.t("status_server_down", lang, base, e))
         ok = False
-    print("  الربط: %s" % _omniroute_bind_address())
+    print(i18n_lib.t("status_bind", lang,
+                      _omniroute_bind_address(lang=lang)))
     try:
         out = subprocess.run(["omniroute", "providers", "list"],
                              capture_output=True, text=True, timeout=30)
@@ -431,30 +450,40 @@ def cmd_status(cfg):
         rows = [l.strip() for l in clean.splitlines()
                 if l.strip() and not l.strip().startswith(("Loaded", "📋",
                       "STORAGE", "OmniRoute Providers", "⚠"))]
-        print("  المزودون: %s" % ("؛ ".join(rows) if rows
-                                   else "لا يوجد مزود مفعّل"))
+        print(i18n_lib.t("status_providers", lang,
+                         ("؛ ".join(rows) if rows
+                          else i18n_lib.t("status_no_providers", lang))))
     except Exception as e:
-        print("  تعذر فحص المزودين: %s" % e)
-    print("== OpenMontage (الإنتاج) ==")
+        print(i18n_lib.t("status_providers_error", lang, e))
+    print(i18n_lib.t("status_openmontage", lang))
     root = expand(cfg["openmontage"]["root"])
-    print("  %s: %s" % (root, "موجود" if os.path.isdir(root) else "غير موجود"))
-    print("== Concat (التجميع) ==")
+    print("  %s: %s" % (root, i18n_lib.t(
+        "status_exists" if os.path.isdir(root) else "status_missing",
+        lang)))
+    print(i18n_lib.t("status_concat", lang))
     b = expand(cfg["concat"]["bin"])
-    print("  %s: %s" % (b, "موجود" if os.path.isfile(b) else "غير موجود"))
-    print("== headless-editor (تجميع بديل) ==")
+    print("  %s: %s" % (b, i18n_lib.t(
+        "status_exists" if os.path.isfile(b) else "status_missing",
+        lang)))
+    print(i18n_lib.t("status_headless", lang))
     h = expand(cfg["headless"]["editor"])
-    print("  %s: %s" % (h, "موجود" if os.path.isfile(h) else "غير موجود"))
-    print("== MLT/melt (تجميع بديل — تايم لاين XML) ==")
-    print("  %s" % ("متاح" if shutil_which("melt") else "غير متاح — "
-                     "sudo apt-get install -y melt"))
-    print("== ffmpeg ==")
-    print("  %s" % ("متاح" if shutil_which("ffmpeg") else "غير متاح"))
-    print("== الذاكرة ==")
+    print("  %s: %s" % (h, i18n_lib.t(
+        "status_exists" if os.path.isfile(h) else "status_missing",
+        lang)))
+    print(i18n_lib.t("status_mlt", lang))
+    print("  %s" % (i18n_lib.t("status_available", lang)
+                     if shutil_which("melt")
+                     else i18n_lib.t("status_melt_missing", lang)))
+    print(i18n_lib.t("status_ffmpeg", lang))
+    print("  %s" % (i18n_lib.t("status_available", lang)
+                     if shutil_which("ffmpeg")
+                     else i18n_lib.t("status_unavailable", lang)))
+    print(i18n_lib.t("status_memory", lang))
     try:
         with open("/proc/meminfo") as f:
             mem = dict(l.split(":") for l in f.read().splitlines())
         free = int(mem["MemAvailable"].split()[0]) // 1024
-        print("  المتاح: %s ميجا" % free)
+        print(i18n_lib.t("status_memory_free", lang, free))
     except Exception:
         pass
     return 0 if ok else 1
@@ -629,14 +658,17 @@ def _ensure_omniroute_server():
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        check=False)
     except (OSError, subprocess.TimeoutExpired):
-        print("تحذير: تعذّر تشغيل خادم OmniRoute")
+        print("تحذير: تعذّر تشغيل خادم OmniRoute",
+              file=sys.stderr)
         return
     for _ in range(30):
         time.sleep(2)
         if _omniroute_server_up():
-            print("خادم OmniRoute شغال على 127.0.0.1:20128")
+            print("خادم OmniRoute شغال على 127.0.0.1:20128",
+                  file=sys.stderr)
             return
-    print("تحذير: خادم OmniRoute لم يرد بعد تشغيله — قد يفشل توليد السيناريو")
+    print("تحذير: خادم OmniRoute لم يرد بعد تشغيله — قد يفشل توليد السيناريو",
+          file=sys.stderr)
 
 
 def _ensure_protection_tools():
@@ -661,8 +693,13 @@ def _ensure_protection_tools():
     if not os.path.isfile(script):
         return
     if not _script_safe_to_run(script):
+        # إلى stderr لا stdout — فمخرجات JSON للأوامر
+        # (مثل avatar-job --template وcheck --json) تبقى
+        # قابلة للقراءة الآلية في بيئة متدهورة (نفس إصلاح
+        # _ensure_environment في v0.1.38).
         print("تحذير: سكربت حارس البيئة غير آمن للتشغيل التلقائي "
-              "(مالك/صلاحيات) — يُتخطى: %s" % script)
+              "(مالك/صلاحيات) — يُتخطى: %s" % script,
+              file=sys.stderr)
         return
     _log_auto_script(script, "أدوات حماية غائبة")
     try:
@@ -673,7 +710,8 @@ def _ensure_protection_tools():
             close_fds=True)
         print("تحذير: أدوات حماية غائبة (%s)%s — إطلاق إصلاحها في الخلفية"
               % (", ".join(missing) or "لا شيء",
-                 " وقاعدة ClamAV غائبة" if db_missing else ""))
+                 " وقاعدة ClamAV غائبة" if db_missing else ""),
+              file=sys.stderr)
     except OSError:
         pass
 
@@ -1172,86 +1210,167 @@ def cmd_thumbnail(cfg, video_path, hook, out_path, at_seconds=None,
 # ------------------------------------------------------------------- run
 def cmd_run(cfg, story, project, out_path, allow_fallback, dry_run=False,
             backend="concat", watermark_on=True, cards_dir=None,
-            grade=None):
+            grade=None, lang="ar", resume=None):
     runs_dir = expand(cfg["paths"]["runs_dir"])
     if backend not in ("concat", "headless", "mlt", "openreel"):
-        print("خلفية التجميع غير معروفة: %s (المسموح: "
-              "concat/headless/mlt/openreel)" % backend)
+        print(i18n_lib.t("run_unknown_backend", lang, backend))
         return 1
     if dry_run:
         # وضع تجريبي: يطبع ما سيفعله التشغيل دون استدعاء أي طبقة.
         root = expand(cfg["openmontage"]["root"])
         proj = os.path.join(root, "projects", project)
-        print("== وضع تجريبي — لن يُستدعى OmniRoute ولا Concat ولا OpenMontage ==")
-        print("1) سيناريو: story=%s عبر %s (بديل: %s؛ إعادة محاولة: %s)"
-              % (story, cfg["omniroute"]["model"],
-                 cfg["omniroute"].get("fallback_model"),
-                 cfg["omniroute"].get("retries", 1)))
-        print("   البديل عند الفشل: %s"
-              % ("مسموح (هوك من السيناريو الجاهز)"
-                 if allow_fallback else "غير مسموح — يتوقف عند الفشل"))
-        print("2) إنتاج: مشروع OpenMontage %s — %s"
-              % (proj, "موجود" if os.path.isdir(proj) else "غير موجود!"))
-        print("3) تجميع (%s): تصدير إلى %s — مقاس %dx%d"
-              % (backend, out_path,
-                 int(cfg["video"]["width"]), int(cfg["video"]["height"])))
-        print("4) شعار الصفحة أعلى اليمين: %s"
-              % ("نعم (تلقائي)" if watermark_on else "لا (--no-watermark)"))
-        print("5) بطاقات اقتباس ختامية (3×3 ثوانٍ): %s"
-              % (cards_dir or "لا — مرّر --cards-dir بمجلد البطاقات"))
+        print(i18n_lib.t("run_dry_header", lang))
+        print(i18n_lib.t("run_dry_scenario", lang, story,
+                         cfg["omniroute"]["model"],
+                         cfg["omniroute"].get("fallback_model"),
+                         cfg["omniroute"].get("retries", 1)))
+        print(i18n_lib.t("run_dry_fallback_line", lang,
+                         i18n_lib.t("run_dry_fallback_allowed", lang)
+                         if allow_fallback
+                         else i18n_lib.t("run_dry_fallback_denied", lang)))
+        print(i18n_lib.t("run_dry_produce", lang, proj,
+                         i18n_lib.t("run_dry_exists", lang)
+                         if os.path.isdir(proj)
+                         else i18n_lib.t("run_dry_missing", lang)))
+        print(i18n_lib.t("run_dry_assemble", lang, backend, out_path,
+                         int(cfg["video"]["width"]),
+                         int(cfg["video"]["height"])))
+        print(i18n_lib.t("run_dry_logo", lang,
+                         i18n_lib.t("run_dry_logo_yes", lang)
+                         if watermark_on
+                         else i18n_lib.t("run_dry_logo_no", lang)))
+        print(i18n_lib.t("run_dry_cards", lang,
+                         cards_dir
+                         or i18n_lib.t("run_dry_cards_no", lang)))
         if grade:
-            print("6) تدرج لوني: preset %s (%s)"
-                  % (grade, lut_grade_lib.PRESETS[grade]))
+            print(i18n_lib.t("run_dry_grade", lang, grade,
+                             lut_grade_lib.PRESETS[grade]))
         if backend == "concat":
-            print("   ثنائي Concat: %s — %s"
-                  % (expand(cfg["concat"]["bin"]),
-                     "موجود" if os.path.isfile(expand(cfg["concat"]["bin"]))
-                     else "غير موجود!"))
+            print(i18n_lib.t("run_dry_concat_bin", lang,
+                             expand(cfg["concat"]["bin"]),
+                             i18n_lib.t("run_dry_exists", lang)
+                             if os.path.isfile(expand(cfg["concat"]["bin"]))
+                             else i18n_lib.t("run_dry_missing", lang)))
         elif backend == "headless":
-            print("   محرر headless: %s — %s"
-                  % (expand(cfg["headless"]["editor"]),
-                     "موجود"
-                     if os.path.isfile(expand(cfg["headless"]["editor"]))
-                     else "غير موجود!"))
+            print(i18n_lib.t("run_dry_headless", lang,
+                             expand(cfg["headless"]["editor"]),
+                             i18n_lib.t("run_dry_exists", lang)
+                             if os.path.isfile(
+                                 expand(cfg["headless"]["editor"]))
+                             else i18n_lib.t("run_dry_missing", lang)))
         elif backend == "mlt":
-            print("   ثنائي melt: %s"
-                  % ("موجود" if shutil_which("melt") else "غير موجود!"))
+            print(i18n_lib.t("run_dry_melt", lang,
+                             i18n_lib.t("run_dry_exists", lang)
+                             if shutil_which("melt")
+                             else i18n_lib.t("run_dry_missing", lang)))
         if backend == "openreel":
-            print("   ريندر OpenReel: %s — %s"
-                  % (expand(cfg["openreel"]["render"]),
-                     "موجود"
-                     if os.path.isfile(expand(cfg["openreel"]["render"]))
-                     else "غير موجود!"))
-        print("   مجلد التشغيل: %s/<story>-<وقت>/" % runs_dir)
+            print(i18n_lib.t("run_dry_openreel", lang,
+                             expand(cfg["openreel"]["render"]),
+                             i18n_lib.t("run_dry_exists", lang)
+                             if os.path.isfile(
+                                 expand(cfg["openreel"]["render"]))
+                             else i18n_lib.t("run_dry_missing", lang)))
+        print(i18n_lib.t("run_dry_rundir", lang, runs_dir))
         return 0
-    run_id, run_dir = new_run(runs_dir, story)
-    log = {"run": run_id, "story": story, "project": project,
-           "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "steps": {},
-           "cost_usd": 0.0}
-    print("تشغيل: %s" % run_id)
-    # سجل تشغيل (جولة v0.1.37): الإعدادات المحلولة قبل التنفيذ.
-    _settings = run_record.resolve_settings(
-        cfg, {"backend": backend, "grade": grade,
-              "watermark": watermark_on, "story": story,
-              "project": project})
-    run_record.print_settings(_settings)
-    _record_path, _ = run_record.begin_record(
-        runs_dir, "run", _settings, run_id=run_id)
+    # تعليم التشغيلات المنقطعة من جولات سابقة (جولة v0.1.41 —
+    # بند 6): أي تشغيل ما زال running مع boot_id مختلف أو
+    # عملية ميتة يُعلَّم crashed فيُستأنف لاحقًا.
+    run_record.detect_crashed(runs_dir)
+    _resume_plan = None
+    if resume:
+        # استئناف تشغيل منقطع: لا سجل جديد ولا مجلد جديد؛
+        # الخطوات المكتملة تُتخطى فقط، والمدخلات الأصلية
+        # تُستعاد من نقطة التفتيش عند غياب أعلام CLI.
+        try:
+            _record_path, _resume_plan = run_resume.prepare_resume(
+                runs_dir, resume)
+        except run_resume.ResumeError as e:
+            print("تعذّر الاستئناف: %s" % e)
+            return 1
+        _ra = _resume_plan["resume_args"]
+        story = story or _ra["story"]
+        project = project or _ra["project"]
+        backend = _ra["backend"] or backend
+        out_path = out_path or _ra["out_path"]
+        if _ra["watermark"] is not None:
+            watermark_on = _ra["watermark"]
+        cards_dir = cards_dir or _ra["cards_dir"]
+        grade = grade or _ra["grade"]
+        lang = _ra["lang"] or lang
+        if _ra["allow_fallback"] is not None:
+            allow_fallback = _ra["allow_fallback"]
+        run_id = _resume_plan["run_id"]
+        run_dir = _resume_plan["run_dir"]
+        log = {"run": run_id, "story": story, "project": project,
+               "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "steps": {},
+               "cost_usd": 0.0, "resumed": True,
+               "resume_count": _resume_plan["resume_count"] + 1}
+        print(i18n_lib.t("run_started", lang, run_id))
+        print("استئناف من الخطوة: %s" % _resume_plan["next_step"])
+    else:
+        run_id, run_dir = new_run(runs_dir, story)
+        log = {"run": run_id, "story": story, "project": project,
+               "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "steps": {},
+               "cost_usd": 0.0}
+        print(i18n_lib.t("run_started", lang, run_id))
+        # سجل تشغيل (جولة v0.1.37): الإعدادات المحلولة قبل التنفيذ.
+        _settings = run_record.resolve_settings(
+            cfg, {"backend": backend, "grade": grade,
+                  "watermark": watermark_on, "story": story,
+                  "project": project})
+        run_record.print_settings(_settings)
+        _record_path, _ = run_record.begin_record(
+            runs_dir, "run", _settings, run_id=run_id)
     try:
+        # مدخلات نقاط التفتيش (جولة v0.1.41 — بند 6): تُحفظ
+        # مع كل خطوة مكتملة ليستعيدها الاستئناف لاحقًا.
+        _cp_inputs = {"story": story, "project": project,
+                      "backend": backend, "out_path": out_path,
+                      "watermark": watermark_on, "grade": grade,
+                      "cards_dir": cards_dir, "lang": lang,
+                      "allow_fallback": allow_fallback,
+                      "run_dir": run_dir}
         # 1) السيناريو عبر OmniRoute (مع بديل موثق عند الفشل)
-        result, step = cmd_script(cfg, story, allow_fallback, run_dir)
-        log["steps"]["script"] = step
-        if result is None:
-            raise RuntimeError("توقف خط الإنتاج: فشل توليد السيناريو "
-                               "وبلا بديل مسموح")
-        title = result["title"]
+        if (_resume_plan is not None
+                and run_resume.should_skip("script", _resume_plan)):
+            _script_result = run_resume.load_script_result(run_dir)
+            title = _script_result["title"]
+            log["steps"]["script"] = {"status": "skipped",
+                                      "resumed": True}
+            print("تخطَّت خطوة السيناريو (مكتملة من قبل)")
+        else:
+            result, step = cmd_script(cfg, story, allow_fallback, run_dir)
+            log["steps"]["script"] = step
+            if result is None:
+                raise RuntimeError("توقف خط الإنتاج: فشل توليد السيناريو "
+                                   "وبلا بديل مسموح")
+            title = result["title"]
+            run_record.save_checkpoint(
+                _record_path, "script", inputs=_cp_inputs,
+                outputs={"title": title, "script_file": "script-ai.json"})
         # 2) الإنتاج: تجهيز أصول OpenMontage
         t0 = time.time()
-        manifest = cmd_produce(cfg, project, run_dir)
-        log["steps"]["produce"] = {"status": "ok",
-                                   "seconds": round(time.time() - t0, 1),
-                                   "images": len(manifest["images"]),
-                                   "phrases": len(manifest["phrases"])}
+        if (_resume_plan is not None
+                and run_resume.should_skip("produce", _resume_plan)):
+            with open(os.path.join(run_dir, "manifest.json"),
+                      encoding="utf-8") as _mf:
+                manifest = json.load(_mf)
+            log["steps"]["produce"] = {"status": "skipped",
+                                       "resumed": True,
+                                       "images": len(manifest["images"]),
+                                       "phrases": len(manifest["phrases"])}
+            print("تخطَّت خطوة الإنتاج (مكتملة من قبل)")
+        else:
+            manifest = cmd_produce(cfg, project, run_dir)
+            log["steps"]["produce"] = {"status": "ok",
+                                       "seconds": round(time.time() - t0, 1),
+                                       "images": len(manifest["images"]),
+                                       "phrases": len(manifest["phrases"])}
+            run_record.save_checkpoint(
+                _record_path, "produce", inputs=_cp_inputs,
+                outputs={"manifest_file": "manifest.json",
+                         "images": len(manifest["images"]),
+                         "phrases": len(manifest["phrases"])})
         # 3) التجميع والتصدير (Concat افتراضيًا، أو headless-editor أو MLT
         #    أو OpenReel) ثم شعار الصفحة وبطاقات الاقتباس الختامية
         #    (داخل assemble).
@@ -1274,13 +1393,13 @@ def cmd_run(cfg, story, project, out_path, allow_fallback, dry_run=False,
         log["steps"]["assemble"] = {"status": "ok", "seconds": secs,
                                     "backend": backend, "output": out}
         log["status"] = "done"
-        print("اكتمل خط الإنتاج: %s" % out)
+        print(i18n_lib.t("run_done", lang, out))
         run_record.finish_record(_record_path, "done", outputs=[out])
     except Exception as e:
         log["status"] = "failed"
         log["error"] = str(e)
         run_record.finish_record(_record_path, "failed", error=e)
-        _print_translated("فشل خط الإنتاج", e, "run")
+        _print_translated("فشل خط الإنتاج", e, "run", lang)
         write_log(run_dir, log)
         return 1
     write_log(run_dir, log)
@@ -1543,33 +1662,51 @@ def cmd_init(cfg, args):
                                   check_only=args.check_only)
 
 
-def cmd_llm_status(cfg):
+def cmd_llm_status(cfg, lang="ar"):
     """حالة مزودي الذكاء: السلسلة المهيأة + التهدئة + عدادات
     اليوم (قراءة فقط — بلا أي استدعاء حي)."""
     cfg_o = cfg.get("omniroute", {}) if isinstance(cfg, dict) else {}
     providers = omniroute_client.providers_from_config(cfg_o)
     runs_dir = expand(cfg["paths"]["runs_dir"])
     state = llm_state.load_state(runs_dir)
-    print("سلسلة المزودين (بالترتيب):")
+    print(i18n_lib.t("llm_chain", lang))
     for i, p in enumerate(providers, 1):
         print("  %d) %s (%s)" % (i, p["model"], p["kind"]))
     for line in llm_state.status_lines(
             state, [p["model"] for p in providers]):
         print(line)
+    # توفر Ollama الحي (جولة v0.1.39 — ساق أخيرة محلية): فحص
+    # خفيف بلا توليد؛ ولا يرفع أبدًا.
+    _ollama_legs = [p for p in providers if p.get("kind") == "ollama"]
+    if _ollama_legs:
+        _ol = _ollama_legs[0]
+        _st = omniroute_client.ollama_status(
+            _ol.get("base_url"), _ol.get("model"))
+        if _st.get("available"):
+            print(i18n_lib.t("llm_ollama_ok", lang, _st.get("model")))
+        else:
+            print(i18n_lib.t("llm_ollama_down", lang,
+                             (_st.get("detail")
+                              or i18n_lib.t("llm_ollama_down_default",
+                                            lang))))
     return 0
 
 
-def cmd_doctor(cfg, fix=False, accounts_flag=False, llm_flag=False):
+def cmd_doctor(cfg, fix=False, accounts_flag=False, llm_flag=False,
+               lang="ar"):
     """فحص بيئة studio (تقرير PASS/FAIL صادق). --fix ينشئ config.yaml.
 
     --accounts يضيف قسمًا منفصلًا بعدّاده الخاص لفحوصات الحسابات
     (فيسبوك/يوتيوب/Veo/TikTok/Instagram — قراءة فقط).
     --llm يضيف قسمًا منفصلًا لفحوصات سلسلة LLM (بوابة
     OmniRoute + مساعد Gemini — قراءة فقط).
+
+    (الجولة v0.1.41: سطرا الغلاف هنا مترجمان؛ وجسم تقرير
+    lib/doctor.py يبقى عربيًا — خارج الحزمة.)
     """
     here = os.path.dirname(os.path.abspath(__file__))
     if fix and doctor.ensure_config(here):
-        print("أُنشئ config.yaml من المثال")
+        print(i18n_lib.t("doctor_config_created", lang))
     checks = doctor.run_checks(cfg)
     text, errors, warnings = doctor.format_report(checks)
     print(text)
@@ -1577,7 +1714,7 @@ def cmd_doctor(cfg, fix=False, accounts_flag=False, llm_flag=False):
         from lib import accounts as accounts_lib
         acc = accounts_lib.run_account_checks(cfg)
         acc_text, acc_errors, acc_warnings = doctor.format_report(acc)
-        print("== فحوصات الحسابات (%d) ==" % len(acc))
+        print(i18n_lib.t("doctor_accounts_section", lang, len(acc)))
         print(acc_text)
         errors += acc_errors
         warnings += acc_warnings
@@ -1585,7 +1722,7 @@ def cmd_doctor(cfg, fix=False, accounts_flag=False, llm_flag=False):
         llm_checks = doctor.run_llm_checks(cfg)
         llm_text, llm_errors, llm_warnings = doctor.format_report(
             llm_checks)
-        print("== فحوصات LLM (%d) ==" % len(llm_checks))
+        print(i18n_lib.t("doctor_llm_section", lang, len(llm_checks)))
         print(llm_text)
         errors += llm_errors
         warnings += llm_warnings
@@ -1660,7 +1797,8 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
                 platforms=("facebook", "youtube"), page_id=None,
                 schedule=None, privacy=None, tags=None, dry_run=False,
                 skip_check=False, skip_caption_check=False,
-                allow_missing_manifest=False):
+                allow_missing_manifest=False, generate_meta=False,
+                part=1, parts=1, lang="ar"):
     """انشر فيديوًا واحدًا على فيسبوك و/أو يوتيوب.
 
     يرجع 0 فقط إن نُشر على كل المنصات المطلوبة فعلًا؛ وإن نُشر بعضها
@@ -1668,10 +1806,14 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     ما بقي. --dry-run يطبع الحمولة الدقيقة دون نشر أي شيء.
     فحص امتثال الكابشن مسبق افتراضيًا (يرفض أي بوابة متابعة/
     تعليق)؛ و--skip-caption-check للتجاوز الصريح فقط.
+
+    (الجولة v0.1.41: سطور البوابات ونتائج المنصات هنا مترجمة؛
+    ونصوص المكتبات — بيان المصدر وcaption_check وcheck
+    وsocial_lib — تبقى عربية.)
     """
     video = expand(video)
     if not os.path.isfile(video):
-        print("ملف الفيديو غير موجود: %s" % video)
+        print(i18n_lib.t("publish_video_missing", lang, video))
         return 1
     # بوابة بيان المصدر (جولة v0.1.37): فيديو جديد بلا بيان لا يُنشر
     # إلا بتجاوز صريح؛ legacy تحذير فقط؛ عدم تطابق البصمة تحذير
@@ -1679,23 +1821,48 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     manifest_status, manifest_issues = manifest_lib.verify_manifest(video)
     if manifest_status == "missing" and not dry_run \
             and not allow_missing_manifest:
-        print("رفض النشر: %s" % manifest_issues[0])
-        print("ولّد البيان بـ: python3 studio.py manifest --video %s"
-              % video)
-        print("أو استخدم --allow-missing-manifest للتجاوز على مسؤوليتك")
+        print(i18n_lib.t("publish_manifest_reject", lang,
+                         manifest_issues[0]))
+        print(i18n_lib.t("publish_manifest_hint", lang, video))
+        print(i18n_lib.t("publish_manifest_allow", lang))
         return 1
     if manifest_status in ("legacy", "mismatch", "invalid"):
-        print("تحذير — بيان المصدر: %s" % "; ".join(manifest_issues))
+        print(i18n_lib.t("publish_manifest_warn", lang,
+                         "; ".join(manifest_issues)))
     elif manifest_status == "missing":
-        print("تحذير — بيان المصدر: %s "
-              "(في النشر الحقيقي يُرفض الفيديو الجديد بلا بيان)"
-              % manifest_issues[0])
+        print(i18n_lib.t("publish_manifest_warn", lang,
+                         manifest_issues[0])
+              + (" (في النشر الحقيقي يُرفض الفيديو الجديد بلا بيان)"
+                 if lang == "ar"
+                 else " (in a real publish, a new video without a "
+                      "manifest is refused)"))
     if schedule and int(schedule) <= int(time.time()):
-        print("موعد الجدولة في الماضي — يجب أن يكون في المستقبل")
+        print(i18n_lib.t("publish_schedule_past", lang))
         return 1
     page_id = page_id or cfg.get("publish", {}).get("page_id") or ""
     privacy = privacy or cfg.get("publish", {}).get("youtube_privacy") \
         or "public"
+    # توليد بيانات النشر (جولة v0.1.39 — --generate-meta): العنوان
+    # والوصف والوسوم من نص القصة عبر سلسلة LLM مع بديل محلي
+    # بلا شبكة عند الفشل؛ والقيم الصريحة (--caption/--tags)
+    # تغلب المولّدة. يُبنى قبل الكابشن والوصف أدناه.
+    if generate_meta:
+        def _meta_chat(prompt):
+            text, _via, _model = _llm_chat(
+                cfg, prompt, max_tokens=300, temperature=0.7)
+            return text
+        _meta = publish_meta_lib.generate_publish_meta(
+            {"title": title, "text": caption or title},
+            part=part, parts=parts, chat_fn=_meta_chat)
+        _pub = publish_meta_lib.format_for_publish(_meta)
+        title = _pub["title"] or title
+        if not caption:
+            caption = _pub["caption"]
+        if tags is None and _pub["tags"]:
+            tags = [t.strip() for t in _pub["tags"].split(",")
+                    if t.strip()]
+        print(i18n_lib.t("publish_meta_generated", lang,
+                         _meta.get("source"), title))
     tags = tags if tags is not None else list(YT_DEFAULT_TAGS)
     fb_caption = yt_desc = yt_title = None
     try:
@@ -1705,11 +1872,11 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
             yt_desc = publish.build_youtube_description(title, caption)
             yt_title = publish.build_youtube_title(title)
     except publish.PublishError as e:
-        print("خطأ في بيانات النشر: %s" % e)
+        print(i18n_lib.t("publish_meta_error", lang, e))
         return 1
     thumb = expand(thumbnail) if thumbnail else None
     if thumb and not os.path.isfile(thumb):
-        print("ملف الصورة المصغرة غير موجود: %s" % thumb)
+        print(i18n_lib.t("publish_thumb_missing", lang, thumb))
         return 1
     # فحص امتثال الكابشن مسبق افتراضيًا: أي جملة تجعل الجزء التالي
     # مشروطًا بالمتابعة أو التعليق ترفض النشر كله قبل أي فحص فيديو
@@ -1718,25 +1885,23 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     from lib import caption_check
     if "facebook" in platforms and not skip_caption_check:
         cap_result = caption_check.check_caption(fb_caption)
-        print("الكابشن النهائي (%d حرفًا):" % len(fb_caption))
+        print(i18n_lib.t("publish_caption_final", lang, len(fb_caption)))
         print("   " + fb_caption.replace("\n", "\n   "))
         if not cap_result["ok"]:
-            print("الكابشن مرفوض — جمل مشروطة بالمتابعة/التعليق:")
+            print(i18n_lib.t("publish_caption_rejected", lang))
             for issue in cap_result["issues"]:
                 print("  - «%s» (%s)"
                       % (issue["sentence"], issue["reason"]))
             if cap_result["fixed"]:
-                print("الكابشن المقترح:")
+                print(i18n_lib.t("publish_caption_suggested", lang))
                 print("   " + cap_result["fixed"].replace("\n", "\n   "))
             else:
-                print("الجملة المحظورة في الهوك نفسه — أعد كتابة "
-                      "الكابشن كاملًا.")
-            print("أعد النشر بالكابشن المصحح، أو استخدم "
-                  "--skip-caption-check للتجاوز على مسؤوليتك")
+                print(i18n_lib.t("publish_caption_hook_blocked", lang))
+            print(i18n_lib.t("publish_caption_retry", lang))
             return 1
     elif "facebook" in platforms:
-        print("الكابشن النهائي (%d حرفًا) — فحص الامتثال متخطَّى "
-              "(--skip-caption-check):" % len(fb_caption))
+        print(i18n_lib.t("publish_caption_final_skipped", lang,
+                         len(fb_caption)))
         print("   " + fb_caption.replace("\n", "\n   "))
     # فحص جودة مسبق افتراضي قبل أي نشر (أو معاينة): فيديو فاشل
     # لا يُنشر ولا تُطبع حمولته. --skip-check للتجاوز الصريح فقط.
@@ -1744,76 +1909,79 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
         try:
             result = check_lib.run_checks(video)
         except check_lib.CheckError as e:
-            _print_translated("تعذر فحص الجودة قبل النشر", e, "check")
-            print("أصلح الفيديو أو استخدم --skip-check للتجاوز")
+            _print_translated("تعذر فحص الجودة قبل النشر", e, "check",
+                              lang)
+            print(i18n_lib.t("publish_check_fix_hint", lang))
             return 1
         print(check_lib.format_report(result))
         if not result["passed"]:
-            print("فشل فحص الجودة قبل النشر — أصلح الملاحظات أعلاه "
-                  "أو استخدم --skip-check للتجاوز على مسؤوليتك")
+            print(i18n_lib.t("publish_check_failed", lang))
             return 1
     if dry_run:
-        print("== وضع تجريبي — لن يُنشر شيء ==")
+        print(i18n_lib.t("publish_dry_header", lang))
         if "facebook" in platforms:
             try:
                 argv = publish.facebook_argv(page_id, video, fb_caption,
                                              schedule)
             except publish.PublishError as e:
-                print("فيسبوك: لا يمكن بناء الأمر — %s" % e)
+                print(i18n_lib.t("publish_fb_build_fail", lang, e))
                 return 1
             import shlex
-            print("-- فيسبوك (Reel على الصفحة %s):" % (page_id or "?"))
+            print(i18n_lib.t("publish_fb_reel", lang, page_id or "?"))
             print("   " + " ".join(shlex.quote(a) for a in argv))
             if schedule:
-                print("   موعد النشر المجدول: %s"
-                      % publish.format_schedule(schedule))
-            print("   الكابشن (%d حرفًا):" % len(fb_caption))
+                print(i18n_lib.t("publish_scheduled_at", lang,
+                                 publish.format_schedule(schedule)))
+            print(i18n_lib.t("publish_caption_chars", lang,
+                             len(fb_caption)))
             print("   " + fb_caption.replace("\n", "\n   "))
         if "youtube" in platforms:
             payload = publish.youtube_payload(
                 yt_title, yt_desc, tags, privacy, schedule,
                 thumbnail=thumb)
-            print("-- يوتيوب (videos.insert):")
+            print(i18n_lib.t("publish_yt_payload", lang))
             print(json.dumps(payload, ensure_ascii=False, indent=2))
         if "tiktok" in platforms:
             try:
-                payload = social_lib.tiktok_init_payload(
-                    video, title, caption)
+                res = social_lib.dry_run_summary(
+                    "tiktok", video, title, caption, thumbnail=thumb)
             except social_lib.SocialPublishError as e:
-                print("تيك توك: لا يمكن بناء الحمولة — %s" % e)
+                print(i18n_lib.t("publish_tiktok_build_fail", lang, e))
                 return 1
-            print("-- تيك توك (Content Posting API — video/init):")
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
-            print("   تنبيه: الرفع الحقيقي غير مختبَر حيًا — لا حساب "
-                  "TikTok مربوط بعد.")
+            print(i18n_lib.t("publish_tiktok_header", lang))
+            print("   " + res["summary"])
+            print(json.dumps(res["payload"], ensure_ascii=False, indent=2))
+            print(i18n_lib.t("publish_tiktok_unverified", lang))
         if "instagram" in platforms:
             ig_user_id = (cfg.get("publish") or {}).get(
                 "instagram_user_id")
             try:
-                payload = social_lib.instagram_reel_payload(
-                    video, title, caption, ig_user_id)
+                res = social_lib.dry_run_summary(
+                    "instagram", video, title, caption,
+                    ig_user_id=ig_user_id, thumbnail=thumb)
             except social_lib.SocialPublishError as e:
-                print("إنستغرام: لا يمكن بناء الحمولة — %s" % e)
+                print(i18n_lib.t("publish_ig_build_fail", lang, e))
                 return 1
-            print("-- إنستغرام (Graph API — Reels، رفع قابل "
-                  "للاستئناف):")
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
-            print("   تنبيه: الرفع الحقيقي غير مختبَر حيًا — لا حساب "
-                  "Instagram مربوط بعد.")
+            print(i18n_lib.t("publish_ig_header", lang))
+            print("   " + res["summary"])
+            print(json.dumps(res["payload"], ensure_ascii=False, indent=2))
+            print(i18n_lib.t("publish_ig_unverified", lang))
         return 0
     ok = True
     if "facebook" in platforms:
         try:
             res = publish.post_facebook(page_id, video, fb_caption,
                                         schedule)
-            print("فيسبوك: %s (post_id=%s)"
-                  % ("مجدول" if res["state"] == "scheduled" else "نُشر",
-                     res["post_id"]))
+            print(i18n_lib.t("publish_fb_done", lang,
+                             i18n_lib.t("publish_fb_scheduled", lang)
+                             if res["state"] == "scheduled"
+                             else i18n_lib.t("publish_fb_published", lang),
+                             res["post_id"]))
             if schedule:
-                print("   موعد النشر المجدول: %s"
-                      % publish.format_schedule(schedule))
+                print(i18n_lib.t("publish_scheduled_at", lang,
+                                 publish.format_schedule(schedule)))
         except publish.PublishError as e:
-            print("فيسبوك: فشل — %s" % e)
+            print(i18n_lib.t("publish_fb_failed", lang, e))
             ok = False
     if "youtube" in platforms:
         token = expand(cfg.get("publish", {}).get("youtube_token") or
@@ -1823,12 +1991,12 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
                 res = publish.upload_youtube(
                     video, yt_title, yt_desc, tags, privacy, schedule,
                     thumbnail=thumb, token=token)
-                print("يوتيوب: رُفع — %s" % res["url"])
+                print(i18n_lib.t("publish_yt_done", lang, res["url"]))
                 if schedule:
-                    print("   موعد النشر المجدول: %s"
-                          % publish.format_schedule(schedule))
+                    print(i18n_lib.t("publish_scheduled_at", lang,
+                                     publish.format_schedule(schedule)))
             except publish.PublishError as e:
-                print("يوتيوب: فشل — %s" % e)
+                print(i18n_lib.t("publish_yt_failed", lang, e))
                 ok = False
         else:
             bundle_dir = os.path.join(
@@ -1838,10 +2006,9 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
             bundle = publish.write_youtube_bundle(
                 bundle_dir, video, yt_title, yt_desc, tags, privacy,
                 schedule, thumbnail=thumb)
-            print("يوتيوب: بلا بيانات اعتماد — لم يُرفع شيء.")
-            print("حزمة الرفع اليدوي جاهزة في: %s" % bundle)
-            print("اتبع steps.txt داخل الحزمة، أو أكمل "
-                  "`studio.py youtube-auth` ثم أعد الأمر.")
+            print(i18n_lib.t("publish_yt_no_creds", lang))
+            print(i18n_lib.t("publish_bundle_ready", lang, bundle))
+            print(i18n_lib.t("publish_yt_auth_hint", lang))
             ok = False
     if "tiktok" in platforms:
         token = social_lib.load_token("tiktok")
@@ -1849,12 +2016,11 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
             try:
                 res = social_lib.upload_tiktok(video, title, caption,
                                                token)
-                print("تيك توك: رُفع — publish_id=%s"
-                      % res["publish_id"])
-                print("   تحقق من ظهور الفيديو على الحساب — أول رفع "
-                      "حقيقي عبر API غير مختبَر حيًا بعد.")
+                print(social_lib.format_result(
+                    social_lib.normalize_result("tiktok", res)))
+                print(i18n_lib.t("publish_check_verify_fb", lang))
             except social_lib.SocialPublishError as e:
-                print("تيك توك: فشل — %s" % e)
+                print(i18n_lib.t("publish_tiktok_failed", lang, e))
                 ok = False
         else:
             bundle_dir = os.path.join(
@@ -1864,12 +2030,12 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
                 payload = social_lib.tiktok_init_payload(
                     video, title, caption)
             except social_lib.SocialPublishError as e:
-                print("تيك توك: لا يمكن بناء الحمولة — %s" % e)
+                print(i18n_lib.t("publish_tiktok_build_fail", lang, e))
                 return 1
             bundle = social_lib.write_social_bundle(
                 bundle_dir, "tiktok", video, title, caption, payload)
-            print("تيك توك: بلا توكن — لم يُرفع شيء.")
-            print("حزمة الرفع اليدوي جاهزة في: %s" % bundle)
+            print(i18n_lib.t("publish_tiktok_no_token", lang))
+            print(i18n_lib.t("publish_bundle_ready", lang, bundle))
             print(social_lib.setup_steps("tiktok"))
             ok = False
     if "instagram" in platforms:
@@ -1879,12 +2045,11 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
             try:
                 res = social_lib.upload_instagram(
                     video, title, caption, ig_user_id, token)
-                print("إنستغرام: رُفع — media_id=%s"
-                      % res["media_id"])
-                print("   تحقق من ظهور الريل على الحساب — أول رفع "
-                      "حقيقي عبر API غير مختبَر حيًا بعد.")
+                print(social_lib.format_result(
+                    social_lib.normalize_result("instagram", res)))
+                print(i18n_lib.t("publish_check_verify_ig", lang))
             except social_lib.SocialPublishError as e:
-                print("إنستغرام: فشل — %s" % e)
+                print(i18n_lib.t("publish_ig_failed", lang, e))
                 ok = False
         else:
             bundle_dir = os.path.join(
@@ -1894,13 +2059,13 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
                 payload = social_lib.instagram_reel_payload(
                     video, title, caption, ig_user_id)
             except social_lib.SocialPublishError as e:
-                print("إنستغرام: لا يمكن بناء الحمولة — %s" % e)
+                print(i18n_lib.t("publish_ig_build_fail", lang, e))
                 return 1
             bundle = social_lib.write_social_bundle(
                 bundle_dir, "instagram", video, title, caption, payload,
                 ig_user_id=ig_user_id)
-            print("إنستغرام: بلا توكن أو معرّف حساب — لم يُرفع شيء.")
-            print("حزمة الرفع اليدوي جاهزة في: %s" % bundle)
+            print(i18n_lib.t("publish_ig_no_token", lang))
+            print(i18n_lib.t("publish_bundle_ready", lang, bundle))
             print(social_lib.setup_steps("instagram"))
             ok = False
     return 0 if ok else 1
@@ -3162,7 +3327,11 @@ def cmd_schedule_watch(cfg, post_id, story_slug, slot="morning",
 
     res = schedule_watch_lib.watch_slot(post_id, story, read_fn,
                                         comment_fn, execute=True,
-                                        slot=slot)
+                                        slot=slot,
+                                        runs_dir=expand(
+                                            cfg["paths"]["runs_dir"]))
+    # runs_dir: دلالات المهام المجدولة (v0.1.41 بند 3) — تسجيل
+    # الـoccurrence قبل البدء؛ ريستارت بعد البدء يُتخطى لا يُكرر.
     if res.get("ok"):
         print("نُشر أول تعليق على المنشور %s (comment_id: %s)"
               % (res["post_id"], res.get("comment_id", "غير معروفة")))
@@ -3257,29 +3426,51 @@ def cmd_daily(cfg, slot="morning", execute=False, video=None,
 
 # ------------------------------------------------------------------ batch
 def cmd_batch(cfg, count=1, source="openmontage", execute=False,
-              continue_on_error=False, queue_file=None):
+              continue_on_error=False, queue_file=None, from_json=None,
+              no_spend=False, no_cache=False):
     """دفعة جماعية (الجولة 7): القصص التالية من الطابور في
     تشغيل واحد — إنتاج + فحص + مصغرة + سجل. افتراضيًا وضع
-    تجريبي (يطبع الخطة بلا تنفيذ)؛ والتنفيذ فقط مع --execute."""
+    تجريبي (يطبع الخطة بلا تنفيذ)؛ والتنفيذ فقط مع --execute.
+    --from-json يبني الخطة من ملف JSON بدل الطابور (ويتخطى
+    بوابة بنية الطابور)؛ و--no-spend يحاكي الدفعة كاملة بلا
+    أي إنفاق (ويرفض مع --execute)؛ و--no-cache يعطّل إعادة
+    استخدام منتجات الريندر."""
+    if no_spend and execute:
+        print("لا يجتمع --no-spend مع --execute — اختر أحدهما")
+        return 2
     if queue_file:
         cfg = copy.deepcopy(cfg)
         cfg["paths"]["queue_file"] = queue_file
-    # بوابة بنية الطابور (جولة v0.1.37) — انظر cmd_daily.
-    _ok, _issues = queue_check.validate_queue_file(
-        expand(cfg["paths"]["queue_file"]))
-    if not _ok:
-        print("بنية الطابور معطوبة — أصلحها أولًا "
-              "(python3 studio.py queue validate):")
-        for _issue in _issues:
-            print("  - %s" % _issue)
-        return 1
-    try:
-        plan = batch_lib.plan_batch(
-            cfg, count, source=source,
-            ready_fn=lambda s: check_story_ready(cfg, s))
-    except batch_lib.BatchError as e:
-        print("تعذرت خطة الدفعة: %s" % e)
-        return 1
+    if from_json:
+        try:
+            plan = batch_lib.plan_batch_from_json(
+                cfg, json_path=expand(from_json), source=source,
+                ready_fn=lambda s: check_story_ready(cfg, s))
+        except batch_lib.BatchError as e:
+            print("تعذرت خطة الدفعة من JSON: %s" % e)
+            return 1
+    else:
+        # بوابة بنية الطابور (جولة v0.1.37) — انظر cmd_daily.
+        _ok, _issues = queue_check.validate_queue_file(
+            expand(cfg["paths"]["queue_file"]))
+        if not _ok:
+            print("بنية الطابور معطوبة — أصلحها أولًا "
+                  "(python3 studio.py queue validate):")
+            for _issue in _issues:
+                print("  - %s" % _issue)
+            return 1
+        try:
+            plan = batch_lib.plan_batch(
+                cfg, count, source=source,
+                ready_fn=lambda s: check_story_ready(cfg, s))
+        except batch_lib.BatchError as e:
+            print("تعذرت خطة الدفعة: %s" % e)
+            return 1
+    if no_spend:
+        report = batch_lib.validate_batch(
+            cfg, plan, runs_dir=expand(cfg["paths"]["runs_dir"]))
+        print(batch_lib.format_no_spend_report(report))
+        return 0 if report.get("ok") else 1
     if not execute:
         print(batch_lib.format_plan(plan))
         _first_ready = next(
@@ -3306,7 +3497,8 @@ def cmd_batch(cfg, count=1, source="openmontage", execute=False,
             cfg, plan, produce_fn, check_fn, thumbnail_fn,
             expand(cfg["paths"]["runs_dir"]),
             continue_on_error=continue_on_error,
-            record_spend_fn=_record_veo_spend)
+            record_spend_fn=_record_veo_spend,
+            use_cache=not no_cache)
     except check_lib.CheckError as e:
         print("تعذر فحص الجودة: %s" % e)
         return 1
@@ -3314,21 +3506,43 @@ def cmd_batch(cfg, count=1, source="openmontage", execute=False,
 
 
 # ------------------------------------------------------------- scene-plan
-def cmd_scene_plan(cfg, story=None, clips=6, queue_file=None):
+def cmd_scene_plan(cfg, story=None, clips=6, queue_file=None,
+                   template=None, template_hero=None,
+                   template_situation=None, template_moral=None,
+                   lang="ar", template_lang=None):
     """خطة مشاهد Veo مكتوبة لقصة من الطابور (الجولة 7) — تُطبع
     وتُحفظ قبل أي إنفاق، مع فحص السقف. story: رقم القصة في
-    الطابور أو جزء من عنوانها."""
+    الطابور أو جزء من عنوانها. --template يبني الموجهات من
+    قالب قصة جاهز (هوك/تصعيد/انقلاب/عبرة) عند غياب نص الطابور.
+    template_lang: لغة القالب ar/en (افتراضيًا لغة CLI) —
+    تُمرَّر عبر set_template_lang لأن lib/scene_plan.py
+    يستدعي build_scene_outline بلا وسيط لغة (يُعاد الضبط
+    كما كان بعد البناء)."""
     if story is None:
-        print("حدد القصة: --story <رقم في الطابور أو جزء من العنوان>")
+        print(i18n_lib.t("sceneplan_need_story", lang))
         return 2
+    _templates = [t[0] for t in story_templates_lib.list_templates()]
+    if template is not None and template not in _templates:
+        print(i18n_lib.t("sceneplan_unknown_template", lang, template,
+                         ", ".join(_templates)))
+        return 2
+    eff_template_lang = None
+    if template is not None:
+        raw = template_lang if template_lang is not None else lang
+        try:
+            eff_template_lang = story_templates_lib.set_template_lang(raw)
+        except ValueError:
+            print(i18n_lib.t("sceneplan_template_lang_invalid", lang,
+                             raw))
+            return 2
     queue_path = expand(queue_file or cfg["paths"]["queue_file"])
     if not os.path.isfile(queue_path):
-        print("ملف الطابور غير موجود: %s" % queue_path)
+        print(i18n_lib.t("sceneplan_queue_missing", lang, queue_path))
         return 1
     try:
         stories = parse_queue(queue_path)
     except OSError as e:
-        print("تعذر قراءة ملف الطابور: %s" % e)
+        print(i18n_lib.t("sceneplan_queue_unreadable", lang, e))
         return 1
     target = None
     if str(story).strip().isdigit():
@@ -3343,20 +3557,27 @@ def cmd_scene_plan(cfg, story=None, clips=6, queue_file=None):
                 target = s
                 break
     if target is None:
-        print("لا توجد قصة مطابقة في الانتظار: %s" % story)
+        print(i18n_lib.t("sceneplan_no_match", lang, story))
         return 1
     try:
-        plan = scene_plan_lib.build_scene_plan(cfg, target, clips=clips)
+        plan = scene_plan_lib.build_scene_plan(
+            cfg, target, clips=clips, template=template,
+            template_hero=template_hero,
+            template_situation=template_situation,
+            template_moral=template_moral)
     except scene_plan_lib.CapError as e:
-        print("رفضت خطة المشاهد: %s" % e)
+        print(i18n_lib.t("sceneplan_cap_rejected", lang, e))
         return 1
     except ValueError as e:
-        print("خطة مشاهد غير صالحة: %s" % e)
+        print(i18n_lib.t("sceneplan_invalid", lang, e))
         return 2
+    finally:
+        if eff_template_lang is not None:
+            story_templates_lib.set_template_lang("ar")
     print(scene_plan_lib.format_plan(plan))
     out_path = scene_plan_lib.save_plan(
         plan, expand(cfg["paths"]["runs_dir"]))
-    print("حُفظت الخطة في: %s" % out_path)
+    print(i18n_lib.t("sceneplan_saved", lang, out_path))
     return 0
 
 
@@ -3383,7 +3604,8 @@ def cmd_social_auth(cfg, platform, token=None):
 
 # ---------------------------------------------------------------------- ab
 def _cmd_ab_variants(cfg, video, hook_a, hook_b, title, out_dir,
-                     cost_per_video, variants):
+                     cost_per_video, variants, engine="fast",
+                     balance_units=None, ledger_entries=None):
     """اختبار A/B بعدة نسخ (≥3): اقتراح N هوكًا + نسخ مرتبة
     بدرجة DNA + الفائز (الأعلى درجة)."""
     runs_dir = expand(out_dir or cfg["paths"]["runs_dir"])
@@ -3411,7 +3633,9 @@ def _cmd_ab_variants(cfg, video, hook_a, hook_b, title, out_dir,
         record = ab_lib.create_ab_variants(
             expand(video), hooks[:variants], runs_dir, title=title,
             cost_per_video=cost_per_video,
-            llm_model=_ab_llm.get("model"))
+            llm_model=_ab_llm.get("model"), engine=engine,
+            balance_units=balance_units,
+            ledger_entries=ledger_entries)
     except (ValueError, thumbnail.ThumbnailError) as e:
         print("فشل اختبار A/B: %s" % e)
         return 1
@@ -3422,6 +3646,9 @@ def _cmd_ab_variants(cfg, video, hook_a, hook_b, title, out_dir,
               % (i, v["hook"], v["dna_score"], v["dna_max"],
                  v["dna_verdict"], mark))
         print("   المصغرة: %s" % v["thumb"])
+        if v.get("cost_estimate"):
+            print("   التكلفة: %s"
+                  % ab_lib.format_variant_cost(v["cost_estimate"]))
     cost = record.get("cost_estimate_units") or {}
     if cost:
         print("تقدير التكلفة (وحدات Veo): لكل نسخة %s — المجموع %s"
@@ -3436,7 +3663,8 @@ def _cmd_ab_variants(cfg, video, hook_a, hook_b, title, out_dir,
 
 
 def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
-           out_dir=None, cost_per_video=0, variants=3):
+           out_dir=None, cost_per_video=0, variants=3, engine="fast",
+           balance_units=None, ledger_entries=None):
     """اختبار A/B: هوكان ومصغرتان لفيديو واحد + سجل الزوج.
 
     cost_per_video: تقدير وحدات Veo لإنتاج كل بديل من جديد
@@ -3444,6 +3672,8 @@ def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
     كامل = 120 وحدة).
     variants: عدد نسخ الهوك (افتراضي 3؛ 2 = السلوك السابق
     بهوكين فقط عبر create_ab).
+    engine: محرك Veo للتقدير (fast ‏20 وحدة/مقطع أو lite ‏10؛
+    بعد تقاعد Fast في 5 ديسمبر مرّر lite).
     """
     if isinstance(variants, bool) or not isinstance(variants, int) \
             or variants < 2:
@@ -3451,7 +3681,10 @@ def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
         return 2
     if variants != 2:
         return _cmd_ab_variants(cfg, video, hook_a, hook_b, title,
-                                out_dir, cost_per_video, variants)
+                                out_dir, cost_per_video, variants,
+                                engine=engine,
+                                balance_units=balance_units,
+                                ledger_entries=ledger_entries)
     runs_dir = expand(out_dir or cfg["paths"]["runs_dir"])
     _ab2_llm = {}
     if not hook_a or not hook_b:
@@ -3473,7 +3706,10 @@ def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
         record = ab_lib.create_ab(expand(video), hook_a, hook_b,
                                   runs_dir, title=title,
                                   cost_per_video=cost_per_video,
-                                  llm_model=_ab2_llm.get("model"))
+                                  llm_model=_ab2_llm.get("model"),
+                                  engine=engine,
+                                  balance_units=balance_units,
+                                  ledger_entries=ledger_entries)
     except (ValueError, thumbnail.ThumbnailError) as e:
         print("فشل اختبار A/B: %s" % e)
         return 1
@@ -3486,6 +3722,12 @@ def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
         print("تقدير التكلفة (وحدات Veo): أ %s — ب %s — المجموع %s"
               % (cost.get("variant_a"), cost.get("variant_b"),
                  cost.get("total")))
+    _ests = record.get("cost_estimates") or {}
+    for _label, _key in (("أ", "variant_a"), ("ب", "variant_b")):
+        _est = _ests.get(_key)
+        if _est:
+            print("  تكلفة النسخة %s: %s"
+                  % (_label, ab_lib.format_variant_cost(_est)))
     print("سُجّل الزوج في: %s" % record["record_path"])
     print(ab_lib.AB_NOTE)
     print("انشر كل نسخة بعنوانها (هوكها) ثم قارن بـ:")
@@ -3871,6 +4113,159 @@ def cmd_preview(cfg, video, caption=None, first_comment=None,
     return 0
 
 
+# ---------------------------------------------------------------- jobs
+def cmd_jobs_list(cfg, status=None, story=None, date=None, kind=None,
+                  limit=20):
+    """اعرض سجل المهام الدائم (runs/jobs.jsonl) — الأحدث أولًا."""
+    runs_dir = expand(cfg["paths"]["runs_dir"])
+    jobs = job_registry_lib.list_jobs(
+        runs_dir, status=status, story=story, date=date, kind=kind,
+        limit=limit)
+    print(job_registry_lib.format_jobs(jobs))
+    return 0
+
+
+def cmd_jobs_show(cfg, job_id):
+    """اعرض مهمة واحدة من سجل المهام بمعرّفها."""
+    runs_dir = expand(cfg["paths"]["runs_dir"])
+    job = job_registry_lib.get_job(runs_dir, job_id)
+    if not job:
+        print("لا توجد مهمة بهذا المعرف: %s" % job_id)
+        return 1
+    print(job_registry_lib.format_jobs([job]))
+    return 0
+
+
+# --------------------------------------------------------------- reframe
+def cmd_reframe(cfg, video, out, focus_x=0.5, safety_margin=0):
+    """أعد تأطير مقطع أفقي إلى عمودي 720×1280 (قصّ لا تمديد)."""
+    try:
+        result = avatar_aspect_lib.reframe_video(
+            expand(video), expand(out), focus_x=focus_x,
+            safety_margin=safety_margin)
+    except avatar_aspect_lib.ReframeError as e:
+        print("فشل إعادة التأطير: %s" % e)
+        return 1
+    print("أُعيد التأطير: %s" % result["output"])
+    print("  المصدر: %sx%s → الخرج: %sx%s (قصّ x=%s w=%s)%s"
+          % (result["source_width"], result["source_height"],
+             result["out_width"], result["out_height"],
+             result["crop"]["x"], result["crop"]["width"],
+             " — بلا إعادة ترميز" if not result["reframed"] else ""))
+    return 0
+
+
+# ------------------------------------------------------------ shorts-cut
+def cmd_shorts_cut(cfg, video, out_dir=None, count=3, phrases=None,
+                   min_len=None, max_len=None):
+    """قطّع فيديو طويل إلى شورتات عمودية 40–60 ثانية.
+
+    --phrases ملف ASS اختياري (عبارات الفيديو الطويل) لتحسين
+    اختيار النوافذ؛ والكابشنات المولّدة لكل شورت ملفات ASS
+    منفصلة أسفل الشاشة فقط — حرقها داخل الفيديو خطوة لاحقة
+    قبل النشر (فلتر subtitles).
+    """
+    video = expand(video)
+    if not os.path.isfile(video):
+        print("ملف الفيديو غير موجود: %s" % video)
+        return 1
+    if out_dir:
+        out = expand(out_dir)
+    else:
+        out = os.path.join(
+            expand(cfg["paths"]["videos_dir"]),
+            "shorts-%s" % time.strftime("%Y%m%d-%H%M%S"))
+    phrases_list = None
+    if phrases:
+        try:
+            phrases_list = long_video.parse_ass(expand(phrases))
+        except (OSError, long_video.LongVideoError) as e:
+            print("تعذرت قراءة ملف العبارات: %s" % e)
+            return 1
+    kwargs = {}
+    if min_len is not None:
+        kwargs["min_len"] = min_len
+    if max_len is not None:
+        kwargs["max_len"] = max_len
+    results = shorts_cut_lib.cut_shorts(
+        video, out, count=count, phrases=phrases_list, **kwargs)
+    print(shorts_cut_lib.format_report(results, video))
+    return 0 if results else 1
+
+
+# ------------------------------------------- queue publish (جولة v0.1.39)
+def _queue_entries_with_publish(cfg, queue_file=None):
+    """اقرأ عناصر الانتظار مع حالات نشرها (لأوامر queue)."""
+    queue_path = expand(queue_file or cfg["paths"]["queue_file"])
+    with open(queue_path, encoding="utf-8") as f:
+        text = f.read()
+    return queue_lib.entries_with_publish(text, queue_path)
+
+
+def cmd_queue_publish_status(cfg, number, platform, status,
+                             queue_file=None):
+    """حدّث حالة نشر قصة في الطابور لمنصة واحدة."""
+    if platform not in queue_lib.PUBLISH_PLATFORMS:
+        print("منصة غير معروفة: %s (المسموح: %s)"
+              % (platform, ", ".join(queue_lib.PUBLISH_PLATFORMS)))
+        return 2
+    if status not in queue_lib.PUBLISH_STATUSES:
+        print("حالة غير معروفة: %s (المسموح: %s)"
+              % (status, ", ".join(queue_lib.PUBLISH_STATUSES)))
+        return 2
+    queue_path = expand(queue_file or cfg["paths"]["queue_file"])
+    if not os.path.isfile(queue_path):
+        print("ملف الطابور غير موجود: %s" % queue_path)
+        return 1
+    try:
+        queue_lib.set_platform_status(queue_path, number, platform,
+                                      status)
+    except queue_lib.QueueError as e:
+        print("تعذر تحديث حالة النشر: %s" % e)
+        return 1
+    print("حُدثت حالة النشر: القصة %d — %s: %s"
+          % (number, platform, status))
+    return 0
+
+
+def cmd_queue_publish_summary(cfg, queue_file=None):
+    """ملخص حالات النشر لكل منصة في الطابور."""
+    try:
+        entries = _queue_entries_with_publish(cfg, queue_file)
+    except OSError as e:
+        print("تعذر قراءة ملف الطابور: %s" % e)
+        return 1
+    summary = queue_lib.publish_summary(entries)
+    print("حالات النشر (%d قصة في الانتظار):" % summary["entries"])
+    for platform in queue_lib.PUBLISH_PLATFORMS:
+        counts = summary[platform]
+        print("  %s: معلق %d — منشور %d — فاشل %d — متخطى %d"
+              % (platform, counts["pending"], counts["published"],
+                 counts["failed"], counts["skipped"]))
+    return 0
+
+
+def cmd_queue_pending(cfg, platform, queue_file=None):
+    """اعرض القصص المعلقة النشر على منصة واحدة."""
+    if platform not in queue_lib.PUBLISH_PLATFORMS:
+        print("منصة غير معروفة: %s (المسموح: %s)"
+              % (platform, ", ".join(queue_lib.PUBLISH_PLATFORMS)))
+        return 2
+    try:
+        entries = _queue_entries_with_publish(cfg, queue_file)
+    except OSError as e:
+        print("تعذر قراءة ملف الطابور: %s" % e)
+        return 1
+    pending = queue_lib.pending_for_platform(entries, platform)
+    if not pending:
+        print("لا قصص معلقة على %s" % platform)
+        return 0
+    print("قصص معلقة على %s (%d):" % (platform, len(pending)))
+    for entry in pending:
+        print("  %d. %s" % (entry["number"], entry["title"]))
+    return 0
+
+
 def cmd_logs(cfg, today=True, limit=20):
     """آخر التشغيلات من runs/ ونتائجها بالعربي (اليوم افتراضيًا)."""
     from lib import runlog as runlog_lib
@@ -3882,17 +4277,30 @@ def cmd_logs(cfg, today=True, limit=20):
 
 
 def main():
+    # ثنائية اللغة (الجولة v0.1.41): وصف المساعدة يتبع LANG
+    # من البيئة (العربي افتراضيًا)؛ و--lang العام يغلبها.
+    _help_lang = i18n_lib.detect_lang(env=os.environ)
+    _desc = ("Unified production line for story videos" if _help_lang == "en"
+             else "خط إنتاج موحد لفيديوهات القصص")
+    _epilog = ("For Arabic help: python3 studio.py help-ar"
+               if _help_lang == "en"
+               else "للمساعدة بالعربية: python3 studio.py help-ar")
     ap = argparse.ArgumentParser(prog="studio",
-                                 description="خط إنتاج موحد لفيديوهات "
-                                             "القصص",
-                                 epilog="للمساعدة بالعربية: "
-                                        "python3 studio.py help-ar")
+                                 description=_desc,
+                                 epilog=_epilog)
     # الجولة 8: --version يطبع الإصدار + حالة البعيد من سجل
     # المزامنة المحلي (بلا شبكة)؛ ونصه يُبنى قبل التحليل لأن
     # argparse يطبعه ويخرج فورًا.
     ap.add_argument("--version", action="version",
                     version="studio %s\n%s"
                     % (VERSION, remote_status_line()))
+    # الجولة v0.1.41: --lang على مستوى التطبيق (قبل الأمر) —
+    # ar (الافتراضي دائمًا) أو en؛ وبلاه تُقرأ LANG/LANGUAGE
+    # ثم مفتاح lang في config.yaml.
+    ap.add_argument("--lang", choices=["ar", "en"], default=None,
+                    help="CLI language: ar (Arabic, default) or en "
+                         "(English) — اللغة: ar (العربية، الافتراضي) "
+                         "أو en (الإنجليزية)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="فحص حالة الطبقات الثلاث")
     sub.add_parser("version",
@@ -4036,6 +4444,16 @@ def main():
     p.add_argument("--allow-missing-manifest", action="store_true",
                    help="تجاوز بوابة بيان المصدر لفيديو جديد بلا بيان "
                         "(غير مستحسن — ولّد البيان بأمر manifest أولًا)")
+    p.add_argument("--generate-meta", action="store_true",
+                   help="ولّد العنوان والوصف والوسوم من نص القصة عبر "
+                        "سلسلة LLM (مع بديل محلي بلا شبكة) — القيم "
+                        "الصريحة --caption/--tags تغلب المولّدة")
+    p.add_argument("--part", type=int, default=1,
+                   help="رقم الجزء لعنوان مولّد (مع --generate-meta، "
+                        "افتراضي 1)")
+    p.add_argument("--parts", type=int, default=1,
+                   help="عدد أجزاء القصة لعنوان مولّد (مع "
+                        "--generate-meta، افتراضي 1)")
     p = sub.add_parser("youtube-auth",
                        help="تبادل OAuth ليوتيوب لمرة واحدة (يفتح المتصفح)")
     p.add_argument("--client-secrets",
@@ -4175,6 +4593,9 @@ def main():
     p.add_argument("--size",
                    help="مقاس الفيديو WxH — الافتراضي 720x1280 (عمودي)؛ "
                         "1280x720 للأفقي (الفيديو الطويل الأسبوعي)")
+    p.add_argument("--resume",
+                   help="استئناف تشغيل منقطع بمعرّفه (run-...) من آخر "
+                        "نقطة تفتيش — يُتخطى ما اكتمل ويُعاد ما تبقى فقط")
     p = sub.add_parser("long-video",
                        help="فيديو طويل أفقي 1280×720 من عدة قصص (8–12 دقيقة)")
     p.add_argument("--out", required=True,
@@ -4322,6 +4743,32 @@ def main():
                        help="تحقق بنية ملف الطابور (قراءة فقط)")
     qv.add_argument("--queue-file",
                     help="ملف طابور بديل (الافتراضي من config.yaml)")
+    qps = qp.add_parser("publish-status",
+                        help="حدّث حالة نشر قصة لمنصة واحدة")
+    qps.add_argument("--number", type=int, required=True,
+                     help="رقم القصة في الطابور")
+    qps.add_argument("--platform", required=True,
+                     choices=["facebook", "youtube", "tiktok",
+                              "instagram"],
+                     help="المنصة")
+    qps.add_argument("--status", required=True,
+                     choices=["pending", "published", "failed",
+                              "skipped"],
+                     help="الحالة الجديدة")
+    qps.add_argument("--queue-file",
+                     help="ملف طابور بديل (الافتراضي من config.yaml)")
+    qsum = qp.add_parser("publish-summary",
+                         help="ملخص حالات النشر لكل منصة (قراءة فقط)")
+    qsum.add_argument("--queue-file",
+                      help="ملف طابور بديل (الافتراضي من config.yaml)")
+    qpend = qp.add_parser("pending",
+                          help="اعرض القصص المعلقة النشر على منصة")
+    qpend.add_argument("--platform", required=True,
+                       choices=["facebook", "youtube", "tiktok",
+                                "instagram"],
+                       help="المنصة")
+    qpend.add_argument("--queue-file",
+                       help="ملف طابور بديل (الافتراضي من config.yaml)")
     p = sub.add_parser("client-run",
                        help="تنفيذ طلب فيديو عميل واحد (client-orders)")
     p.add_argument("--order", required=True, help="رقم الطلب")
@@ -4415,6 +4862,16 @@ def main():
                    help="أكمل بعد فشل قصة بدل التوقف")
     p.add_argument("--queue-file", default=None,
                    help="ملف طابور بديل (للاختبار)")
+    p.add_argument("--from-json", default=None,
+                   help="ملف JSON لقائمة مهام الدفعة بدل الطابور "
+                        "(يتخطى بوابة بنية الطابور)")
+    p.add_argument("--no-spend", action="store_true",
+                   help="محاكاة الدفعة كاملة بلا أي إنفاق: تقدير "
+                        "الرصيد + فحص الكفاية + ما سيُعاد استخدامه "
+                        "من الكاش — يرفض مع --execute")
+    p.add_argument("--no-cache", action="store_true",
+                   help="عطّل إعادة استخدام منتجات الريندر السابقة "
+                        "في هذه الدفعة")
     p = sub.add_parser("scene-plan",
                        help="خطة مشاهد Veo مكتوبة لقصة من الطابور "
                             "قبل أي إنفاق (مع فحص السقف)")
@@ -4424,6 +4881,20 @@ def main():
                    help="عدد المقاطع (افتراضي 6 — كل مقطع 20 وحدة)")
     p.add_argument("--queue-file", default=None,
                    help="ملف طابور بديل (للاختبار)")
+    p.add_argument("--template", default=None,
+                   help="قالب قصة جاهز للموجهات عند غياب نص الطابور "
+                        "(من story_templates.list_templates)")
+    p.add_argument("--hero", default=None,
+                   help="بطل القصة لقالب --template (افتراضي: العنوان)")
+    p.add_argument("--situation", default=None,
+                   help="موقف القصة لقالب --template (افتراضي: أول "
+                        "جملة نص أو العنوان)")
+    p.add_argument("--moral", default=None,
+                   help="عبرة القصة لقالب --template")
+    p.add_argument("--template-lang", choices=["ar", "en"], default=None,
+                   help="لغة قالب --template: ar (العربية، الافتراضي) "
+                        "أو en (الإنجليزية) — بلا هذا الخيار يتبع "
+                        "القالب لغة CLI (--lang)")
     p = sub.add_parser("tiktok-auth",
                        help="خطوات ربط TikTok يدويًا + حفظ التوكن")
     p.add_argument("--token", default=None,
@@ -4451,6 +4922,10 @@ def main():
     p.add_argument("--variants", type=int, default=3,
                    help="عدد نسخ الهوك (افتراضي 3؛ 2 = السلوك السابق "
                         "بهوكين فقط)")
+    p.add_argument("--engine", choices=["fast", "lite"], default="fast",
+                   help="محرك Veo لتقدير التكلفة (fast ‏20 وحدة/مقطع "
+                        "أو lite ‏10 — بعد تقاعد Fast في 5 ديسمبر "
+                        "استخدم lite؛ افتراضي fast)")
     p = sub.add_parser("ab-results",
                        help="قارن مشاهدات نسختي اختبار A/B")
     p.add_argument("--ab-file", default=None,
@@ -4501,6 +4976,53 @@ def main():
                    help="كل الأيام بدل اليوم فقط")
     p.add_argument("--limit", type=int, default=20,
                    help="أقصى عدد تشغيلات (افتراضي 20)")
+    p = sub.add_parser("jobs",
+                       help="سجل المهام الدائم — اعرض مهام الدفعات "
+                            "والتشغيلات المسجلة")
+    jp = p.add_subparsers(dest="jobs_cmd", required=True)
+    jl = jp.add_parser("list", help="اعرض المهام (الأحدث أولًا)")
+    jl.add_argument("--status", default=None,
+                    choices=["running", "done", "failed", "skipped",
+                             "reused"],
+                    help="تصفية بالحالة")
+    jl.add_argument("--story", default=None,
+                    help="تصفية برقم/عنوان قصة (مطابقة جزئية)")
+    jl.add_argument("--date", default=None,
+                    help="تصفية بتاريخ البدء YYYY-MM-DD")
+    jl.add_argument("--kind", default=None,
+                    choices=["run", "batch", "assemble"],
+                    help="تصفية بالنوع")
+    jl.add_argument("--limit", type=int, default=20,
+                    help="أقصى عدد مهام (افتراضي 20)")
+    js = jp.add_parser("show", help="اعرض مهمة واحدة بمعرّفها")
+    js.add_argument("job_id", help="معرّف المهمة (مثال job-20261123-...)")
+    p = sub.add_parser("reframe",
+                       help="أعد تأطير مقطع أفقي إلى عمودي 720×1280 "
+                            "(قصّ ذكي بلا تشويه)")
+    p.add_argument("--video", required=True, help="ملف الفيديو الأفقي")
+    p.add_argument("--out", required=True, help="ملف الفيديو العمودي")
+    p.add_argument("--focus-x", type=float, default=0.5,
+                   help="نقطة تركيز القصّ 0.0 (يسار) – 1.0 (يمين)، "
+                        "افتراضي 0.5 (الوسط)")
+    p.add_argument("--safety-margin", type=int, default=0,
+                   help="هامش أمان بالبكسلات يمنع ملامسة الحواف "
+                        "(افتراضي 0)")
+    p = sub.add_parser("shorts-cut",
+                       help="قطّع فيديو طويل إلى شورتات عمودية 40–60 "
+                            "ثانية (للفيديو الأسبوعي)")
+    p.add_argument("--video", required=True,
+                   help="ملف الفيديو الطويل (8–12 دقيقة)")
+    p.add_argument("--out", default=None,
+                   help="مجلد المخرجات (افتراضي: videos/shorts-<وقت>)")
+    p.add_argument("--count", type=int, default=3,
+                   help="عدد الشورتات (افتراضي 3)")
+    p.add_argument("--phrases", default=None,
+                   help="ملف ASS بعبارات الفيديو الطويل لتحسين "
+                        "الاختيار (اختياري)")
+    p.add_argument("--min", type=float, default=None, dest="min_len",
+                   help="أدنى مدة شورت بالثواني (افتراضي 40)")
+    p.add_argument("--max", type=float, default=None, dest="max_len",
+                   help="أقصى مدة شورت بالثواني (افتراضي 60)")
     p = sub.add_parser("balance",
                        help="توقع رصيد Veo بالأيام (مسجَّل لا حي)")
     p.add_argument("--balance", type=int, default=None,
@@ -4529,6 +5051,10 @@ def main():
                         "التحديث بتوقيت القاهرة الآن")
     args = ap.parse_args()
     cfg = load_config()
+    # لغة CLI (الجولة v0.1.41): --lang أولًا، ثم LANG/LANGUAGE،
+    # ثم مفتاح lang في config.yaml، ثم العربي دائمًا.
+    lang = i18n_lib.detect_lang(getattr(args, "lang", None),
+                                env=os.environ, config=cfg)
     # خيار --size (في run/assemble): يبدّل مقاس الفيديو لهذا التشغيل
     # فقط دون تعديل config.yaml (الافتراضي 720×1280 عمودي).
     size_arg = getattr(args, "size", None)
@@ -4536,7 +5062,7 @@ def main():
         try:
             width, height = parse_size(size_arg)
         except ValueError as e:
-            print("مقاس غير صالح --size: %s" % e)
+            print(i18n_lib.t("main_bad_size", lang, e))
             return 2
         cfg["video"]["width"] = width
         cfg["video"]["height"] = height
@@ -4562,15 +5088,14 @@ def main():
             for run in getattr(args, "run_id", []) or []:
                 validate_run_component(run, "معرّف التشغيل")
     except ValueError as e:
-        print("قيمة غير صالحة: %s" % e)
+        print(i18n_lib.t("main_bad_value", lang, e))
         return 2
     if args.cmd == "run":
         if args.demo and (args.story or args.project):
-            print("--demo لا يُجمع مع --story/--project")
+            print(i18n_lib.t("main_demo_conflict", lang))
             return 2
         if not args.demo and not (args.story and args.project and args.out):
-            print("خط الإنتاج يحتاج --story و--project و--out "
-                  "(أو --demo للتجربة)")
+            print(i18n_lib.t("main_run_needs", lang))
             return 2
     # doctor يقرأ الحالة الخام بلا إصلاح (وظيفته الإبلاغ لا الإصلاح).
     if args.cmd != "doctor":
@@ -4578,9 +5103,9 @@ def main():
 
     if args.cmd == "doctor":
         return cmd_doctor(cfg, fix=args.fix, accounts_flag=args.accounts,
-                          llm_flag=args.llm)
+                          llm_flag=args.llm, lang=lang)
     if args.cmd == "llm-status":
-        return cmd_llm_status(cfg)
+        return cmd_llm_status(cfg, lang=lang)
     if args.cmd == "protect":
         return cmd_protect(cfg)
     if args.cmd == "manifest":
@@ -4615,7 +5140,7 @@ def main():
     if args.cmd == "init":
         return cmd_init(cfg, args)
     if args.cmd == "status":
-        return cmd_status(cfg)
+        return cmd_status(cfg, lang=lang)
     if args.cmd == "script":
         run_dir = None
         result, _ = cmd_script(cfg, args.story, args.allow_fallback, run_dir)
@@ -4837,11 +5362,12 @@ def main():
                 print("فشل إنهاء التجربة (شعار): %s" % e)
                 return 1
             return 0
-        return cmd_run(cfg, args.story, args.project, expand(args.out),
+        return cmd_run(cfg, args.story, args.project,
+                       expand(args.out) if args.out else None,
                        args.allow_fallback, args.dry_run, args.backend,
                        not args.no_watermark,
                        expand(args.cards_dir) if args.cards_dir else None,
-                       args.grade)
+                       args.grade, lang=lang, resume=args.resume)
     if args.cmd == "version":
         return cmd_version()
     if args.cmd == "publish":
@@ -4854,11 +5380,11 @@ def main():
                if pl not in ("facebook", "youtube", "tiktok",
                              "instagram")]
         if bad:
-            print("منصات غير معروفة: %s (المسموح: facebook,youtube,"
-                  "tiktok,instagram)" % ", ".join(bad))
+            print(i18n_lib.t("publish_unknown_platforms", lang,
+                             ", ".join(bad)))
             return 2
         if not platforms:
-            print("حدد منصة واحدة على الأقل في --platforms")
+            print(i18n_lib.t("publish_need_platform", lang))
             return 2
         tags = ([t.strip() for t in args.tags.split(",") if t.strip()]
                 if args.tags else None)
@@ -4867,7 +5393,7 @@ def main():
             try:
                 schedule = publish.parse_schedule(args.schedule)
             except publish.PublishError as e:
-                print("خطأ في موعد الجدولة: %s" % e)
+                print(i18n_lib.t("publish_schedule_error", lang, e))
                 return 2
         return cmd_publish(cfg, args.video, args.title, args.caption,
                            thumbnail=args.thumbnail, platforms=platforms,
@@ -4877,7 +5403,9 @@ def main():
                            skip_check=args.skip_check,
                            skip_caption_check=args.skip_caption_check,
                            allow_missing_manifest=(
-                               args.allow_missing_manifest))
+                               args.allow_missing_manifest),
+                           generate_meta=args.generate_meta,
+                           part=args.part, parts=args.parts, lang=lang)
     if args.cmd == "youtube-auth":
         return cmd_youtube_auth(cfg, args.client_secrets, args.token)
     if args.cmd == "youtube-reauth":
@@ -4905,6 +5433,16 @@ def main():
                                     start=args.start)
         if args.queue_cmd == "validate":
             return cmd_queue_validate(cfg, queue_file=args.queue_file)
+        if args.queue_cmd == "publish-status":
+            return cmd_queue_publish_status(
+                cfg, args.number, args.platform, args.status,
+                queue_file=args.queue_file)
+        if args.queue_cmd == "publish-summary":
+            return cmd_queue_publish_summary(
+                cfg, queue_file=args.queue_file)
+        if args.queue_cmd == "pending":
+            return cmd_queue_pending(cfg, args.platform,
+                                     queue_file=args.queue_file)
         return 2
     if args.cmd == "analyze":
         if args.snapshot:
@@ -4988,11 +5526,20 @@ def main():
         return cmd_batch(cfg, count=args.count, source=args.source,
                          execute=args.execute,
                          continue_on_error=args.continue_on_error,
-                         queue_file=args.queue_file)
+                         queue_file=args.queue_file,
+                         from_json=args.from_json,
+                         no_spend=args.no_spend,
+                         no_cache=args.no_cache)
     if args.cmd == "scene-plan":
         return cmd_scene_plan(cfg, story=args.story,
                               clips=args.clips,
-                              queue_file=args.queue_file)
+                              queue_file=args.queue_file,
+                              template=args.template,
+                              template_hero=args.hero,
+                              template_situation=args.situation,
+                              template_moral=args.moral,
+                              lang=lang,
+                              template_lang=args.template_lang)
     if args.cmd == "tiktok-auth":
         return cmd_social_auth(cfg, "tiktok", token=args.token)
     if args.cmd == "instagram-auth":
@@ -5007,7 +5554,11 @@ def main():
         return cmd_ab(cfg, args.video, args.hook_a, args.hook_b,
                       args.title, args.out_dir,
                       cost_per_video=args.cost_per_video,
-                      variants=args.variants)
+                      variants=args.variants,
+                      engine=args.engine,
+                      balance_units=(cfg.get("veo") or {}).get(
+                          "balance_units"),
+                      ledger_entries=cost_ledger_lib.history(STUDIO_DIR))
     if args.cmd == "ab-results":
         return cmd_ab_results(cfg, args.ab_file)
     if args.cmd == "update":
@@ -5042,6 +5593,22 @@ def main():
                            history_flag=args.history,
                            cap=args.cap,
                            set_balance=args.set_balance)
+    if args.cmd == "jobs":
+        if args.jobs_cmd == "list":
+            return cmd_jobs_list(cfg, status=args.status,
+                                 story=args.story, date=args.date,
+                                 kind=args.kind, limit=args.limit)
+        if args.jobs_cmd == "show":
+            return cmd_jobs_show(cfg, args.job_id)
+        return 2
+    if args.cmd == "reframe":
+        return cmd_reframe(cfg, args.video, args.out,
+                           focus_x=args.focus_x,
+                           safety_margin=args.safety_margin)
+    if args.cmd == "shorts-cut":
+        return cmd_shorts_cut(cfg, args.video, out_dir=args.out,
+                              count=args.count, phrases=args.phrases,
+                              min_len=args.min_len, max_len=args.max_len)
     return 0
 
 

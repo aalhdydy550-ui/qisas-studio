@@ -247,5 +247,160 @@ class TestExecuteBatch(unittest.TestCase):
                 result["stories"][0]["scene_plan"])
 
 
+class TestExecuteBatchCacheAndJobs(unittest.TestCase):
+    """كاش الريندر + سجل المهام في مسار batch (الجولة v0.1.39)."""
+
+    def _probe_ok(self, video):
+        return {"duration": 50.0, "width": 720, "height": 1280,
+                "has_audio": True}
+
+    def _fns(self, calls, check_passed=True):
+        def produce_fn(cfg, slug, project, out_path):
+            calls["produce"] += 1
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "wb") as fh:
+                fh.write(b"fake-video")
+            return 0
+
+        def check_fn(video):
+            return {"passed": check_passed, "checks": []}
+
+        def thumbnail_fn(video, hook, out):
+            return out
+
+        return produce_fn, check_fn, thumbnail_fn
+
+    def test_second_run_reuses_and_skips_produce(self):
+        from lib import job_registry
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _cfg(td)
+            calls = {"produce": 0}
+            produce_fn, check_fn, thumb_fn = self._fns(calls)
+            plan = batch.plan_batch(cfg, 1, source="openmontage",
+                                    ready_fn=_ready)
+            rc, result = batch.execute_batch(
+                cfg, plan, produce_fn, check_fn, thumb_fn,
+                cfg["paths"]["runs_dir"], probe_fn=self._probe_ok)
+            self.assertEqual(rc, 0)
+            self.assertEqual(result["stories"][0]["status"], "done")
+            self.assertEqual(calls["produce"], 1)
+            # الدفعة الثانية بنفس المدخلات: بلا إعادة ريندر.
+            plan2 = batch.plan_batch(cfg, 1, source="openmontage",
+                                     ready_fn=_ready)
+            rc2, result2 = batch.execute_batch(
+                cfg, plan2, produce_fn, check_fn, thumb_fn,
+                cfg["paths"]["runs_dir"], probe_fn=self._probe_ok)
+            self.assertEqual(rc2, 0)
+            self.assertEqual(result2["stories"][0]["status"], "reused")
+            self.assertTrue(result2["stories"][0]["reused"])
+            self.assertEqual(calls["produce"], 1)
+            # والسجل الدائم يوثّق المهمتين (done ثم reused).
+            jobs = job_registry.list_jobs(
+                cfg["paths"]["runs_dir"], story="4")
+            statuses = sorted(j["status"] for j in jobs)
+            self.assertEqual(statuses, ["done", "reused"])
+            reused = [j for j in jobs if j["status"] == "reused"][0]
+            self.assertTrue(reused["reused"])
+            self.assertIsNotNone(reused["input_fingerprint"])
+
+    def test_changed_fingerprint_rerenders(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _cfg(td)
+            calls = {"produce": 0}
+            produce_fn, check_fn, thumb_fn = self._fns(calls)
+            plan = batch.plan_batch(cfg, 1, source="openmontage",
+                                    ready_fn=_ready)
+            batch.execute_batch(
+                cfg, plan, produce_fn, check_fn, thumb_fn,
+                cfg["paths"]["runs_dir"], probe_fn=self._probe_ok)
+            self.assertEqual(calls["produce"], 1)
+            # بصمة مختلفة (مدخلات مختلفة) ← إعادة ريندر.
+            plan2 = batch.plan_batch(cfg, 1, source="openmontage",
+                                     ready_fn=_ready)
+            rc, result = batch.execute_batch(
+                cfg, plan2, produce_fn, check_fn, thumb_fn,
+                cfg["paths"]["runs_dir"], probe_fn=self._probe_ok,
+                fingerprint_fn=lambda c, item: {
+                    "script": "قصة مختلفة تمامًا"})
+            self.assertEqual(result["stories"][0]["status"], "done")
+            self.assertEqual(calls["produce"], 2)
+
+    def test_deleted_cached_output_rerenders(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _cfg(td)
+            calls = {"produce": 0}
+            produce_fn, check_fn, thumb_fn = self._fns(calls)
+            plan = batch.plan_batch(cfg, 1, source="openmontage",
+                                    ready_fn=_ready)
+            batch.execute_batch(
+                cfg, plan, produce_fn, check_fn, thumb_fn,
+                cfg["paths"]["runs_dir"], probe_fn=self._probe_ok)
+            os.unlink(plan["stories"][0]["video"])
+            plan2 = batch.plan_batch(cfg, 1, source="openmontage",
+                                     ready_fn=_ready)
+            rc, result = batch.execute_batch(
+                cfg, plan2, produce_fn, check_fn, thumb_fn,
+                cfg["paths"]["runs_dir"], probe_fn=self._probe_ok)
+            self.assertEqual(result["stories"][0]["status"], "done")
+            self.assertEqual(calls["produce"], 2)
+
+    def test_use_cache_false_always_produces(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _cfg(td)
+            calls = {"produce": 0}
+            produce_fn, check_fn, thumb_fn = self._fns(calls)
+            for _ in range(2):
+                plan = batch.plan_batch(cfg, 1, source="openmontage",
+                                        ready_fn=_ready)
+                batch.execute_batch(
+                    cfg, plan, produce_fn, check_fn, thumb_fn,
+                    cfg["paths"]["runs_dir"], probe_fn=self._probe_ok,
+                    use_cache=False)
+            self.assertEqual(calls["produce"], 2)
+
+    def test_jobs_recorded_for_skipped_story(self):
+        from lib import job_registry
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _cfg(td)
+            calls = {"produce": 0}
+            produce_fn, check_fn, thumb_fn = self._fns(calls)
+            plan = batch.plan_batch(cfg, 2, source="openmontage",
+                                    ready_fn=_ready)
+            batch.execute_batch(
+                cfg, plan, produce_fn, check_fn, thumb_fn,
+                cfg["paths"]["runs_dir"], probe_fn=self._probe_ok)
+            jobs = job_registry.list_jobs(cfg["paths"]["runs_dir"])
+            by_story = {j["story"]: j["status"] for j in jobs}
+            self.assertEqual(by_story.get("4"), "done")
+            self.assertEqual(by_story.get("5"), "skipped")
+
+    def test_veo_reuse_skips_spend(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _cfg(td)
+            videos_dir = cfg["paths"]["videos_dir"]
+            os.makedirs(videos_dir, exist_ok=True)
+            # فيديو جاهز مسبقًا ليقبل مسار Veo (video_ready).
+            with open(os.path.join(videos_dir, "anza-batch.mp4"),
+                      "wb") as fh:
+                fh.write(b"fake-video")
+            calls = {"produce": 0, "spend": 0}
+
+            def record_spend(units):
+                calls["spend"] += 1
+                return 680 - 120 * calls["spend"]
+
+            produce_fn, check_fn, thumb_fn = self._fns(calls)
+            for _ in range(2):
+                plan = batch.plan_batch(cfg, 1, source="veo",
+                                        ready_fn=_ready)
+                batch.execute_batch(
+                    cfg, plan, produce_fn, check_fn, thumb_fn,
+                    cfg["paths"]["runs_dir"], probe_fn=self._probe_ok,
+                    record_spend_fn=record_spend)
+            # إنتاج مرة واحدة وخصم مرة واحدة؛ الثانية reused.
+            self.assertEqual(calls["produce"], 1)
+            self.assertEqual(calls["spend"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -180,5 +180,217 @@ class TestCreateAbVariants(unittest.TestCase):
             self.assertGreater(os.path.getsize(v["thumb"]), 0)
 
 
+class TestEstimateVariantCost(unittest.TestCase):
+    """تقدير تكلفة المتغير (الجولة v0.1.39) — بلا شبكة."""
+
+    def test_fast_six_clips_120_units(self):
+        est = ab.estimate_variant_cost(clips=6, engine="fast")
+        self.assertEqual(est["veo_units"], 120)
+        self.assertEqual(est["units_per_clip"], 20)
+        self.assertEqual(est["video_seconds"], 48)
+        self.assertEqual(est["render_minutes_estimate"], 1.6)
+        self.assertEqual(est["cash_usd"], 0)
+        self.assertEqual(est["engine_label"], "Veo 3.1 Fast")
+
+    def test_lite_six_clips_60_units(self):
+        est = ab.estimate_variant_cost(clips=6, engine="lite")
+        self.assertEqual(est["veo_units"], 60)
+        self.assertEqual(est["units_per_clip"], 10)
+        self.assertEqual(est["video_seconds"], 48)
+        self.assertEqual(est["render_minutes_estimate"], 1.6)
+        self.assertEqual(est["cash_usd"], 0)
+
+    def test_zero_clips_edge_case(self):
+        """حالة حدّية: متغير بلا مقاطع — صفر رصيد وصفر ريندر."""
+        est = ab.estimate_variant_cost(clips=0, engine="lite")
+        self.assertEqual(est["veo_units"], 0)
+        self.assertEqual(est["video_seconds"], 0)
+        self.assertEqual(est["render_minutes_estimate"], 0.0)
+        self.assertEqual(est["cash_usd"], 0)
+        self.assertIn("بلا مقاطع", est["note"])
+
+    def test_invalid_engine_rejected(self):
+        with self.assertRaises(ValueError):
+            ab.estimate_variant_cost(clips=6, engine="ultra")
+
+    def test_invalid_clips_rejected(self):
+        for bad in (-1, True, "6", 6.5, None):
+            with self.assertRaises(ValueError, msg="clips=%r" % (bad,)):
+                ab.estimate_variant_cost(clips=bad, engine="fast")
+
+    def test_balance_fits_and_exceeds(self):
+        fits = ab.estimate_variant_cost(
+            clips=6, engine="fast", balance_units=680)
+        self.assertTrue(fits["fits_recorded_balance"])
+        short = ab.estimate_variant_cost(
+            clips=6, engine="fast", balance_units=100)
+        self.assertFalse(short["fits_recorded_balance"])
+        self.assertIn("يتجاوز الرصيد", short["balance_note"] or "")
+
+    def test_ledger_average_compared(self):
+        entries = [{"clips": 6, "units": 120, "video": "أ"},
+                   {"clips": 6, "units": 60, "video": "ب"}]
+        est = ab.estimate_variant_cost(
+            clips=6, engine="fast", ledger_entries=entries)
+        self.assertEqual(est["actual_avg_units_per_clip"], 15.0)
+        self.assertIsNone(
+            ab.ledger_avg_units_per_clip("/tmp/no-such-studio-xyz"))
+        self.assertIsNone(ab.average_units_per_clip([]))
+        self.assertIsNone(ab.average_units_per_clip(
+            [{"clips": None, "units": 50}]))
+
+
+class TestEstimateFromUnits(unittest.TestCase):
+    """اشتقاق التقدير من cost_per_video الموجود (توسعة المسار
+    القديم — لا مسار موازٍ)."""
+
+    def test_fast_120_is_six_clips(self):
+        est = ab.estimate_variant_cost_from_units(120, engine="fast")
+        self.assertEqual(est["clips"], 6)
+        self.assertEqual(est["veo_units"], 120)
+        self.assertEqual(est["render_minutes_estimate"], 1.6)
+
+    def test_lite_120_is_twelve_clips(self):
+        est = ab.estimate_variant_cost_from_units(120, engine="lite")
+        self.assertEqual(est["clips"], 12)
+        self.assertEqual(est["video_seconds"], 96)
+        self.assertEqual(est["render_minutes_estimate"], 3.2)
+
+    def test_lite_60_is_six_clips(self):
+        est = ab.estimate_variant_cost_from_units(60, engine="lite")
+        self.assertEqual(est["clips"], 6)
+        self.assertEqual(est["veo_units"], 60)
+
+    def test_zero_units_same_video(self):
+        est = ab.estimate_variant_cost_from_units(0, engine="fast")
+        self.assertEqual(est["clips"], 0)
+        self.assertEqual(est["veo_units"], 0)
+        self.assertEqual(est["render_minutes_estimate"], 0.0)
+        self.assertIn("نفس الفيديو", est["note"])
+
+    def test_non_divisible_units_fractional_clips(self):
+        """90 وحدة Fast = 4.5 مقطع — كسري مصرّح به لا مقطع
+        كامل مخترع."""
+        est = ab.estimate_variant_cost_from_units(90, engine="fast")
+        self.assertEqual(est["clips"], 4.5)
+        self.assertEqual(est["veo_units"], 90)
+        self.assertEqual(est["video_seconds"], 36.0)
+
+    def test_invalid_units_or_engine(self):
+        for bad in (-5, True, "120", None):
+            with self.assertRaises(ValueError, msg="units=%r" % (bad,)):
+                ab.estimate_variant_cost_from_units(bad)
+        with self.assertRaises(ValueError):
+            ab.estimate_variant_cost_from_units(120, engine="ultra")
+
+    def test_format_variant_cost_line(self):
+        est = ab.estimate_variant_cost_from_units(60, engine="lite")
+        line = ab.format_variant_cost(est)
+        self.assertIn("60 وحدة", line)
+        self.assertIn("Veo 3.1 Lite", line)
+        self.assertIn("6 مقاطع", line)
+        self.assertIn("$0", line)
+        self.assertIn("1.6", line)
+
+
+class TestCreateAbVariantsCost(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.video = os.path.join(self.tmp, "video.mp4")
+        with open(self.video, "wb") as f:
+            f.write(b"fake-video")
+
+    def test_lite_cost_per_variant_and_totals(self):
+        calls = []
+        record = ab.create_ab_variants(
+            self.video, [WEAK_HOOK, STRONG_HOOK, MID_HOOK], self.tmp,
+            title="قصة",
+            thumbnail_fn=_fake_thumbnail(calls),
+            duration_fn=lambda v: 50.0,
+            cost_per_video=120, engine="lite")
+        for v in record["variants"]:
+            est = v["cost_estimate"]
+            self.assertEqual(est["veo_units"], 120)
+            self.assertEqual(est["clips"], 12)
+            self.assertEqual(est["engine"], "lite")
+            self.assertEqual(est["cash_usd"], 0)
+            self.assertEqual(est["render_minutes_estimate"], 3.2)
+        costs = record["cost_estimates"]
+        self.assertEqual(costs["total_units"], 360)
+        self.assertEqual(costs["total_render_minutes_estimate"], 9.6)
+        self.assertEqual(costs["cash_usd"], 0)
+        # المسار القديم باقٍ كما هو (توافق).
+        self.assertEqual(record["cost_estimate_units"]["total"], 360)
+        self.assertEqual(record["cost_estimate_units"]["variant_a"], 120)
+
+    def test_fast_default_engine(self):
+        record = ab.create_ab_variants(
+            self.video, [WEAK_HOOK, STRONG_HOOK], self.tmp,
+            thumbnail_fn=_fake_thumbnail([]),
+            duration_fn=lambda v: 50.0,
+            cost_per_video=120)
+        self.assertEqual(record["variants"][0]["cost_estimate"]["clips"], 6)
+        self.assertEqual(record["variants"][0]["cost_estimate"]["engine"],
+                         "fast")
+
+    def test_zero_cost_same_video(self):
+        record = ab.create_ab_variants(
+            self.video, [WEAK_HOOK, STRONG_HOOK], self.tmp,
+            thumbnail_fn=_fake_thumbnail([]),
+            duration_fn=lambda v: 50.0)
+        for v in record["variants"]:
+            self.assertEqual(v["cost_estimate"]["veo_units"], 0)
+            self.assertEqual(v["cost_estimate"]["render_minutes_estimate"],
+                             0.0)
+        self.assertEqual(record["cost_estimates"]["total_units"], 0)
+
+    def test_balance_flag_in_record(self):
+        record = ab.create_ab_variants(
+            self.video, [WEAK_HOOK, STRONG_HOOK], self.tmp,
+            thumbnail_fn=_fake_thumbnail([]),
+            duration_fn=lambda v: 50.0,
+            cost_per_video=120, engine="fast", balance_units=100)
+        self.assertFalse(record["variants"][0]["cost_estimate"]
+                         ["fits_recorded_balance"])
+
+    def test_invalid_engine_rejected_before_thumbnails(self):
+        calls = []
+        with self.assertRaises(ValueError):
+            ab.create_ab_variants(
+                self.video, [WEAK_HOOK, STRONG_HOOK], self.tmp,
+                thumbnail_fn=_fake_thumbnail(calls),
+                duration_fn=lambda v: 50.0,
+                cost_per_video=120, engine="ultra")
+        self.assertEqual(calls, [])
+
+    def test_create_ab_two_variants_cost(self):
+        record = ab.create_ab(
+            self.video, "هوك أ!", "هوك ب!", self.tmp,
+            title="قصة",
+            thumbnail_fn=_fake_thumbnail([]),
+            duration_fn=lambda v: 50.0,
+            cost_per_video=120, engine="lite")
+        costs = record["cost_estimates"]
+        self.assertEqual(costs["variant_a"]["veo_units"], 120)
+        self.assertEqual(costs["variant_b"]["clips"], 12)
+        self.assertEqual(costs["total_units"], 240)
+        self.assertEqual(costs["total_render_minutes_estimate"], 6.4)
+        self.assertEqual(record["cost_estimate_units"]["total"], 240)
+
+    def test_format_comparison_shows_variant_cost(self):
+        record = ab.create_ab(
+            self.video, "هوك أ!", "هوك ب!", self.tmp,
+            title="قصة",
+            thumbnail_fn=_fake_thumbnail([]),
+            duration_fn=lambda v: 50.0,
+            cost_per_video=60, engine="lite")
+        out = ab.compare_ab(record, [], [])
+        text = ab.format_comparison(record, out)
+        self.assertIn("تكلفة كل متغير", text)
+        self.assertIn("60 وحدة", text)
+        self.assertIn("Veo 3.1 Lite", text)
+        self.assertIn("غير منشورة بعد", text)
+
+
 if __name__ == "__main__":
     unittest.main()
