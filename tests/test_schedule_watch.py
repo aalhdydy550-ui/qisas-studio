@@ -200,5 +200,49 @@ class TestValidation(unittest.TestCase):
                                       comment_fn, slot="noon")
 
 
+class TestWatchResultToPublishStatus(unittest.TestCase):
+    """ترجمة نتيجة watch_slot إلى حالة نشر موحّدة (أ2-8)."""
+
+    def test_published_ok_maps_to_published(self):
+        self.assertEqual(
+            schedule_watch.status_from_watch({"ok": True}),
+            "published")
+
+    def test_not_published_maps_to_pending(self):
+        self.assertEqual(
+            schedule_watch.status_from_watch(
+                {"ok": False, "reason": "not_published"}),
+            "pending")
+
+    def test_error_maps_to_failed(self):
+        self.assertEqual(
+            schedule_watch.status_from_watch(
+                {"ok": False, "error": "فشل نشر أول تعليق"}),
+            "failed")
+
+    def test_dry_run_and_empty_map_to_pending(self):
+        self.assertEqual(schedule_watch.status_from_watch(
+            {"dry_run": True}), "pending")
+        self.assertEqual(schedule_watch.status_from_watch({}),
+                         "pending")
+        self.assertEqual(schedule_watch.status_from_watch(None),
+                         "pending")
+
+    def test_apply_watch_result_updates_facebook_by_default(self):
+        statuses = {}
+        entry = schedule_watch.apply_watch_result(
+            statuses, 3, {"ok": True})
+        self.assertEqual(entry["facebook"], "published")
+        self.assertEqual(entry["youtube"], "pending")
+        entry = schedule_watch.apply_watch_result(
+            statuses, 3, {"ok": False, "error": "فشل"})
+        self.assertEqual(entry["facebook"], "failed")
+
+    def test_apply_watch_result_not_published_keeps_pending(self):
+        entry = schedule_watch.apply_watch_result(
+            {}, 5, {"ok": False, "reason": "not_published"})
+        self.assertEqual(entry["facebook"], "pending")
+
+
 if __name__ == "__main__":
     unittest.main()

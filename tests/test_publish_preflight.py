@@ -20,6 +20,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib import publish
 from lib import youtube_upload
 
+# جولة v0.1.41 (إصلاح CI): بيئة .venv-youtube موجودة محليًا
+# فقط ولا تُرفع إلى GitHub (في .gitignore) — ففحص ما قبل النشر
+# يرفع PublishError «بيئة YouTube غير موجودة» في CI قبل أي
+# منطق. عند غيابها تتخطى فئة الغلاف نظيفًا (نمط test_ci_skips).
+_HAS_YOUTUBE_VENV = publish.youtube_venv_python() is not None
+
 
 def _token_file(td, refresh=True, scopes=True):
     data = {"refresh_token": "1//fake-refresh"} if refresh else {}
@@ -143,6 +149,9 @@ class TestRunPreflight(unittest.TestCase):
         self.assertIn("403", str(cm.exception))
 
 
+@unittest.skipUnless(
+    _HAS_YOUTUBE_VENV,
+    "بيئة .venv-youtube غائبة (لا تُرفع إلى GitHub) — بيئة CI")
 class TestPublishPreflightWrapper(unittest.TestCase):
     def test_runner_success_returns_report(self):
         def runner(argv):
