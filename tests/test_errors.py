@@ -199,6 +199,22 @@ class TestGenericAndVeoErrors(unittest.TestCase):
                                  '{"state": "failed"}'),
             "concat_export_failed")
 
+    def test_llm_all_failed(self):
+        _assert_arabic_explanation(
+            self,
+            errors.explain_error(
+                "فشلت كل مزودات الذكاء (2): ddgw/gpt-5.4-mini "
+                "(quota)؛ gemini-3-flash-preview (auth)"),
+            "llm_all_failed")
+
+    def test_llm_all_failed_exception(self):
+        from lib.omniroute_client import LLMAllFailedError
+        err = LLMAllFailedError(
+            [("ddgw/gpt-5.4-mini", "quota", "HTTP 429"),
+             ("gemini-3-flash-preview", "auth", "HTTP 401")])
+        _assert_arabic_explanation(
+            self, errors.explain_error(err), "llm_all_failed")
+
 
 class TestUnknownAndEdgeCases(unittest.TestCase):
     def test_unknown_error_generic_message(self):

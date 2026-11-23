@@ -30,7 +30,7 @@ class TestVersionCommand(unittest.TestCase):
             rc = studio.cmd_version()
         self.assertEqual(rc, 0)
         out = buf.getvalue()
-        self.assertIn("0.1.37", out)
+        self.assertIn(studio.VERSION, out)
         self.assertIn("studio", out)
 
     def test_remote_status_from_sync_log(self):
@@ -84,14 +84,14 @@ class TestVersionCommand(unittest.TestCase):
             [sys.executable, "studio.py", "version"],
             cwd=STUDIO_DIR, capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("0.1.37", proc.stdout)
+        self.assertIn(studio.VERSION, proc.stdout)
 
     def test_cli_double_dash_version(self):
         proc = subprocess.run(
             [sys.executable, "studio.py", "--version"],
             cwd=STUDIO_DIR, capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0)
-        self.assertIn("0.1.37", proc.stdout)
+        self.assertIn(studio.VERSION, proc.stdout)
 
 
 class TestHelpArRound8(unittest.TestCase):

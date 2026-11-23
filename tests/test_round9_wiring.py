@@ -36,12 +36,19 @@ def _run_cli(*args):
 
 
 class TestCheckCaptionsWiring(unittest.TestCase):
+    @unittest.skipUnless(
+        os.path.isfile(DEMO) and os.path.isdir(SUBS_DIR),
+        "فيديو الديمو/الكابشنات غائبة — بيئة CI")
     def test_check_captions_real_subs_pass(self):
         proc = _run_cli("check", "--video", DEMO, "--captions", SUBS_DIR)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("تدقيق تشكيل الكابشن", proc.stdout)
         self.assertIn("لا مشاكل تشكيل", proc.stdout)
 
+    @unittest.skipUnless(
+        os.path.isfile(DEMO) and os.path.isfile(
+            os.path.join(SUBS_DIR, "najjar-scene1.ass")),
+        "فيديو الديمو/الكابشنات غائبة — بيئة CI")
     def test_check_captions_broken_fails(self):
         with tempfile.TemporaryDirectory() as td:
             src = os.path.join(SUBS_DIR, "najjar-scene1.ass")
@@ -100,6 +107,8 @@ class TestScriptMetaWiring(unittest.TestCase):
 
 
 class TestAbVariantsWiring(unittest.TestCase):
+    @unittest.skipUnless(os.path.isfile(DEMO),
+                         "فيديو الديمو غائب — بيئة CI")
     def test_ab_variants_ranked_with_winner(self):
         with tempfile.TemporaryDirectory() as td:
             hooks_text = (
@@ -137,6 +146,8 @@ class TestAbVariantsWiring(unittest.TestCase):
             self.assertEqual(
                 record["cost_estimate_units"]["total"], 60)
 
+    @unittest.skipUnless(os.path.isfile(DEMO),
+                         "فيديو الديمو غائب — بيئة CI")
     def test_ab_variants_two_cli_uses_legacy_path(self):
         with tempfile.TemporaryDirectory() as td:
             proc = _run_cli("ab", "--video", DEMO,
@@ -149,6 +160,9 @@ class TestAbVariantsWiring(unittest.TestCase):
 
 
 class TestAnalyzeReferenceWiring(unittest.TestCase):
+    @unittest.skipUnless(
+        os.path.isfile(DEMO) and os.path.isfile(NAJJAR),
+        "فيديو الديمو/النجار غائب — بيئة CI")
     def test_dna_reference_proposal_printed(self):
         with tempfile.TemporaryDirectory() as td:
             story_path = os.path.join(td, "story.txt")
@@ -178,6 +192,9 @@ class TestAnalyzeReferenceWiring(unittest.TestCase):
                        "من زرع الخير حصده.")
         self.assertEqual(res["breakdown"]["payoff"], 1)
 
+    @unittest.skipUnless(
+        os.path.isfile(DEMO) and os.path.isfile(NAJJAR),
+        "فيديو الديمو/النجار غائب — بيئة CI")
     def test_dna_reference_missing_new_story_file(self):
         with tempfile.TemporaryDirectory() as td:
             cfg = {"publish": {}, "paths": {"runs_dir": td}}

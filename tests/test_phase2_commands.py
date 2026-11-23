@@ -174,6 +174,8 @@ class TestLogsCmd(unittest.TestCase):
 class TestQueueImportCmd(unittest.TestCase):
     def _setup(self, td):
         # ملف النص يجب أن يكون داخل ~/workspace (قيد الأمان).
+        # المجلد الأب قد لا يوجد (CI: بلا ~/workspace) فيُنشأ أولًا.
+        os.makedirs(os.path.expanduser("~/workspace"), exist_ok=True)
         ws_tmp = tempfile.mkdtemp(prefix=".test-qi-",
                                   dir=os.path.expanduser("~/workspace"))
         self.addCleanup(shutil.rmtree, ws_tmp, True)

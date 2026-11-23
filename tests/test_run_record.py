@@ -40,6 +40,9 @@ class TestResolveSettings(unittest.TestCase):
         self.assertEqual(settings["atempo"], 1.25)
         self.assertEqual(settings["llm_model"], "ddgw/gpt-5.4-mini")
         self.assertEqual(settings["backend"], "openreel")
+        self.assertEqual(settings["llm_chain"],
+                         ["ddgw/gpt-5.4-mini", "ddgw/llama-3.3-70b",
+                          "gemini-3-flash-preview"])
         self.assertEqual(settings["grade"], "warm")
         self.assertFalse(settings["watermark"])
         self.assertEqual(settings["video_size"], "720x1280")

@@ -70,6 +70,13 @@ class TestEvalSet(unittest.TestCase):
         self.assertEqual(diffs[0]["metric"], "hook_score")
         self.assertEqual(diffs[0]["delta"], 2)
 
+    @unittest.skipUnless(
+        all(os.path.isfile(os.path.expanduser(p)) for p in (
+            "~/workspace/videos/najjar-full-fixed.mp4",
+            "~/workspace/videos/aisha-part1-full.mp4",
+            "~/workspace/videos/hamati-full.mp4",
+            "~/workspace/videos/openmontage-anza-part1-fixed.mp4")),
+        "فيديوهات مجموعة التقييم غائبة — بيئة CI")
     def test_snapshot_cli_matches_baseline(self):
         # اللقطة الحية على الفيديوهات الأربعة المحلية تطابق
         # الأساس (نفس الأدوات ونفس الهوكات) — أي فرق هنا

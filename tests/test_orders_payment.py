@@ -344,5 +344,123 @@ class TestOrdersPayment(unittest.TestCase):
         self.assertIn("لا توجد طلبات", buf.getvalue())
 
 
+class TestClientRunLogo(unittest.TestCase):
+    """شعار الصفحة لا يظهر أبدًا على فيديوهات طلبات العملاء
+    (قاعدة المستخدم 2026-11-22) — وشعار العميل الخاص يُطبَّق.
+
+    الإنتاج الكامل يُحاكى (بلا سرد/صور/تجميع حقيقي)؛ ما يُثبَت
+    هو القرار عند نقطة التجميع: watermark_on=False دائمًا في
+    مسار الطلبات، وapply_watermark يُستدعى لشعار العميل فقط.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.orig_dir = client_orders.ORDERS_DIR
+        self.orig_file = client_orders.ORDERS_FILE
+        self.orig_out = client_orders.OUT_ROOT
+        client_orders.ORDERS_DIR = str(self.root)
+        client_orders.ORDERS_FILE = str(self.root / "orders.jsonl")
+        client_orders.OUT_ROOT = str(self.root / "out")
+
+    def tearDown(self):
+        client_orders.ORDERS_DIR = self.orig_dir
+        client_orders.ORDERS_FILE = self.orig_file
+        client_orders.OUT_ROOT = self.orig_out
+        self.tmp.cleanup()
+
+    def _write(self, *rows):
+        (self.root / "orders.jsonl").write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+            encoding="utf-8")
+
+    def _read(self):
+        return client_orders.load_orders()
+
+    def test_resolve_order_logo_choice(self):
+        resolve = client_orders.resolve_order_logo_choice
+        self.assertEqual(resolve({"logo": "page"}), ("none", False))
+        self.assertEqual(resolve({"logo": "custom"}), ("custom", True))
+        self.assertEqual(resolve({"logo": "client"}), ("custom", True))
+        self.assertEqual(resolve({"logo": "none"}), ("none", False))
+        self.assertEqual(resolve({}), ("none", False))
+        self.assertEqual(resolve({"logo": "weird"}), ("none", False))
+
+    def _run_order(self, order_id, logo, logo_path=None):
+        row = _row(order_id, "new", logo=logo)
+        order_dir = self.root / "out" / order_id
+        order_dir.mkdir(parents=True, exist_ok=True)
+        if logo_path is not None:
+            # logo_path مسار مطلق داخل مجلد الطلب — كما يكتبه
+            # المراقب في watcher-runbook.md
+            # (~/workspace/videos/client-orders/<id>/client-logo.<ext>).
+            row["logo_path"] = str(order_dir / logo_path)
+            # PNG صغير 1×1 (المحتوى لا يهم — apply_watermark محاكى،
+            # لكن _resolve_order_logo الحقيقي يفحص الامتداد والحجم).
+            (order_dir / logo_path).write_bytes(
+                bytes.fromhex(
+                    "89504e470d0a1a0a0000000d494844520000000100000001"
+                    "08060000001f15c4890000000a49444154789c6301000000"
+                    "0500010d0a2db40000000049454e44ae426082"))
+        self._write(row)
+        cfg = {"video": {"width": 720, "height": 1280},
+               "paths": {"runs_dir": str(self.root / "runs")}}
+        story = {"scenes": [{"image_keywords": ["أمانة"]}],
+                 "hook": "هوك اختبار", "moral": "عبرة اختبار"}
+        with mock.patch("sys.stdout", io.StringIO()), \
+             mock.patch.object(client_orders, "expand_story",
+                               return_value=story), \
+             mock.patch.object(client_orders, "narrate_scenes",
+                               return_value=(str(self.root / "n.wav"),
+                                             50.0, [])), \
+             mock.patch.object(client_orders, "fetch_scene_image",
+                               return_value="https://example.invalid/x.jpg"), \
+             mock.patch.object(client_orders, "build_project",
+                               return_value="proj-test"), \
+             mock.patch.object(client_orders.studio, "new_run",
+                               return_value=("run-test",
+                                             str(self.root / "rundir"))), \
+             mock.patch.object(client_orders.studio, "cmd_produce",
+                               return_value={"images": ["a.jpg"],
+                                             "narration_duration": 50.0,
+                                             "phrases": ["عبارة"]}), \
+             mock.patch.object(client_orders.studio, "cmd_assemble",
+                               side_effect=lambda c, r, h, o, w: (o, 50.0)) \
+                as assemble, \
+             mock.patch.object(client_orders.studio, "cmd_thumbnail",
+                               side_effect=lambda c, o, h, t: t), \
+             mock.patch.object(client_orders.studio.watermark,
+                               "probe_duration", return_value=50.0), \
+             mock.patch.object(client_orders.studio.watermark,
+                               "apply_watermark") as apply_logo:
+            rc = client_orders.cmd_client_run(cfg, order_id)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self._read()[0]["status"], "done")
+        return assemble, apply_logo
+
+    def test_page_logo_never_applied(self):
+        assemble, apply_logo = self._run_order("QS-LOGO-1", "page")
+        assemble.assert_called_once()
+        self.assertFalse(assemble.call_args[0][4])
+        apply_logo.assert_not_called()
+
+    def test_none_logo_no_watermark(self):
+        assemble, apply_logo = self._run_order("QS-LOGO-2", "none")
+        assemble.assert_called_once()
+        self.assertFalse(assemble.call_args[0][4])
+        apply_logo.assert_not_called()
+
+    def test_custom_logo_applied_client_badge(self):
+        assemble, apply_logo = self._run_order(
+            "QS-LOGO-3", "custom", logo_path="client-logo.png")
+        assemble.assert_called_once()
+        self.assertFalse(assemble.call_args[0][4])
+        apply_logo.assert_called_once()
+        called = apply_logo.call_args
+        self.assertEqual(called.kwargs.get("badge"),
+                         str(self.root / "out" / "QS-LOGO-3"
+                             / "client-logo.png"))
+
+
 if __name__ == "__main__":
     unittest.main()

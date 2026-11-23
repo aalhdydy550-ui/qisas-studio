@@ -269,6 +269,9 @@ class TestRunWizardRound6(unittest.TestCase):
         self.assertTrue(os.path.isfile(
             os.path.join(self.td, "assets", "qisas-logo-badge.png")))
 
+    @unittest.skipUnless(
+        os.path.isfile(REAL_CONFIG) and os.path.isfile(REAL_LOGO),
+        "ملفات الإعداد الحقيقية غائبة — بيئة CI")
     def test_real_files_untouched(self):
         def _sig(path):
             st = os.stat(path)

@@ -80,5 +80,23 @@ class TestWatermark(unittest.TestCase):
             watermark.find_cards(empty)
 
 
+class TestAssembleLogoDefault(unittest.TestCase):
+    """خط النشر الخاص بالمستخدم يحتفظ بالشعار افتراضيًا
+    (قاعدة 2026-11-22 تقابلها: طلبات العملاء بلا شعار صفحة
+    أبدًا — انظر TestClientRunLogo في test_orders_payment.py).
+
+    بلا ffmpeg هنا: فحص توقيع الدالة فقط، بلا فيديو.
+    """
+
+    def test_assemble_defaults_to_watermark_on(self):
+        import inspect
+
+        import studio
+
+        params = inspect.signature(studio.cmd_assemble).parameters
+        self.assertIn("watermark_on", params)
+        self.assertTrue(params["watermark_on"].default)
+
+
 if __name__ == "__main__":
     unittest.main()

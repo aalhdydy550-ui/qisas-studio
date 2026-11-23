@@ -52,7 +52,14 @@ class TestRunChecks(unittest.TestCase):
         self.tmp.cleanup()
 
     def _run(self, which_map=None, fallbacks=None):
-        which_map = which_map or {}
+        # بيئة محكمة: كل أداة يفحصها doctor حاضرة افتراضيًا ما لم
+        # يُصرَّح بغيابها في which_map — وإلا اعتمد الاختبار على
+        # آلة المطوّر (فيفشل على CI حيث لا piper ولا omniroute).
+        defaults = {cmd: "/usr/bin/%s" % cmd for cmd in
+                    ("ffmpeg", "ffprobe", "git", "node", "npm", "melt",
+                     "yt-dlp", "piper", "omniroute")}
+        defaults.update(which_map or {})
+        which_map = defaults
         real_which = doctor.shutil.which
 
         def fake_which(cmd):
@@ -89,7 +96,14 @@ class TestRunChecks(unittest.TestCase):
         self.assertTrue(by_name["شارة شعار «قصص وعبر»"]["ok"])
         text, errors, warnings = doctor.format_report(checks)
         self.assertEqual(errors, 0)
-        self.assertIn("النظام جاهز", text)
+        # السطر الأخير يعتمد على وجود تحذيرات اختيارية (مثل ملف
+        # طابور غائب في بيئة عارية — تحذير مقصود لا فشل): إما
+        # «النظام جاهز» بلا تحذيرات، أو «الفحوصات الأساسية
+        # سليمة» مع تحذير واحد أو أكثر.
+        self.assertTrue(
+            "النظام جاهز" in text
+            or "الفحوصات الأساسية سليمة" in text, text[-300:])
+        self.assertNotIn("[FAIL]", text)
 
     def test_missing_piper_model_is_error(self):
         (self.root / "model.onnx").unlink()

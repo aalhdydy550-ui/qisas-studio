@@ -112,6 +112,10 @@ class TestFirstSceneSample(unittest.TestCase):
             {"openmontage": {"root": "/no/such/root"}}, "ghost")
         self.assertIsNone(sample)
 
+    @unittest.skipUnless(
+        os.path.isdir(os.path.expanduser(
+            "~/workspace/openmontage/projects/anza-part1")),
+        "مشروع العنزة الحقيقي غائب — بيئة CI")
     def test_daily_dry_run_prints_sample(self):
         # مشروع العنزة الحقيقي — أول عبارة حقيقية حرفيًا.
         with tempfile.TemporaryDirectory() as d:
@@ -147,6 +151,10 @@ class TestFirstSceneSample(unittest.TestCase):
                 "والناس كانت بتركع لها!", out)
             self.assertIn("1.25", out)
 
+    @unittest.skipUnless(
+        os.path.isdir(os.path.expanduser(
+            "~/workspace/openmontage/projects/anza-part1")),
+        "مشروع العنزة الحقيقي غائب — بيئة CI")
     def test_batch_dry_run_prints_sample(self):
         with tempfile.TemporaryDirectory() as d:
             queue = os.path.join(d, "queue.md")

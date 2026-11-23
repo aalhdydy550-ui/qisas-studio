@@ -6,6 +6,7 @@
 قصيرتين فقط.
 """
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,11 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib import long_narration
+
+# Piper ثنائي خارجي لا يثبته CI — الاختبارات الحية تتخطى عند غيابه.
+_PIPER_OK = bool(
+    shutil.which("piper")
+    or os.path.isfile(os.path.expanduser("~/.local/bin/piper")))
 
 
 class TestSplitSentences(unittest.TestCase):
@@ -57,6 +63,7 @@ class TestSplitChunks(unittest.TestCase):
 
 
 class TestSynthesizeLong(unittest.TestCase):
+    @unittest.skipUnless(_PIPER_OK, "Piper غائب — بيئة CI")
     def test_two_sentences_with_gap(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "long.wav")
@@ -72,6 +79,7 @@ class TestSynthesizeLong(unittest.TestCase):
             self.assertAlmostEqual(c1["end"], result["duration"], places=1)
             self.assertGreater(long_narration.probe_duration(out), 0)
 
+    @unittest.skipUnless(_PIPER_OK, "Piper غائب — بيئة CI")
     def test_atempo_shortens(self):
         with tempfile.TemporaryDirectory() as tmp:
             text = "السلام عليكم ورحمة الله وبركاته."

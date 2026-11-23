@@ -31,6 +31,10 @@ def _read(path):
 
 
 class TestGuardDryRun(unittest.TestCase):
+    @unittest.skipUnless(
+        os.path.isfile(os.path.expanduser(
+            "~/workspace/studio-env-restore.service")),
+        "آلة غير مهيأة (بلا ملف خدمة) — بيئة CI")
     def test_dry_run_healthy(self):
         """بيئة سليمة: الفحص الجاف يخرج 0 ويبلغ OK عن كل شيء."""
         env = dict(os.environ, PATH=FULL_PATH)
@@ -183,6 +187,10 @@ class TestRound4EnvFixes(unittest.TestCase):
                 "HOSTNAME=127.0.0.1 OMNIROUTE_SERVER_HOST=127.0.0.1",
                 src, path)
         env_path = os.path.expanduser("~/.omniroute/.env")
+        if not os.path.isfile(env_path):
+            # تأكيدات السكربت أعلاه جرت؛ والملف الحي اختياري.
+            raise unittest.SkipTest(
+                "~/.omniroute/.env غائب — بيئة CI")
         with open(env_path, encoding="utf-8") as f:
             self.assertIn("HOSTNAME=127.0.0.1", f.read())
 

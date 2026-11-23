@@ -1442,6 +1442,8 @@ class TestEnsureEnvironment(unittest.TestCase):
                            if which is None else which), \
                 mock.patch("os.path.isfile",
                            side_effect=isfile), \
+                mock.patch.object(studio, "_script_safe_to_run",
+                                  return_value=True), \
                 mock.patch.object(studio.subprocess, "run",
                                   side_effect=run_side) as run, \
                 mock.patch.object(studio, "_omniroute_server_up",
