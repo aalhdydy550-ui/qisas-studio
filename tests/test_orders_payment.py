@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""اختبارات انحدار لبوابة دفع طلبات العملاء (الجولة 6، 2026-11-22).
+"""اختبارات انحدار لبوابة دفع طلبات العملاء (الجولة 6، 2026-11-22؛
+القاعدة الجديدة جولة v0.1.43، 2026-11-23).
 
-القاعدة (قرار المستخدم 2026-11-22 11:10، يلغي تصميم «أول طلب
-مجاني»): أول 10 طلبات لكل عميل (برقم الواتساب) تجربة مجانية —
-تُنتَج تلقائيًا بلا تأكيد دفع (حالتها `new`). ومن الطلب الـ11
-لنفس العميل فصاعدًا لا يُنتَج الفيديو إلا بعد تأكيد دفع صاحبه:
+القاعدة (قرار المستخدم 2026-11-23 18:38، يلغي قاعدة «أول 10
+طلبات» 2026-11-22 11:10): طلبات العميل الجديد (برقم الواتساب)
+مجانية خلال أول 30 يومًا من أول طلب له، بلا حد لعدد الطلبات
+إطلاقًا — تُنتَج تلقائيًا بلا تأكيد دفع (حالتها `new`). وبعد
+30 يومًا من أول طلب لا يُنتَج الفيديو إلا بعد تأكيد دفع صاحبه:
 يبدأ `awaiting_payment` ويصير `paid` عبر `orders confirm`.
-العدّ لكل رقم واتساب على حدة من سجل الطلبات؛ الطلب الفاشل
-لا يستهلك من التجربة. الطلبات القديمة بحالة done لا تُمس أبدًا.
+الحد دقيق: اليوم 30 نفسه مجاني، واليوم 31 مدفوع. تاريخ أول طلب
+يُشتق من أقدم `created_at` لطلباته غير الفاشلة؛ الطلب الفاشل
+لا يبدأ عدّاد التجربة. الطلبات القديمة بحالة done لا تُمس أبدًا.
 
 كل الاختبارات على ملف طلبات مؤقت (ORDERS_FILE/ORDERS_DIR
 مستبدلة بدليل مؤقت) وبلا إنتاج فيديو حقيقي: الإنتاج يُحاكى
@@ -74,37 +77,61 @@ class TestOrdersPayment(unittest.TestCase):
         return client_orders.load_orders()
 
     def _fill_orders(self, number, count, prefix="QS-FILL",
-                     status="done"):
+                     status="done", created_at=None):
+        extra = {}
+        if created_at is not None:
+            extra["created_at"] = created_at
         for i in range(count):
             with mock.patch("sys.stdout", io.StringIO()):
                 client_orders.append_order(
                     _row("%s-%02d" % (prefix, i + 1), status,
-                         whatsapp=number, contact=number))
+                         whatsapp=number, contact=number, **extra))
 
-    # (أ) أول 10 طلبات لكل عميل تجربة مجانية
-    def test_first_ten_orders_are_free_trial(self):
-        for i in range(1, 11):
+    # (أ) طلبات العميل مجانية خلال أول 30 يومًا — بلا حد للعدد
+    def test_many_orders_within_30_days_are_free(self):
+        # 25 طلبًا في أول 29 يومًا → الطلب الـ26 مجاني أيضًا.
+        for i in range(1, 26):
             with mock.patch("sys.stdout", io.StringIO()):
-                client_orders.append_order(_row("QS-T%02d" % i, None))
-        self.assertEqual([o["status"] for o in self._read()],
-                         ["new"] * 10)
-
-    def test_eleventh_order_same_number_waits_for_payment(self):
-        self._fill_orders(CLIENT_A, 10)
+                client_orders.append_order(
+                    _row("QS-T%02d" % i, None,
+                         created_at="2026-11-%02dT10:00:00"
+                         % (1 + (i - 1) % 29)))
         with mock.patch("sys.stdout", io.StringIO()):
-            client_orders.append_order(_row("QS-T11", None))
+            client_orders.append_order(
+                _row("QS-T26", None, created_at="2026-11-29T10:00:00"))
+        self.assertEqual([o["status"] for o in self._read()],
+                         ["new"] * 26)
+
+    def test_order_on_day_31_waits_for_payment(self):
+        self._fill_orders(CLIENT_A, 25, created_at="2026-11-01T10:00:00")
+        with mock.patch("sys.stdout", io.StringIO()):
+            client_orders.append_order(
+                _row("QS-T26", None, created_at="2026-12-01T10:00:00"))
         self.assertEqual(self._read()[-1]["status"], "awaiting_payment")
 
-    def test_eleventh_order_different_number_is_free(self):
-        self._fill_orders(CLIENT_A, 10)
+    def test_day_30_free_day_31_paid_boundary(self):
+        # الحد دقيق: اليوم 30 من أول طلب مجاني، واليوم 31 مدفوع.
+        self._fill_orders(CLIENT_A, 1, created_at="2026-11-01T10:00:00")
+        with mock.patch("sys.stdout", io.StringIO()):
+            client_orders.append_order(
+                _row("QS-B30", None, created_at="2026-11-30T10:00:00"))
+            client_orders.append_order(
+                _row("QS-B31", None, created_at="2026-12-01T10:00:00"))
+        statuses = [o["status"] for o in self._read()]
+        self.assertEqual(statuses[-2:], ["new", "awaiting_payment"])
+
+    def test_other_client_still_in_trial(self):
+        self._fill_orders(CLIENT_A, 25, created_at="2026-11-01T10:00:00")
         with mock.patch("sys.stdout", io.StringIO()):
             client_orders.append_order(
                 _row("QS-T11B", None, whatsapp=CLIENT_B,
-                     contact=CLIENT_B))
+                     contact=CLIENT_B, created_at="2026-12-01T10:00:00"))
         self.assertEqual(self._read()[-1]["status"], "new")
 
-    def test_whatsapp_form_variants_count_as_one_client(self):
-        # الصيغ الثلاث للرقم الواحد (محلي / +20 / 0020) عميل واحد.
+    def test_whatsapp_form_variants_share_one_trial_clock(self):
+        # الصيغ الثلاث للرقم الواحد (محلي / +20 / 0020) عميل واحد:
+        # ساعة التجربة واحدة، فطلب بعد 30 يومًا من أول طلب بأي
+        # صيغة ينتظر الدفع.
         canon = test_identity.canonical_whatsapp(CLIENT_A)
         forms = ["0" + canon, "+20" + canon, "0020" + canon]
         for i in range(10):
@@ -112,20 +139,61 @@ class TestOrdersPayment(unittest.TestCase):
             with mock.patch("sys.stdout", io.StringIO()):
                 client_orders.append_order(
                     _row("QS-V%02d" % (i + 1), "done",
-                         whatsapp=num, contact=num))
+                         whatsapp=num, contact=num,
+                         created_at="2026-11-01T10:00:00"))
         with mock.patch("sys.stdout", io.StringIO()):
-            client_orders.append_order(_row("QS-V11", None))
+            client_orders.append_order(
+                _row("QS-V11", None, created_at="2026-12-01T10:00:00"))
         self.assertEqual(self._read()[-1]["status"], "awaiting_payment")
 
-    def test_failed_order_does_not_consume_trial(self):
-        self._fill_orders(CLIENT_A, 9)
+    def test_failed_order_does_not_start_trial_clock(self):
+        # طلب فاشل قديم لا يبدأ عدّاد التجربة: أول طلب حقيقي
+        # بعده مجاني حتى لو مرّت شهور على الفاشل.
         with mock.patch("sys.stdout", io.StringIO()):
             client_orders.append_order(
                 _row("QS-FAIL-1", "failed", whatsapp=CLIENT_A,
-                     contact=CLIENT_A))
-        with mock.patch("sys.stdout", io.StringIO()):
-            client_orders.append_order(_row("QS-T10", None))
+                     contact=CLIENT_A, created_at="2026-10-01T10:00:00"))
+            client_orders.append_order(
+                _row("QS-T10", None, created_at="2026-11-22T10:00:00"))
         self.assertEqual(self._read()[-1]["status"], "new")
+
+    def test_order_without_created_at_treated_as_in_trial(self):
+        # طلب قديم بلا created_at لا يكسر طلبًا جديدًا: يُعامَل
+        # العميل كأنه ضمن التجربة.
+        row = _row("QS-NODATE", "done")
+        del row["created_at"]
+        self._write(row)
+        with mock.patch("sys.stdout", io.StringIO()):
+            client_orders.append_order(_row("QS-NEW", None))
+        self.assertEqual(self._read()[-1]["status"], "new")
+
+    def test_new_client_is_free(self):
+        with mock.patch("sys.stdout", io.StringIO()):
+            client_orders.append_order(_row("QS-NEWC", None))
+        self.assertEqual(self._read()[0]["status"], "new")
+
+    def test_free_trial_remaining_returns_days(self):
+        from datetime import datetime, timezone
+        # عميل جديد تمامًا → 30 يومًا.
+        self.assertEqual(
+            client_orders.free_trial_remaining(CLIENT_A), 30)
+        # أول طلب قبل 5 أيام → 25 يومًا باقية.
+        self._fill_orders(CLIENT_A, 3, created_at="2026-11-01T10:00:00")
+        ref = datetime(2026, 11, 6, tzinfo=timezone.utc)
+        self.assertEqual(
+            client_orders.free_trial_remaining(CLIENT_A, now=ref), 25)
+        # اليوم 30 نفسه → يوم واحد باقٍ؛ واليوم 31 → صفر.
+        ref30 = datetime(2026, 11, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            client_orders.free_trial_remaining(CLIENT_A, now=ref30), 1)
+        ref31 = datetime(2026, 12, 1, tzinfo=timezone.utc)
+        self.assertEqual(
+            client_orders.free_trial_remaining(CLIENT_A, now=ref31), 0)
+        # طلبات كثيرة لا تنقص الأيام: العدد بلا أثر.
+        self._fill_orders(CLIENT_A, 25, prefix="QS-FILL2",
+                          created_at="2026-11-01T10:00:00")
+        self.assertEqual(
+            client_orders.free_trial_remaining(CLIENT_A, now=ref), 25)
 
     def test_no_whatsapp_order_is_free(self):
         row = _row("QS-NOWA", None)
@@ -135,45 +203,61 @@ class TestOrdersPayment(unittest.TestCase):
             client_orders.append_order(row)
         self.assertEqual(self._read()[0]["status"], "new")
 
-    def test_free_trial_remaining_counts(self):
-        self.assertEqual(
-            client_orders.free_trial_remaining(CLIENT_A), 10)
-        self._fill_orders(CLIENT_A, 3)
-        self.assertEqual(
-            client_orders.free_trial_remaining(CLIENT_A), 7)
-        self._fill_orders(CLIENT_A, 7, prefix="QS-FILL2")
-        self.assertEqual(
-            client_orders.free_trial_remaining(CLIENT_A), 0)
+    def test_cmd_trial_status_prints_days(self):
+        from datetime import datetime, timedelta, timezone
+        today = datetime.now(timezone.utc).date()
+        first = (today - timedelta(days=5)).isoformat() + "T10:00:00"
+        self._fill_orders(CLIENT_A, 3, created_at=first)
+        with mock.patch("sys.stdout", io.StringIO()) as buf:
+            rc = client_orders.cmd_trial_status(CLIENT_A)
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("أول طلب في %s" % (today - timedelta(days=5)), out)
+        self.assertIn("أيام مجانية باقية: 25 من 30", out)
+        # بعد انتهاء التجربة: رسالة الانتهاء وصفر أيام.
+        old = (today - timedelta(days=40)).isoformat() + "T10:00:00"
+        self._write(_row("QS-OLD1", "done",
+                         created_at=old))
+        with mock.patch("sys.stdout", io.StringIO()) as buf:
+            rc = client_orders.cmd_trial_status(CLIENT_A)
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("أيام مجانية باقية: 0 من 30", out)
+        self.assertIn("انتهت التجربة المجانية", out)
 
-    # التدفق الكامل: طلب أول مجاني يُنتج، والـ11 يتوقف حتى التأكيد
-    def test_full_flow_first_free_eleventh_waits_then_produces(self):
+    # التدفق الكامل: طلب أول مجاني يُنتج، وطلب بعد 30 يومًا يتوقف
+    # حتى التأكيد — مهما بلغ عدد الطلبات السابقة.
+    def test_full_flow_first_free_day31_waits_then_produces(self):
         with mock.patch("sys.stdout", io.StringIO()):
-            client_orders.append_order(_row("QS-FLOW-1", None))
-        self._fill_orders(CLIENT_A, 9, prefix="QS-FLOWF")
+            client_orders.append_order(
+                _row("QS-FLOW-1", None, created_at="2026-11-01T10:00:00"))
+        self._fill_orders(CLIENT_A, 25, prefix="QS-FLOWF",
+                          created_at="2026-11-10T10:00:00")
         with mock.patch("sys.stdout", io.StringIO()):
-            client_orders.append_order(_row("QS-FLOW-11", None))
+            client_orders.append_order(
+                _row("QS-FLOW-31", None, created_at="2026-12-01T10:00:00"))
         self.assertEqual(
             [o["status"] for o in self._read()],
-            ["new"] + ["done"] * 9 + ["awaiting_payment"])
+            ["new"] + ["done"] * 25 + ["awaiting_payment"])
         with mock.patch("sys.stdout", io.StringIO()), \
              mock.patch.object(client_orders, "cmd_client_run",
                                return_value=0) as run:
             rc = client_orders.cmd_process_queue({})
         self.assertEqual(rc, 0)
-        # الطلب الأول المجاني أُنتج؛ الـ11 تُخطى.
+        # الطلب الأول المجاني أُنتج؛ طلب اليوم 31 تُخطى.
         run.assert_called_once_with({}, "QS-FLOW-1")
         self.assertEqual(self._read()[-1]["status"], "awaiting_payment")
         # الإنتاج الحقيقي يعلّم الطلب done عند النجاح — نحاكي ذلك
         # حتى لا يعيد الطابور إنتاج الطلب الأول في التشغيل الثاني.
         with mock.patch("sys.stdout", io.StringIO()):
             client_orders.update_order("QS-FLOW-1", status="done")
-            client_orders.confirm_payment("QS-FLOW-11")
+            client_orders.confirm_payment("QS-FLOW-31")
         with mock.patch("sys.stdout", io.StringIO()), \
              mock.patch.object(client_orders, "cmd_client_run",
                                return_value=0) as run:
             rc = client_orders.cmd_process_queue({})
         self.assertEqual(rc, 0)
-        run.assert_called_once_with({}, "QS-FLOW-11")
+        run.assert_called_once_with({}, "QS-FLOW-31")
 
     def test_append_keeps_explicit_paid_and_done(self):
         with mock.patch("sys.stdout", io.StringIO()):

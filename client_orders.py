@@ -12,21 +12,23 @@ OmniRoute → سرد Piper (كريم، رجل) → صور Wikimedia Commons →
   client_orders.py orders confirm <order-id>   # تأكيد دفع طلب
   client_orders.py orders list [--status S]    # عرض الطلبات
 
-بوابة الدفع + فترة التجربة (قرار المستخدم 2026-11-22 11:10، يلغي
-تصميم «أول طلب مجاني» 11:08): أول 10 طلبات لكل عميل (يُعرَّف برقم
-الواتساب) تجربة مجانية — تُنتَج تلقائيًا بلا تأكيد دفع. ومن الطلب
-الـ11 لنفس العميل فصاعدًا لا يُنتَج الفيديو إلا بعد تأكيد دفع
+بوابة الدفع + فترة التجربة (قرار المستخدم 2026-11-23 18:38، يلغي
+قاعدة «أول 10 طلبات» 2026-11-22 11:10): طلبات العميل الجديد
+(يُعرَّف برقم الواتساب) مجانية خلال أول 30 يومًا من أول طلب له،
+بلا حد لعدد الطلبات إطلاقًا — تُنتَج تلقائيًا بلا تأكيد دفع.
+وبعد 30 يومًا من أول طلب لا يُنتَج الفيديو إلا بعد تأكيد دفع
 صاحبه: يبدأ `awaiting_payment` ويصير `paid` عبر `orders confirm`
 بعد أن يتحقق صاحب الاستوديو من التحويل يدويًا (فودافون كاش)،
-ثم يكمل مساره الطبيعي. العدّ لكل رقم واتساب على حدة من سجل
-الطلبات الموجود؛ الطلب الفاشل لم يصل العميلَ منه فيديو فلا
-يستهلك من التجربة. لا مبلغ هنا — البوابة تأكيد فقط،
-ولا يوجد سعر معتمد للفيديو.
+ثم يكمل مساره الطبيعي. تاريخ أول طلب يُشتق من أقدم `created_at`
+لطلباته غير الفاشلة في سجل الطلبات الموجود؛ الطلب الفاشل لم يصل
+العميلَ منه فيديو فلا يبدأ عدّاد التجربة ولا يستهلك منها. لا مبلغ
+هنا — البوابة تأكيد فقط، ولا يوجد سعر معتمد للفيديو.
 
 لا يمس طابور القصص ولا كرونات النشر ولا منشورات فيسبوك. لا يستخدم
 Veo (الإنتاج OpenMontage فقط). لا يخترع أسعارًا.
 """
 import argparse
+from datetime import datetime, timezone
 import fcntl
 import json
 import math
@@ -90,15 +92,18 @@ def _normalize_size(size):
 
 
 # ---------------------------------------------------------------- orders
-# بوابة الدفع + فترة التجربة (قرار المستخدم 2026-11-22 11:10).
-#   new:              أول 10 طلبات لكل عميل (برقم الواتساب) — تجربة
-#                     مجانية، تُنتَج تلقائيًا بلا تأكيد دفع.
-#   awaiting_payment: الطلب الـ11 فصاعدًا لنفس العميل — بانتظار
+# بوابة الدفع + فترة التجربة (قرار المستخدم 2026-11-23 18:38، يلغي
+# قاعدة «أول 10 طلبات» 2026-11-22 11:10).
+#   new:              طلبات العميل خلال أول 30 يومًا من أول طلب له
+#                     (برقم الواتساب) — تجربة مجانية بلا حد لعدد
+#                     الطلبات، تُنتَج تلقائيًا بلا تأكيد دفع.
+#   awaiting_payment: بعد 30 يومًا من أول طلب لنفس العميل — بانتظار
 #                     تأكيد الدفع، لا إنتاج له قبل `orders confirm`.
 #   paid:             تأكد الدفع — جاهز للإنتاج.
 #   processing/done/failed: كما هي من قبل، بلا أي تغيير.
-# العدّ من سجل الطلبات الموجود؛ الطلب الفاشل لا يستهلك من التجربة.
-FREE_TRIAL_ORDERS = 10
+# تاريخ أول طلب = أقدم created_at لطلباته غير الفاشلة؛ طلب قديم
+# بلا created_at قابل للقراءة يُعامَل كأنه ضمن التجربة ولا يُكسر.
+FREE_TRIAL_DAYS = 30
 PAYMENT_PENDING = "awaiting_payment"
 PAYMENT_CONFIRMED = "paid"
 PRODUCIBLE_STATUSES = ("paid", "new")
@@ -282,12 +287,97 @@ def _count_client_orders(orders, whatsapp):
     return n
 
 
-def free_trial_remaining(whatsapp, orders=None):
-    """كم فيديو مجاني بقي لهذا العميل (0–10)."""
+def _parse_created_at(value):
+    """تاريخ `created_at` (ISO، مثال 2026-11-21T17:11:41.611Z) ككائن
+    date بتوقيت UTC، أو None إن غاب أو كان تالفًا.
+
+    بلا منطقة زمنية يُفترض UTC (صيغة السجل القديم
+    2026-11-22T10:00:00 بلا لاحقة).
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(
+            str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).date()
+
+
+def _first_client_order_date(orders, whatsapp):
+    """تاريخ أول طلب غير فاشل لهذا العميل (أقدم created_at)، أو None.
+
+    المقارنة بالرقم القانوني فلا يفلت عميل بتغيير الصيغة. الطلب
+    الفاشل لم يصل العميلَ منه فيديو فلا يبدأ عدّاد التجربة.
+    طلبات قديمة بلا created_at قابل للقراءة تُتخطى هنا؛ فإن لم
+    يبقَ أي تاريخ قابل للقراءة يُرجع None فيُعامَل العميل كأنه
+    ضمن التجربة (قرار موثَّق: لا يُكسر طلب قديم بلا تاريخ).
+    """
+    if not whatsapp:
+        return None
+    try:
+        canon = _canonical_whatsapp(whatsapp)
+    except ClientOrderError:
+        return None
+    first = None
+    for o in orders:
+        if o.get("status") == "failed":
+            continue
+        prev = o.get("whatsapp") or o.get("contact") or ""
+        if not prev:
+            continue
+        try:
+            prev_canon = _canonical_whatsapp(prev)
+        except ClientOrderError:
+            continue
+        if prev_canon != canon:
+            continue
+        d = _parse_created_at(o.get("created_at"))
+        if d is None:
+            continue
+        if first is None or d < first:
+            first = d
+    return first
+
+
+def _within_free_trial(orders, whatsapp, on_date=None):
+    """هل طلب بتاريخ on_date ما زال ضمن تجربة العميل المجانية؟
+
+    التجربة 30 يومًا تقويميًا من تاريخ أول طلب: اليوم 30 نفسه
+    مجاني (مرّ 29 يومًا)، واليوم 31 مدفوع (مرّ 30 يومًا).
+    عميل بلا طلبات سابقة (أو بلا تاريخ أول طلب قابل للقراءة)
+    ضمن التجربة دائمًا — أول طلب له مجاني.
+    """
+    first = _first_client_order_date(orders, whatsapp)
+    if first is None:
+        return True
+    if on_date is None:
+        on_date = datetime.now(timezone.utc).date()
+    return (on_date - first).days < FREE_TRIAL_DAYS
+
+
+def free_trial_remaining(whatsapp, orders=None, now=None):
+    """كم يومًا مجانيًا بقي لهذا العميل (0–30) من أول طلب له.
+
+    عميل جديد تمامًا (بلا طلبات سابقة) → 30. عميل بلا تاريخ أول
+    طلب قابل للقراءة → 30 (يُعامَل كأنه ضمن التجربة ولا يُكسر).
+    `now` للاختبار فقط (datetime أو date)؛ افتراضيًا الآن بتوقيت UTC.
+    """
     if orders is None:
         orders = load_orders()
-    return max(0, FREE_TRIAL_ORDERS - _count_client_orders(orders,
-                                                           whatsapp))
+    first = _first_client_order_date(orders, whatsapp)
+    if first is None:
+        return FREE_TRIAL_DAYS
+    if now is None:
+        ref = datetime.now(timezone.utc).date()
+    elif isinstance(now, datetime):
+        ref = (now.astimezone(timezone.utc).date() if now.tzinfo
+               else now.date())
+    else:
+        ref = now
+    return max(0, FREE_TRIAL_DAYS - (ref - first).days)
 
 
 def update_order(order_id, **fields):
@@ -311,19 +401,27 @@ def update_order(order_id, **fields):
 def append_order(order):
     if order.get("whatsapp"):
         validate_whatsapp(order["whatsapp"])
-    # بوابة الدفع + فترة التجربة (قرار 2026-11-22 11:10): أول 10
-    # طلبات لكل عميل (برقم الواتساب) تجربة مجانية — حالتها `new`
-    # وتُنتَج تلقائيًا. ومن الطلب الـ11 لنفس العميل تبدأ الحالة
-    # `awaiting_payment` ولا يُنتَج له فيديو قبل `orders confirm`.
-    # حالة `new` الواردة من مسار قديم تُعامَل بنفس القاعدة. الطلبات
-    # القديمة بحالة done لا تمر من هنا أبدًا ولا تُمس.
+    # بوابة الدفع + فترة التجربة (قرار 2026-11-23 18:38، يلغي قاعدة
+    # «أول 10 طلبات»): طلبات العميل مجانية خلال أول 30 يومًا من أول
+    # طلب له، بلا حد لعدد الطلبات — حالتها `new` وتُنتَج تلقائيًا.
+    # وبعد 30 يومًا من أول طلب تبدأ الحالة `awaiting_payment` ولا
+    # يُنتَج له فيديو قبل `orders confirm`. حالة `new` الواردة من
+    # مسار قديم تُعامَل بنفس القاعدة. الطلبات القديمة بحالة done
+    # لا تمر من هنا أبدًا ولا تُمس.
     with _orders_locked():
         orders = load_orders()
         if not order.get("status") or order.get("status") == "new":
-            prior = _count_client_orders(orders,
-                                         order.get("whatsapp") or "")
-            order["status"] = ("new" if prior < FREE_TRIAL_ORDERS
-                               else PAYMENT_PENDING)
+            # تاريخ الطلب الجديد نفسه مرجع القياس (created_at
+            # المثبَّت فيه، أو الآن إن غاب)؛ وتاريخ أول طلب يُشتق
+            # من الطلبات السابقة وحدها — فأول طلب للعميل نفسه
+            # (لا سابق له) مجاني دائمًا.
+            on_date = _parse_created_at(order.get("created_at"))
+            if on_date is None:
+                on_date = datetime.now(timezone.utc).date()
+            order["status"] = (
+                "new" if _within_free_trial(
+                    orders, order.get("whatsapp") or "", on_date)
+                else PAYMENT_PENDING)
         if any(o.get("id") == order.get("id") for o in orders):
             raise ClientOrderError("طلب بنفس الرقم موجود بالفعل: %s"
                                    % order.get("id"))
@@ -389,7 +487,7 @@ def cmd_confirm_payment(cfg, order_id, confirmed_by="owner"):
 
 
 def cmd_trial_status(whatsapp):
-    """اعرض حالة التجربة المجانية لعميل: كم طلب سبق وكم بقي مجانيًا.
+    """اعرض حالة التجربة المجانية لعميل: أول طلب وكم يومًا بقي.
 
     مثال: orders trial 01023468196
     """
@@ -400,9 +498,17 @@ def cmd_trial_status(whatsapp):
         return 2
     orders = load_orders()
     used = _count_client_orders(orders, whatsapp)
-    remaining = max(0, FREE_TRIAL_ORDERS - used)
-    print("العميل %s: طلبات سابقة %d من %d — فيديوهات مجانية باقية: %d"
-          % (whatsapp, used, FREE_TRIAL_ORDERS, remaining))
+    first = _first_client_order_date(orders, whatsapp)
+    remaining = free_trial_remaining(whatsapp, orders)
+    if first is None:
+        print("العميل %s: لا طلبات سابقة — التجربة المجانية 30 يومًا "
+              "بلا حد لعدد الطلبات، تبدأ من أول طلب"
+              % whatsapp)
+    else:
+        print("العميل %s: أول طلب في %s — طلبات سابقة %d — أيام "
+              "مجانية باقية: %d من %d"
+              % (whatsapp, first.isoformat(), used, remaining,
+                 FREE_TRIAL_DAYS))
     if remaining == 0:
         print("انتهت التجربة المجانية — الطلب التالي يحتاج تأكيد دفع "
               "قبل الإنتاج (orders confirm).")
@@ -871,8 +977,8 @@ def cmd_client_run(cfg, order_id):
               % (order_id, order.get("video_path") or ""))
         return 0
     if order.get("status") == PAYMENT_PENDING:
-        # بوابة الدفع (2026-11-22): بلا تأكيد دفع لا إنتاج — حتى
-        # بأمر مباشر، وإلا كان الطابور قابلًا للتجاوز.
+        # بوابة الدفع (قرار 2026-11-23 18:38): بلا تأكيد دفع لا إنتاج
+        # — حتى بأمر مباشر، وإلا كان الطابور قابلًا للتجاوز.
         print("الطلب %s بانتظار تأكيد الدفع — لن يُنتَج له فيديو قبل "
               "التأكيد (python3 studio.py orders confirm %s)"
               % (order_id, order_id))
@@ -982,12 +1088,13 @@ def cmd_client_run(cfg, order_id):
 def cmd_process_queue(cfg):
     """نفّذ الطلبات الجاهزة في الطابور بالتتابع (حد الدفعة 20).
 
-    بوابة الدفع + فترة التجربة (قرار 2026-11-22 11:10): الطلبات
-    الأولى لكل عميل (حالته `new` — ضمن أول 10 طلبات) تجربة مجانية
-    فتُنتَج تلقائيًا، والطلبات بانتظار تأكيد الدفع (awaiting_payment
-    — الطلب الـ11 فصاعدًا لنفس العميل) تُتخطى تمامًا — لا يُنتَج
-    لها فيديو — وتُطبع في قائمة انتظار الدفع. الجاهز للإنتاج هو
-    المدفوع (paid) plus صفوف `new` (تجربة أولى أو قديمة).
+    بوابة الدفع + فترة التجربة (قرار 2026-11-23 18:38): طلبات
+    العميل خلال أول 30 يومًا من أول طلب له (حالته `new` — تجربة
+    مجانية بلا حد لعدد الطلبات) تُنتَج تلقائيًا، والطلبات بانتظار
+    تأكيد الدفع (awaiting_payment — بعد 30 يومًا من أول طلب لنفس
+    العميل) تُتخطى تمامًا — لا يُنتَج لها فيديو — وتُطبع في قائمة
+    انتظار الدفع. الجاهز للإنتاج هو المدفوع (paid) plus صفوف `new`
+    (تجربة أولى أو قديمة).
 
     إصلاح اختبار اختراق 2026-11-21: بلا حد كانت الدفعة تنفّذ أي
     عدد من الطلبات (إغراق الطابور يحرق الحوسبة بلا سقف).

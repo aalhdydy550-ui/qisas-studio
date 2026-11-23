@@ -130,6 +130,8 @@ from lib import autoweek
 from lib import analyze
 from lib import insights
 from lib import help_ar
+from lib import license as license_lib
+from lib import request_flow
 from lib import check as check_lib
 from lib import fix_audio as fix_audio_lib
 from lib import lut_grade as lut_grade_lib
@@ -182,7 +184,7 @@ def _print_translated(prefix, exc, context, lang="ar"):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.42"
+VERSION = "0.1.43"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
 # مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،
@@ -1208,6 +1210,37 @@ def cmd_thumbnail(cfg, video_path, hook, out_path, at_seconds=None,
 
 
 # ------------------------------------------------------------------- run
+def _request_chat_fn(cfg):
+    """chat_fn لتدفق request: نص فقط فوق _llm_chat (جولة v0.1.43)."""
+    def chat_fn(prompt):
+        text, _via, _model = _llm_chat(cfg, prompt,
+                                       max_tokens=800, temperature=0.7)
+        return text
+    return chat_fn
+
+
+def _request_run_fn(cfg):
+    """run_fn لتدفق request: غلاف فوق cmd_run (جولة v0.1.43).
+
+    بلا مشروع OpenMontage جاهز يرفع NoProjectError فيتحول الطلب
+    إلى «queued» (القصة محفوظة في الطابور) بدل فشل كاذب — بناء
+    مشروع من نص حر لا يوجد في الشجرة بعد (بند لاحق موثَّق).
+    """
+    def run_fn(cfg, story_text, title, project, out_path,
+               allow_fallback, queue_number):
+        project = project or (KNOWN_PROJECTS.get(queue_number)
+                              or (None, None))[1]
+        if not project:
+            raise request_flow.NoProjectError(queue_number, title)
+        slug = request_flow.extract_title(story_text)
+        rc = cmd_run(cfg, slug, project, out_path, allow_fallback)
+        if rc != 0:
+            raise request_flow.RequestFlowError(
+                "فشل خط الإنتاج (cmd_run رجع %d)" % rc)
+        return out_path
+    return run_fn
+
+
 def cmd_run(cfg, story, project, out_path, allow_fallback, dry_run=False,
             backend="concat", watermark_on=True, cards_dir=None,
             grade=None, lang="ar", resume=None):
@@ -1708,6 +1741,9 @@ def cmd_doctor(cfg, fix=False, accounts_flag=False, llm_flag=False,
     if fix and doctor.ensure_config(here):
         print(i18n_lib.t("doctor_config_created", lang))
     checks = doctor.run_checks(cfg)
+    # فحص الترخيص (جولة v0.1.43): حالة التجربة/الرخصة — يرفع
+    # عدّاد doctor الكلي إلى 28 (27 في run_checks + هذا الفحص).
+    checks = checks + [license_lib.doctor_check()]
     text, errors, warnings = doctor.format_report(checks)
     print(text)
     if accounts_flag:
@@ -1798,7 +1834,7 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
                 schedule=None, privacy=None, tags=None, dry_run=False,
                 skip_check=False, skip_caption_check=False,
                 allow_missing_manifest=False, generate_meta=False,
-                part=1, parts=1, lang="ar"):
+                part=1, parts=1, lang="ar", ai_voice=False):
     """انشر فيديوًا واحدًا على فيسبوك و/أو يوتيوب.
 
     يرجع 0 فقط إن نُشر على كل المنصات المطلوبة فعلًا؛ وإن نُشر بعضها
@@ -1839,6 +1875,14 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     if schedule and int(schedule) <= int(time.time()):
         print(i18n_lib.t("publish_schedule_past", lang))
         return 1
+    # سطر الإفصاح (جولة v0.1.43): صوت Supertonic في بيان الفيديو
+    # يفرض «صوت مولّد بالذكاء الاصطناعي» في الكابشن والوصف —
+    # يُكتشف من البيان تلقائيًا، أو بعلَم --ai-voice الصريح.
+    if not ai_voice:
+        _man = manifest_lib.load_manifest(video)
+        if _man and ((_man.get("narration") or {}).get("voice")
+                     == "supertonic-M1"):
+            ai_voice = True
     page_id = page_id or cfg.get("publish", {}).get("page_id") or ""
     privacy = privacy or cfg.get("publish", {}).get("youtube_privacy") \
         or "public"
@@ -1867,9 +1911,11 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     fb_caption = yt_desc = yt_title = None
     try:
         if "facebook" in platforms:
-            fb_caption = publish.build_caption(title, caption)
+            fb_caption = publish.build_caption(title, caption,
+                                               ai_voice=ai_voice)
         if "youtube" in platforms:
-            yt_desc = publish.build_youtube_description(title, caption)
+            yt_desc = publish.build_youtube_description(
+                title, caption, ai_voice=ai_voice)
             yt_title = publish.build_youtube_title(title)
     except publish.PublishError as e:
         print(i18n_lib.t("publish_meta_error", lang, e))
@@ -2071,21 +2117,29 @@ def cmd_publish(cfg, video, title, caption, thumbnail=None,
     return 0 if ok else 1
 
 
-def cmd_publish_preflight(cfg, video, title, caption, tags=None):
+def cmd_publish_preflight(cfg, video, title, caption, tags=None,
+                          ai_voice=False):
     """`publish --preflight`: فحص مسار يوتيوب فقط — صلاحية
     التوكن ثم إنشاء جلسة رفع قابلة للاستئناف، بلا إرسال أي
     بايت من الفيديو وبلا نشر أي شيء. يرجع 0 إن كان المسار
     يعمل من الـVM، و1 مع رسالة عربية (يدوي من YouTube Studio)
-    عند فشل SSL أو التوكن."""
+    عند فشل SSL أو التوكن. ai_voice يلحق سطر الإفصاح بالوصف
+    (ترخيص Supertonic)؛ ويُكتشف من بيان الفيديو تلقائيًا."""
     video = expand(video)
     if not os.path.isfile(video):
         print("ملف الفيديو غير موجود: %s" % video)
         return 1
+    if not ai_voice:
+        _man = manifest_lib.load_manifest(video)
+        if _man and ((_man.get("narration") or {}).get("voice")
+                     == "supertonic-M1"):
+            ai_voice = True
     token = expand(cfg.get("publish", {}).get("youtube_token") or
                    "~/workspace/studio/youtube-token.json")
     try:
         yt_title = publish.build_youtube_title(title)
-        yt_desc = publish.build_youtube_description(title, caption)
+        yt_desc = publish.build_youtube_description(title, caption,
+                                                    ai_voice=ai_voice)
     except publish.PublishError as e:
         print("خطأ في بيانات النشر: %s" % e)
         return 1
@@ -2162,9 +2216,12 @@ def cmd_youtube_reauth(cfg, client_secrets=None, token=None):
 def _default_voice(cfg):
     """صوت السرد الافتراضي: من الإعداد (narration.voice — يضبطه
     معالج `init`)، وإلا piper (الراوي الرجل). قيمة غير معروفة
-    في الإعداد تُعامل كـ piper."""
+    في الإعداد تُعامل كـ piper. (جولة v0.1.43: supertonic-M1
+    صوت ثانٍ اختياري مسموح في الإعداد — الافتراضي يبقى piper
+    دائمًا.)"""
     voice = (cfg.get("narration") or {}).get("voice") or "piper"
-    return voice if voice in ("piper", "gtts") else "piper"
+    return voice if voice in ("piper", "gtts", "supertonic-M1") \
+        else "piper"
 
 
 def cmd_long_narration(cfg, text, text_file, out_path, gap, atempo,
@@ -4276,6 +4333,22 @@ def cmd_logs(cfg, today=True, limit=20):
     return 0
 
 
+# الأوامر التجارية (جولة v0.1.43): كل ما ينتج/ينشر/يبيع — تُغلق
+# بعد انتهاء فترة التجربة (30 يومًا من أول تشغيل) بلا ترخيص
+# مدفوع. الأوامر غير المذكورة هنا (قراءة/تشخيص/صيانة/إعداد)
+# معفاة ولا تبدأ ساعة التجربة. `run --demo` معفى أيضًا (طريق
+# التقييم للمستخدم الجديد) — يُفحص في main() لا هنا.
+COMMERCIAL_COMMANDS = frozenset((
+    "run", "produce", "assemble", "long-video", "long-narration",
+    "daily", "batch", "run-queue", "publish", "schedule",
+    "client-run", "process-queue", "orders", "script", "thumbnail",
+    "quote-cards", "scene-plan", "ideas", "fix-audio", "grade",
+    "trim", "fx", "karaoke-ass", "srt-ass", "whisper-ass",
+    "manifest", "avatar-job", "ab", "ab-results", "shorts-cut",
+    "reframe", "preview", "request",
+))
+
+
 def main():
     # ثنائية اللغة (الجولة v0.1.41): وصف المساعدة يتبع LANG
     # من البيئة (العربي افتراضيًا)؛ و--lang العام يغلبها.
@@ -4301,10 +4374,20 @@ def main():
                     help="CLI language: ar (Arabic, default) or en "
                          "(English) — اللغة: ar (العربية، الافتراضي) "
                          "أو en (الإنجليزية)")
+    # الجولة v0.1.43: --noncommercial على مستوى التطبيق (قبل الأمر) —
+    # إقرار بأن هذا التشغيل استخدام شخصي غير تجاري، فيُعفى من بوابة
+    # الترخيص التجاري (فترة التجربة 30 يومًا). بلا العلَم يُفترض
+    # الاستخدام تجاريًا وتطبَّق البوابة على الأوامر الإنتاجية.
+    ap.add_argument("--noncommercial", action="store_true",
+                    help="هذا التشغيل استخدام شخصي غير تجاري — يُعفى "
+                         "من بوابة الترخيص التجاري (PolyForm "
+                         "Noncommercial: الشخصي مجاني دائمًا)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="فحص حالة الطبقات الثلاث")
     sub.add_parser("version",
                    help="اطبع إصدار studio وحالة البعيد (بلا شبكة)")
+    sub.add_parser("license",
+                   help="حالة الترخيص وفترة التجربة (قراءة فقط)")
     sub.add_parser("help-ar", help="مساعدة عربية — كل أمر ووظيفته ومثال عليه")
     p = sub.add_parser("doctor", help="فحص بيئة studio (PASS/FAIL صادق)")
     p.add_argument("--fix", action="store_true",
@@ -4393,8 +4476,9 @@ def main():
     p = sub.add_parser("init", help="معالج إعداد تفاعلي — يكتب config.yaml")
     p.add_argument("--page-id", help="معرّف صفحة فيسبوك")
     p.add_argument("--channel-id", help="معرّف قناة يوتيوب")
-    p.add_argument("--voice", choices=["piper", "gtts"],
-                   help="صوت الراوي: piper (الرجل، الافتراضي) أو gtts")
+    p.add_argument("--voice", choices=["piper", "gtts", "supertonic-M1"],
+                   help="صوت الراوي: piper (الرجل، الافتراضي) أو gtts أو "
+                        "supertonic-M1 (صوت ثانٍ اختياري)")
     p.add_argument("--morning", help="موعد النشر الصباحي HH:MM")
     p.add_argument("--evening", help="موعد النشر المسائي HH:MM")
     p.add_argument("--queue-file", help="ملف طابور القصص")
@@ -4448,6 +4532,10 @@ def main():
                    help="ولّد العنوان والوصف والوسوم من نص القصة عبر "
                         "سلسلة LLM (مع بديل محلي بلا شبكة) — القيم "
                         "الصريحة --caption/--tags تغلب المولّدة")
+    p.add_argument("--ai-voice", action="store_true",
+                   help="ألحق سطر «صوت مولّد بالذكاء الاصطناعي» بالكابشن "
+                        "والوصف (إلزامي لفيديوهات Supertonic — يُكتشف "
+                        "من بيان الفيديو تلقائيًا أيضًا)")
     p.add_argument("--part", type=int, default=1,
                    help="رقم الجزء لعنوان مولّد (مع --generate-meta، "
                         "افتراضي 1)")
@@ -4596,6 +4684,18 @@ def main():
     p.add_argument("--resume",
                    help="استئناف تشغيل منقطع بمعرّفه (run-...) من آخر "
                         "نقطة تفتيش — يُتخطى ما اكتمل ويُعاد ما تبقى فقط")
+    p = sub.add_parser("request", help="اطلب فيديو بنص عادي — قصة أو موضوع")
+    p.add_argument("text", nargs="?",
+                   help="نص القصة أو الموضوع (أو استخدم --text-file)")
+    p.add_argument("--text-file",
+                   help="ملف فيه نص الطلب (بدل الوسيط)")
+    p.add_argument("--out", help="مسار الفيديو الناتج")
+    p.add_argument("--project",
+                   help="اسم مشروع OpenMontage الجاهز (اختياري — بلا "
+                        "مشروع تُحفظ القصة في الطابور بحالة queued)")
+    p.add_argument("--allow-fallback", action="store_true")
+    p.add_argument("--dry-run", action="store_true",
+                   help="يطبع الخطة فقط دون حفظ أو إنتاج")
     p = sub.add_parser("long-video",
                        help="فيديو طويل أفقي 1280×720 من عدة قصص (8–12 دقيقة)")
     p.add_argument("--out", required=True,
@@ -4637,10 +4737,11 @@ def main():
     p.add_argument("--queue-file",
                    help="ملف طابور بديل (الافتراضي من config.yaml) — "
                         "مع --auto-week")
-    p.add_argument("--voice", default=None, choices=["piper", "gtts"],
-                   help="صوت السرد: piper (الراوي الرجل) أو gtts "
-                        "(صوت ثانٍ اختياري) — الافتراضي من الإعداد "
-                        "(narration.voice)")
+    p.add_argument("--voice", default=None,
+                   choices=["piper", "gtts", "supertonic-M1"],
+                   help="صوت السرد: piper (الراوي الرجل) أو gtts أو "
+                        "supertonic-M1 (صوت ثانٍ اختياري) — الافتراضي "
+                        "من الإعداد (narration.voice)")
     p.add_argument("--atempo", type=float, default=1.0,
                    help="سرعة السرد (1.0 افتراضيًا؛ 1.25 لإيقاع Kwai)")
     p.add_argument("--no-watermark", action="store_true",
@@ -4654,10 +4755,11 @@ def main():
                    help="فاصل الصمت بين الجمل بالثواني (0.35)")
     p.add_argument("--atempo", type=float, default=1.0,
                    help="سرعة السرد (1.0 افتراضيًا؛ 1.25 لإيقاع Kwai)")
-    p.add_argument("--voice", default=None, choices=["piper", "gtts"],
-                   help="صوت السرد: piper (الراوي الرجل) أو gtts "
-                        "(صوت ثانٍ اختياري) — الافتراضي من الإعداد "
-                        "(narration.voice)")
+    p.add_argument("--voice", default=None,
+                   choices=["piper", "gtts", "supertonic-M1"],
+                   help="صوت السرد: piper (الراوي الرجل) أو gtts أو "
+                        "supertonic-M1 (صوت ثانٍ اختياري) — الافتراضي "
+                        "من الإعداد (narration.voice)")
     p = sub.add_parser("quote-cards",
                        help="توليد بطاقات الاقتباس الثلاث 720×1280")
     p.add_argument("--ibra", required=True, help="نص العبرة")
@@ -5101,6 +5203,22 @@ def main():
     if args.cmd != "doctor":
         _ensure_environment()  # إصلاح ذاتي: أعد الأدوات/الخدمة إن غابتا
 
+    # بوابة الترخيص (جولة v0.1.43): الاستخدام التجاري بعد 30 يومًا
+    # من أول تشغيل يحتاج ترخيصًا مدفوعًا (1000 جنيه أفراد / 5000
+    # شركات)؛ والاستخدام الشخصي غير التجاري معفى بعلَم
+    # --noncommercial؛ وتثبيت صاحب المشروع (owner) معفى دائمًا.
+    # الأوامر المعفاة (قراءة/تشخيص/صيانة) لا تبدأ الساعة أبدًا —
+    # record_first_run() يُستدعى فقط داخل البوابة، فإن نُسي
+    # بقي الاستخدام التجاري مسموحًا للأبد (فشل مفتوح موثَّق).
+    if args.cmd in COMMERCIAL_COMMANDS \
+            and not getattr(args, "noncommercial", False):
+        if not (args.cmd == "run" and getattr(args, "demo", False)):
+            license_lib.record_first_run()
+            allowed, msg = license_lib.commercial_allowed()
+            if not allowed:
+                print(msg)
+                return 1
+
     if args.cmd == "doctor":
         return cmd_doctor(cfg, fix=args.fix, accounts_flag=args.accounts,
                           llm_flag=args.llm, lang=lang)
@@ -5370,10 +5488,45 @@ def main():
                        args.grade, lang=lang, resume=args.resume)
     if args.cmd == "version":
         return cmd_version()
+    if args.cmd == "license":
+        print("\n".join(license_lib.status_lines()))
+        return 0
+    if args.cmd == "request":
+        if bool(args.text) == bool(args.text_file):
+            print("اكتب الطلب نصًا أو مرّر --text-file (أحدهما فقط)")
+            return 2
+        text = args.text
+        if args.text_file:
+            try:
+                with open(expand(args.text_file), encoding="utf-8") as f:
+                    text = f.read()
+            except OSError as e:
+                print("تعذّر قراءة ملف الطلب: %s" % e)
+                return 2
+        try:
+            result = request_flow.request_to_run(
+                cfg, text, _request_chat_fn(cfg),
+                expand(args.out) if args.out else None,
+                run_fn=_request_run_fn(cfg), project=args.project,
+                dry_run=args.dry_run, allow_fallback=args.allow_fallback)
+        except request_flow.RequestFlowError as e:
+            print(str(e))
+            return 1
+        except ValueError as e:
+            print(str(e))
+            return 2
+        if result["status"] == "done":
+            print("اكتمل الفيديو: %s" % result.get("output"))
+        elif result["status"] == "queued":
+            print("حُفظت القصة في الطابور (رقم %s) بلا مشروع جاهز — "
+                  "جهّز مشروع OpenMontage ثم شغّل run"
+                  % result.get("queue_number"))
+        return 0
     if args.cmd == "publish":
         if args.preflight:
             return cmd_publish_preflight(cfg, args.video, args.title,
-                                         args.caption, tags=args.tags)
+                                         args.caption, tags=args.tags,
+                                         ai_voice=args.ai_voice)
         platforms = [pl.strip() for pl in args.platforms.split(",")
                      if pl.strip()]
         bad = [pl for pl in platforms
@@ -5405,7 +5558,8 @@ def main():
                            allow_missing_manifest=(
                                args.allow_missing_manifest),
                            generate_meta=args.generate_meta,
-                           part=args.part, parts=args.parts, lang=lang)
+                           part=args.part, parts=args.parts, lang=lang,
+                           ai_voice=args.ai_voice)
     if args.cmd == "youtube-auth":
         return cmd_youtube_auth(cfg, args.client_secrets, args.token)
     if args.cmd == "youtube-reauth":

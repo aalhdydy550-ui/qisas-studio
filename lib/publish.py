@@ -21,6 +21,7 @@ import sys
 import time
 
 from lib import errors as errors_lib
+from lib.supertonic_voice import DISCLOSURE_LINE
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -99,10 +100,13 @@ def find_facebook_bin():
     return None
 
 
-def build_caption(title, caption, part_tag=None):
+def build_caption(title, caption, part_tag=None, ai_voice=False):
     """ابنِ كابشن فيسبوك: عنوان + نص + حزمة الهاشتاجات الثابتة.
 
     يرفع PublishError إن تجاوز 1024 حرفًا (حد المنصة).
+    ai_voice=True يلحق سطر الإفصاح «صوت مولّد بالذكاء الاصطناعي»
+    (إلزامي لترخيص Supertonic، المادة A(e)) قبل الهاشتاجات —
+    لفيديوهات Supertonic فقط، لا لصوت Piper أبدًا.
     """
     lines = []
     if title:
@@ -113,6 +117,8 @@ def build_caption(title, caption, part_tag=None):
                  "باسمك أو بدون اسم.")
     if part_tag:
         lines.append(part_tag.strip())
+    if ai_voice:
+        lines.append(DISCLOSURE_LINE)
     lines.append(" ".join(HASHTAGS))
     text = "\n".join(lines)
     if len(text) > FB_CAPTION_LIMIT:
@@ -122,8 +128,13 @@ def build_caption(title, caption, part_tag=None):
     return text
 
 
-def build_youtube_description(title, caption, moral=""):
-    """ابنِ وصف يوتيوب: هوك + ملخص + عبرة + اشتراك + روابط + هاشتاجات."""
+def build_youtube_description(title, caption, moral="", ai_voice=False):
+    """ابنِ وصف يوتيوب: هوك + ملخص + عبرة + اشتراك + روابط + هاشتاجات.
+
+    ai_voice=True يلحق سطر الإفصاح «صوت مولّد بالذكاء الاصطناعي»
+    (إلزامي لترخيص Supertonic، المادة A(e)) قبل الهاشتاجات —
+    لفيديوهات Supertonic فقط، لا لصوت Piper أبدًا.
+    """
     lines = []
     if title:
         lines.append(title.strip())
@@ -133,6 +144,8 @@ def build_youtube_description(title, caption, moral=""):
         lines.append("العبرة: %s" % moral.strip())
     lines.append("اشترك في القناة عشان قصة جديدة توصلك كل يوم.")
     lines.append("صفحة فيسبوك: %s" % PAGE_URL)
+    if ai_voice:
+        lines.append(DISCLOSURE_LINE)
     lines.append(" ".join(HASHTAGS))
     text = "\n".join(lines)
     if len(text) > YT_DESC_LIMIT:

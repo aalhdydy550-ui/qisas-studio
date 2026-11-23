@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -163,6 +164,12 @@ class TestScheduledDryRun(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             video = os.path.join(td, "v.mp4")
             Path(video).write_bytes(b"fake")
+            # الموعد المجدول يجب أن يكون في المستقبل دائمًا —
+            # cmd_publish يرفض الموعد الماضي (return 1). الثابت
+            # CAIRO_EPOCH (2026-11-23 19:00) كان يفشل هذا الاختبار
+            # بعد 19:00 القاهرة في يومه نفسه — قنبلة موقوتة
+            # اكتُشفت في تشغيل المجموعة الكاملة لجولة v0.1.43.
+            future = int(time.time()) + 7200
             with mock.patch("lib.publish.find_facebook_bin",
                             return_value="facebook-cli"), \
                  mock.patch("lib.publish.subprocess.run") as run_mock, \
@@ -177,7 +184,7 @@ class TestScheduledDryRun(unittest.TestCase):
                         self._cfg(td), video, "عنوان التجربة",
                         "كابشن تجريبي",
                         platforms=("facebook", "youtube"),
-                        schedule=CAIRO_EPOCH, dry_run=True,
+                        schedule=future, dry_run=True,
                         skip_check=True, skip_caption_check=True)
             self.assertEqual(rc, 0)
             run_mock.assert_not_called()
@@ -185,9 +192,9 @@ class TestScheduledDryRun(unittest.TestCase):
             out = buf.getvalue()
             self.assertIn("وضع تجريبي", out)
             self.assertIn("--scheduled-publish-time", out)
-            self.assertIn(str(CAIRO_EPOCH), out)
-            self.assertIn(CAIRO_PUBLISH_AT, out)
-            self.assertIn("2026-11-23 19:00 Africa/Cairo", out)
+            self.assertIn(str(future), out)
+            self.assertIn(publish.schedule_publish_at(future), out)
+            self.assertIn(publish.format_schedule(future), out)
             self.assertIn('"privacyStatus": "private"', out)
 
 

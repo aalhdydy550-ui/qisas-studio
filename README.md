@@ -231,6 +231,40 @@ open an Issue in this repository and attach a screenshot of the transfer
 with the license type (individual or company), and the license file will
 be sent to you.
 
+### Free trial (30 days)
+
+Every new user gets a **30-day free trial for commercial use**, counted
+from the first run (`python3 studio.py license` shows the status). After
+30 days, the production commands stop with a payment reminder until a
+commercial license is activated. Personal non-commercial use stays free
+forever: run with `--noncommercial` (before the command) to declare it,
+e.g. `python3 studio.py --noncommercial run --demo`. The studio owner's
+own install is exempt as licensor.
+
+### On-demand video requests
+
+`python3 studio.py request "a topic or a full story"` — a full story text
+is used as-is; a short topic is turned into a story by the LLM chain
+(ddgw ← groq ← gemini-3.1-flash-lite ← gemini-3-flash-preview ← ollama)
+in the page's style, saved to the queue, and produced with the current
+pipeline. Without a ready OpenMontage project the request ends honestly
+as `queued` (story saved, number known) — building a project from free
+text is not supported yet.
+
+### Second narrator voice (optional)
+
+`--voice supertonic-M1` on `init`, `long-video`, and `long-narration`
+adds Supertonic M1 as an optional second male narrator (A/B test: WER
+0.078 / CER 0.021 / F0 131 Hz — the clearest). **Piper stays the default
+always.** Supertonic normalizes `؛`→`،` and spells numbers as words
+automatically; its license (`lib/supertonic/LICENSE.txt`, OpenRAIL-M)
+requires the line «صوت مولّد بالذكاء الاصطناعي» in the description of
+any video using it — `publish` appends it automatically (detected from
+the video manifest, or via `--ai-voice`). To use the voice, create its
+venv once: `python3 -m venv .venv-supertonic &&
+.venv-supertonic/bin/pip install supertonic` (the model downloads once
+to `~/.cache/supertonic3`).
+
 ### Support the project
 
 If the project saved you time or money, you can support it monthly via

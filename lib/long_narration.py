@@ -10,7 +10,8 @@ Piper يقرأ نصًا كاملًا دفعة واحدة، فالنصوص الط
 (الموديل ~/workspace/tts-models/ar_JO-kareem-medium.onnx،
 الثنائي ~/.local/bin/piper). لا يُستخدم أي صوت آخر هنا —
 إلا بصوت ثانٍ اختياري (voice="gtts") عبر lib/gtts_voice.py،
-ولا يبدّل الافتراضي أبدًا.
+أو (voice="supertonic-M1") عبر lib/supertonic_voice.py —
+ولا يبدّل الافتراضي أبدًا (Piper دائمًا).
 """
 import os
 import re
@@ -19,6 +20,7 @@ import subprocess
 import tempfile
 
 from . import gtts_voice
+from . import supertonic_voice
 
 PIPER_BIN = os.path.expanduser("~/.local/bin/piper")
 PIPER_MODEL = os.path.expanduser(
@@ -112,21 +114,47 @@ def split_chunks(text, max_chars=MAX_CHUNK_CHARS):
     return chunks
 
 
+def _resample_to_22050_mono(wav_path):
+    """وحّد معدل عينة ملف WAV إلى 22050 هرتز أحادي (معدل Piper).
+
+    مخرج Supertonic 44100 هرتز؛ و`concatenate_with_gaps` يأخذ
+    المعدل من أول مقطع، فاختلاف المعدلات بين المقاطع يكسر
+    التجميع — لذلك يُوحَّد كل مقطع Supertonic قبل الدمج.
+    """
+    tmp = wav_path + ".22050.wav"
+    _run(["ffmpeg", "-y", "-v", "error", "-i", wav_path,
+          "-ar", "22050", "-ac", "1", tmp],
+         "توحيد معدل عينة الصوت")
+    os.replace(tmp, wav_path)
+    return wav_path
+
+
 def synthesize_chunk(text, out_wav, piper_bin=PIPER_BIN,
                      model=PIPER_MODEL, timeout=120, voice="piper"):
-    """ركّب مقطعًا واحدًا بـPiper (أو gTTS إن voice="gtts").
+    """ركّب مقطعًا واحدًا بـPiper (أو gTTS أو Supertonic M1).
 
     يرفع LongNarrationError عند الفشل. الصوت الافتراضي Piper
-    (الراوي الرجل) — gTTS صوت ثانٍ اختياري فقط.
+    (الراوي الرجل) — gTTS وsupertonic-M1 صوتان اختياريان فقط.
+    مخرج Supertonic يُوحَّد إلى 22050 هرتز أحادي قبل إرجاعه
+    (معدل Piper) ليتسق الدمج اللاحق.
     """
     if voice == "gtts":
         try:
             return gtts_voice.synthesize_gtts_chunk(text, out_wav)
         except gtts_voice.GttsError as e:
             raise LongNarrationError(str(e))
+    if voice == "supertonic-M1":
+        try:
+            supertonic_voice.synthesize(text, out_path=out_wav)
+        except supertonic_voice.SupertonicError as e:
+            raise LongNarrationError(str(e))
+        except ValueError as e:
+            raise LongNarrationError(str(e))
+        return _resample_to_22050_mono(out_wav)
     if voice != "piper":
         raise LongNarrationError(
-            "صوت غير معروف: %s (المسموح: piper أو gtts)" % voice)
+            "صوت غير معروف: %s (المسموح: piper أو gtts أو "
+            "supertonic-M1)" % voice)
     if not os.path.isfile(piper_bin):
         raise LongNarrationError("ثنائي Piper غير موجود: %s" % piper_bin)
     if not os.path.isfile(model):
@@ -211,14 +239,18 @@ def synthesize_long(text, out_wav, gap=DEFAULT_GAP_SECONDS, atempo=1.0,
                     work_dir=None, voice="piper"):
     """ركّب نصًا طويلًا إلى WAV واحد بفواصل صمت بين الجمل.
 
-    voice: "piper" (الافتراضي — الراوي الرجل) أو "gtts" (صوت ثانٍ
-    اختياري). يرجع {"output": مسار WAV، "duration": المدة بالثواني،
+    voice: "piper" (الافتراضي — الراوي الرجل) أو "gtts" أو
+    "supertonic-M1" (صوت ثانٍ اختياري). مع supertonic-M1 يُتجاهل
+    `atempo` عمدًا: سرعته المدمجة 1.05 أصلًا بإيقاع مقاس
+    (~113 كلمة/دقيقة — يعادل Piper عند atempo ‏1.25)، فتمرير
+    atempo فوقه كان سيسرّعه بلا قياس. يرجع {"output": مسار WAV، "duration": المدة بالثواني،
     "chunks": [{"text": نص الجملة، "start": بداية النطق،
     "end": نهايته}]} — أزمنة الجمل بدقة بعد الدمج والسرعة.
     """
-    if voice not in ("piper", "gtts"):
+    if voice not in ("piper", "gtts", "supertonic-M1"):
         raise LongNarrationError(
-            "صوت غير معروف: %s (المسموح: piper أو gtts)" % voice)
+            "صوت غير معروف: %s (المسموح: piper أو gtts أو "
+            "supertonic-M1)" % voice)
     if not text or not text.strip():
         raise LongNarrationError("نص السرد فارغ")
     if gap < 0 or gap > 2.0:
@@ -227,6 +259,9 @@ def synthesize_long(text, out_wav, gap=DEFAULT_GAP_SECONDS, atempo=1.0,
     chunks = split_chunks(text)
     if not chunks:
         raise LongNarrationError("نص السرد فارغ بعد التقسيم")
+    # مع supertonic-M1 يُتجاهل atempo (سرعته المدمجة 1.05 أصلًا
+    # بإيقاع مقاس يعادل Piper عند 1.25 — تمريره فوقها بلا قياس).
+    effective_atempo = 1.0 if voice == "supertonic-M1" else atempo
     out_dir = os.path.dirname(os.path.abspath(out_wav))
     os.makedirs(out_dir, exist_ok=True)
     tmp = work_dir or tempfile.mkdtemp(prefix="long-narr-")
@@ -238,7 +273,7 @@ def synthesize_long(text, out_wav, gap=DEFAULT_GAP_SECONDS, atempo=1.0,
             raw = os.path.join(tmp, "chunk%03d.wav" % i)
             synthesize_chunk(chunk_text, raw, piper_bin, model,
                              voice=voice)
-            wav = apply_atempo(raw, atempo, tmp)
+            wav = apply_atempo(raw, effective_atempo, tmp)
             wav_paths.append(wav)
         total = concatenate_with_gaps(wav_paths, out_wav, gap=gap)
         # أزمنة الجمل: تراكمية من مدد المقاطع بعد السرعة + الفواصل
