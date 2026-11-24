@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """مقاطع حركة مولّدة للفيديو الطويل — تخطيط مقاطع Wan/LTX من مانيفست.
 
 يقرأ مانيفست الحركة (JSON أو CSV) ويحوّل كل مقطع مخطط إلى مقاطع
@@ -350,19 +353,26 @@ def extract_last_frame(video_path, out_path):
     return out_path
 
 
-def _still_segments(images, duration):
-    """وزّع صور الفصل على المدة (5 ثوانٍ للصورة، الأخيرة تُمدَّد)."""
-    n = max(1, int(round(duration / IMAGE_CLIP_SECONDS)))
+def _still_segments(images, duration, clip_seconds=IMAGE_CLIP_SECONDS):
+    """وزّع صور الفصل على المدة (clip_seconds للصورة، الأخيرة تُمدَّد).
+
+    clip_seconds هو مقدار الصورة في وضع الحركة (2.5ث في youtube-long
+    و5ث في clips) — يتبع الوضع بدل الثابت 5ث دائمًا (إصلاح فجوة
+    الصورة المتجمدة 2026-11-24: باقي الفصل بعد المقاطع والرجوع
+    بلا مقاطع يُقسَّمان إلى صور متناوبة بهذا المقدار).
+    """
+    clip_seconds = _check_duration(clip_seconds, "مقدار الصورة")
+    n = max(1, int(round(duration / clip_seconds)))
     segments = []
     for i in range(n):
         if i < n - 1:
             segments.append({"kind": "image", "src": images[i % len(images)],
-                             "duration": IMAGE_CLIP_SECONDS})
+                             "duration": clip_seconds})
         else:
             segments.append({
                 "kind": "image", "src": images[i % len(images)],
                 "duration": round(
-                    duration - IMAGE_CLIP_SECONDS * (n - 1), 3)})
+                    duration - clip_seconds * (n - 1), 3)})
     return segments
 
 
@@ -372,8 +382,16 @@ def _segment_duration(seg):
     return round(float(seg["duration"]), 3)
 
 
-def resolve_chapter_motion(chapter, manifest, motion_dir, chapter_index):
+def resolve_chapter_motion(chapter, manifest, motion_dir, chapter_index,
+                           clip_seconds=None):
     """حلّ مقاطع الحركة لفصل كامل يغطي مدته.
+
+    clip_seconds: مقدار الصورة الاحتياطية في وضع الحركة (2.5ث في
+    youtube-long و5ث في clips — الافتراضي 5ث). باقي مدة الفصل بعد
+    المقاطع يُقسَّم إلى صور متناوبة بهذا المقدار بدل صورة واحدة
+    متجمدة (إصلاح فجوة 2026-11-24: الفصل 2 في الألغاز كان 6.855ث
+    فيديو ثم 53.421ث صورة واحدة)، والرجوع بلا مقاطع يستخدم
+    المقدار نفسه.
 
     يرجع {"segments": [...], "mode": "clips"|"still", "warnings": [...]}.
     لا يرفع استثناءً عند غياب المقاطع — يرجع لصورة ثابتة مع تحذير.
@@ -383,6 +401,10 @@ def resolve_chapter_motion(chapter, manifest, motion_dir, chapter_index):
         raise MotionError("الفصل ليس كائنًا")
     duration = _check_duration(chapter.get("duration"),
                                "الفصل %s" % (chapter.get("title") or "?"))
+    if clip_seconds is None:
+        clip_seconds = IMAGE_CLIP_SECONDS
+    else:
+        clip_seconds = _check_duration(clip_seconds, "مقدار الصورة")
     images = chapter.get("images") or []
     if not images:
         raise MotionError("الفصل بلا صور: %s"
@@ -403,7 +425,7 @@ def resolve_chapter_motion(chapter, manifest, motion_dir, chapter_index):
                     found.add(str(gen["clip_id"]))
         clip_ids = sorted(found, key=_natural_key)
     if not clip_ids:
-        return {"segments": _still_segments(images, duration),
+        return {"segments": _still_segments(images, duration, clip_seconds),
                 "mode": "still",
                 "warnings": ["لا يوجد مقطع حركة للفصل %s — صورة ثابتة "
                              "بلا Ken Burns" % title]}
@@ -442,12 +464,14 @@ def resolve_chapter_motion(chapter, manifest, motion_dir, chapter_index):
         warnings.extend(planned["warnings"])
     remaining = round(duration - covered, 3)
     if remaining > 0:
-        segments.append({"kind": "image", "src": images[0],
-                         "duration": remaining})
+        # إصلاح فجوة الصورة المتجمدة (2026-11-24): باقي المدة يُقسَّم
+        # إلى صور متناوبة بمقدار الوضع (2.5ث في youtube-long و5ث في
+        # clips) بدل صورة واحدة بطول الباقي كله.
+        segments.extend(_still_segments(images, remaining, clip_seconds))
         warnings.append(
             "مقاطع الحركة غطّت %.2f ث من %.2f ث للفصل %s — باقي المدة "
-            "(%.2f ث) صورة ثابتة بلا Ken Burns"
-            % (covered, duration, title, remaining))
+            "(%.2f ث) صور ثابتة متناوبة كل %.1f ث بلا Ken Burns"
+            % (covered, duration, title, remaining, clip_seconds))
     has_video = any(s.get("kind") == "video" for s in segments)
     return {"segments": segments,
             "mode": "clips" if has_video else "still",

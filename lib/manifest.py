@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """بيان مصدر الفيديو — جولة v0.1.37 (مقترح tinker رقم 2).
 
 كل فيديو ينتجه studio يحمل ملفًا جانبيًا `<الفيديو>.manifest.json`

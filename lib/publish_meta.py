@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """عنوان/وسوم/وصف نشر مولّدة — `lib/publish_meta.py` (الجولة v0.1.39).
 
 `generate_publish_meta(story, part=1, parts=1, chat_fn=None)` ترجع

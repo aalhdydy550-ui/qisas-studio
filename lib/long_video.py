@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """الفيديو الطويل — تجميع عدة قصص في فيديو أفقي واحد 1280×720.
 
 البنية: بطاقة مقدمة بهوك + فصل لكل قصة (بطاقة عنوان 3 ثوانٍ ثم
@@ -28,6 +31,11 @@ from .paths import resolve_inside
 
 TITLE_CARD_SECONDS = 3.0
 IMAGE_CLIP_SECONDS = 5.0
+# إيقاع يوتيوب الطويل (v0.1.45): القنوات المقاسة تغيّر الصورة كل
+# 1–3 ثوانٍ (الراوي 2.0ث، حكايا الليل 3.4ث) — فالوضع youtube-long
+# يستخدم 2.5 ثانية للصورة الاحتياطية بدل 5، مع قطع مباشر وبلا
+# Ken Burns أبدًا. انظر ~/workspace/flow-eval/youtube-motion/REPORT-AR.md
+YOUTUBE_LONG_IMAGE_SECONDS = 2.5
 MIN_CARD_SECONDS = 3.0
 HOOK_FONTSIZE = 64
 TITLE_FONTSIZE = 64
@@ -368,21 +376,21 @@ def chapter_from_text(title, text, narration_info, images, moral=""):
             "images": list(images), "phrases": phrases}
 
 
-def _content_images(images, duration):
-    """وزّع صور الفصل على مدة السرد (5 ثوانٍ للصورة، الأخيرة تُمدَّد)."""
+def _content_images(images, duration, clip_seconds=IMAGE_CLIP_SECONDS):
+    """وزّع صور الفصل على مدة السرد (clip_seconds للصورة، الأخيرة تُمدَّد)."""
     import math
-    n = max(1, int(round(duration / IMAGE_CLIP_SECONDS)))
+    n = max(1, int(round(duration / clip_seconds)))
     clips = []
     for i in range(n):
         if i < n - 1:
-            clips.append((images[i % len(images)], IMAGE_CLIP_SECONDS))
+            clips.append((images[i % len(images)], clip_seconds))
         else:
             clips.append((images[i % len(images)],
-                          round(duration - IMAGE_CLIP_SECONDS * (n - 1), 3)))
+                          round(duration - clip_seconds * (n - 1), 3)))
     return clips
 
 
-MOTION_MODES = ("clips", "still", "kenburns")
+MOTION_MODES = ("clips", "still", "kenburns", "youtube-long")
 
 
 def _segment_duration(seg):
@@ -443,7 +451,11 @@ def build_project(spec):
     spec: {"title", "hook", "intro": {"text","narration","duration"},
     "outro": {...}, "chapters": [فصل], "music": مسار|None,
     "width": 1280, "height": 720, "fps": 30,
-    "motion": "clips"|"still"|"kenburns" (الافتراضي "clips")}.
+    "motion": "clips"|"still"|"kenburns"|"youtube-long"
+    (الافتراضي "clips")}.
+    "youtube-long" مثل "clips" تمامًا في حلّ مقاطع الحركة من
+    المانيفست، لكن الصور الاحتياطية تُوزَّع 2.5 ثانية للصورة بدل
+    5 (إيقاع القطع السريع في قصص يوتيوب الطويلة) وبلا Ken Burns.
     الفصول قد تحمل "motion_segments" (مقاطع محلولة مسبقًا من النوعين
     video/image فقط — لا freeze) و"motion_report" (mode/warnings).
     يرجع (مشروع JSON، meta) — وmeta فيه توقيتات الفصول للطوابع والوصف.
@@ -454,7 +466,8 @@ def build_project(spec):
     motion = spec.get("motion", "clips")
     if motion not in MOTION_MODES:
         raise LongVideoError(
-            "وضع الحركة غير معروف: %s (المسموح: clips/still/kenburns)"
+            "وضع الحركة غير معروف: %s "
+            "(المسموح: clips/still/kenburns/youtube-long)"
             % motion)
     width = int(spec.get("width", 1280))
     height = int(spec.get("height", 720))
@@ -544,7 +557,11 @@ def build_project(spec):
                 cursor += seg_dur
         else:
             kb = "in"
-            for img, clip_dur in _content_images(ch["images"], dur):
+            clip_seconds = (YOUTUBE_LONG_IMAGE_SECONDS
+                            if motion == "youtube-long"
+                            else IMAGE_CLIP_SECONDS)
+            for img, clip_dur in _content_images(ch["images"], dur,
+                                                 clip_seconds):
                 track = {"type": "image", "src": img,
                          "start": round(cursor, 3),
                          "duration": round(clip_dur, 3),
