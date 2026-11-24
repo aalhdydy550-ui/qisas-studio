@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """اختبارات ملفات تعريف العتاد — جولة v0.1.38 (بند 5).
 
 الملفات الثلاثة تولّد أعلامًا صالحة؛ وfp8+int8 يُرفضان؛

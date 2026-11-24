@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """اختبارات وظيفة الأفاتار (lib/avatar_job.py) — جولة v0.1.38 بند 1+4.
 
 مواصفة التصميم (§1): مخطط LongCat (prompt/cond_image/cond_audio/

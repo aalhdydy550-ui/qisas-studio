@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """اختبارات نسب العرض — جولة v0.1.38 (بند 3).
 
 عمودي فقط وبأبعاد قابلة للقسمة على 8؛ والمربع والأفقي
