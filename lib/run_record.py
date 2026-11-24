@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """سجل تشغيل — جولة v0.1.37 (مقترح tinker رقم 10).
 
 كل تشغيل إنتاج (run/daily/batch/long-video/demo/client-run)

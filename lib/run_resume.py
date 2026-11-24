@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """استئناف تشغيل منقطع — جولة v0.1.41 (بند 6 من استخراج AlphaCLI).
 
 ريندر/تجميع طويل يُستأنف من آخر نقطة تفتيش بعد ريستارت VM
