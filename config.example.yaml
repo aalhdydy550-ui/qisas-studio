@@ -1,3 +1,6 @@
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 # مثال لإعدادات studio — انسخ هذا الملف إلى config.yaml وعدّل المسارات عند الحاجة.
 # لا تضع أي مفاتيح أو بيانات اعتماد هنا أبدًا.
 # مفتاح بوابة OmniRoute (لو وُجد) يمرَّر عبر متغير البيئة OMNIROUTE_API_KEY فقط.

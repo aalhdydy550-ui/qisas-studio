@@ -1,4 +1,7 @@
 #!/bin/bash
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 # سكربت استعادة بيئة studio بعد إعادة تشغيل الـVM — إصدار 3
 # كل الأدوات تعيش في الـhome؛ هذا السكربت يعيد الروابط في /usr/local/bin
 # وحزم apt المفقودة فقط. آمن عند تشغيله مرتين (idempotent).

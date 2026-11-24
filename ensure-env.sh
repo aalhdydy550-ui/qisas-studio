@@ -1,4 +1,7 @@
 #!/bin/bash
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 # ensure-env.sh — حارس بيئة studio بعد إعادة تشغيل الـVM (إصلاح دائم 2026-11-21)
 #
 # المشكلة: بعد كل ريستارت تُمسح حزم apt في /usr (أدوات الحماية الست + قاعدة

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """studio — خط إنتاج موحّد لفيديوهات القصص.
 
 المعمارية (طبقة تنسيق فقط — لا كود منسوخ من الأدوات الثلاث):
@@ -38,14 +41,16 @@
   studio.py long-video --out PATH --title TITLE [--story NAME | --project NAME
       | --run RUN_ID | --chapter-dir DIR | --chapter-text TITLE --text-file FILE
       --cover IMG ...] [--chapters-file FILE] [--music PATH] [--atempo X]
-      [--motion clips|still|kenburns] [--motion-manifest FILE]
+      [--motion clips|still|kenburns|youtube-long] [--motion-manifest FILE]
       [--motion-dir DIR]
       # فيديو طويل أفقي 1280×720 (8–12 دقيقة) من عدة قصص: مقدمة بهوك
       # + فصل لكل قصة (بطاقة عنوان + محتوى بعبرته) + خاتمة باشتراك واحد.
       # --motion الافتراضي clips: مقاطع حركة مولّدة من مانيفست الحركة
       # (--motion-manifest) مع رجوع لصورة ثابتة بلا Ken Burns عند غياب
       # المقاطع؛ still = صور ثابتة بلا أي حركة؛ kenburns = السلوك القديم
-      # (Ken Burns) — اختياري صريح فقط.
+      # (Ken Burns) — اختياري صريح فقط؛ youtube-long = مثل clips لكن
+      # الصور الاحتياطية 2.5 ثانية بدل 5 (إيقاع القطع السريع في قصص
+      # يوتيوب الطويلة) وبلا Ken Burns أبدًا.
       # فيديو طويل أفقي 1280×720 (8–12 دقيقة) من عدة قصص: مقدمة بهوك
       # + فصل لكل قصة (بطاقة عنوان + محتوى بعبرته) + خاتمة باشتراك واحد.
       # سرد Piper مقسّم، كتابة كلمة-بكلمة، شعار الصفحة تلقائي، وبلا
@@ -193,7 +198,7 @@ def _print_translated(prefix, exc, context, lang="ar"):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.44"
+VERSION = "0.1.46"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
 # مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،
@@ -2334,10 +2339,11 @@ def _validate_chapters_spec(spec):
             raise long_video.LongVideoError(
                 "حقل «%s» في ملف الفصول يجب أن يكون نصًا" % key)
     if "motion" in spec:
-        if spec["motion"] not in ("clips", "still", "kenburns"):
+        if spec["motion"] not in ("clips", "still", "kenburns",
+                                  "youtube-long"):
             raise long_video.LongVideoError(
                 "حقل «motion» في ملف الفصول غير معروف: %s (المسموح: "
-                "clips/still/kenburns)" % spec["motion"])
+                "clips/still/kenburns/youtube-long)" % spec["motion"])
     for key in ("motion_manifest", "motion_dir"):
         if key in spec and not isinstance(spec[key], str):
             raise long_video.LongVideoError(
@@ -2661,7 +2667,7 @@ def cmd_long_video(cfg, args):
         motion_dir = getattr(args, "motion_dir", None) \
             or spec.get("motion_dir")
         motion_log = {"mode": motion, "warnings": [], "chapters": []}
-        if motion == "clips":
+        if motion in ("clips", "youtube-long"):
             if motion_manifest:
                 manifest_path = expand(motion_manifest)
                 try:
@@ -2675,9 +2681,18 @@ def cmd_long_video(cfg, args):
                     motion_dir = os.path.dirname(
                         os.path.abspath(manifest_path))
                 freeze_dir = os.path.join(run_dir, "motion-freezes")
+                # إيقاع الصور الاحتياطية يتبع الوضع (youtube-long: 2.5ث،
+                # clips: 5ث) — يُمرَّر للمحلِّل ليقسّم باقي مدة الفصل
+                # والرجوع بلا مقاطع إلى صور متناوبة بدل صورة واحدة
+                # متجمدة (إصلاح فجوة 2026-11-24).
+                clip_seconds = (
+                    long_video.YOUTUBE_LONG_IMAGE_SECONDS
+                    if motion == "youtube-long"
+                    else motion_clips.IMAGE_CLIP_SECONDS)
                 for i, ch in enumerate(chapters):
                     resolved = motion_clips.resolve_chapter_motion(
-                        ch, manifest, motion_dir, i + 1)
+                        ch, manifest, motion_dir, i + 1,
+                        clip_seconds=clip_seconds)
                     ch_warnings = list(resolved["warnings"])
                     segments = []
                     for j, seg in enumerate(resolved["segments"]):
@@ -2710,8 +2725,8 @@ def cmd_long_video(cfg, args):
                          "warnings": ch_warnings})
                     motion_log["warnings"].extend(ch_warnings)
             else:
-                msg = ("وضع clips بلا --motion-manifest — كل الفصول "
-                       "صور ثابتة بلا Ken Burns")
+                msg = ("وضع %s بلا --motion-manifest — كل الفصول "
+                       "صور ثابتة بلا Ken Burns" % motion)
                 motion_log["warnings"].append(msg)
                 for ch in chapters:
                     motion_log["chapters"].append(
@@ -4866,10 +4881,12 @@ def main():
                         "supertonic-M1 (صوت ثانٍ اختياري) — الافتراضي "
                         "من الإعداد (narration.voice)")
     p.add_argument("--motion", default="clips",
-                   choices=["clips", "still", "kenburns"],
+                   choices=["clips", "still", "kenburns", "youtube-long"],
                    help="وضع الحركة: clips (الافتراضي) = مقاطع حركة "
                         "مولّدة من المانيفست (--motion-manifest) مع رجوع "
                         "لصورة ثابتة بلا Ken Burns عند غياب المقاطع؛ "
+                        "youtube-long = مثل clips لكن الصور الاحتياطية "
+                        "2.5 ثانية بدل 5 (إيقاع قصص يوتيوب الطويلة)؛ "
                         "still = صور ثابتة بلا أي حركة؛ kenburns = "
                         "السلوك القديم (Ken Burns) — اختياري صريح فقط")
     p.add_argument("--motion-manifest",
