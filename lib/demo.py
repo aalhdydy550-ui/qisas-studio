@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """القصة التجريبية المدمجة — `studio.py run --demo`.
 
 قصة قصيرة أصلية (3 مشاهد) تُرنَّد إلى فيديو عمودي حقيقي 720×1280

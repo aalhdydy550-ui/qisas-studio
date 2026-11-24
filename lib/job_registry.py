@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """سجل مهام دائم — جولة v0.1.39 (مقترح MoneyPrinterTurbo:
 دفعات + history — المقارنة القسم 4.1 بند 1 والقسم 6 بند 4).
 
