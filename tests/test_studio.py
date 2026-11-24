@@ -1069,12 +1069,10 @@ class TestMoviePyFx(unittest.TestCase):
 
 class TestCapiteCaptions(unittest.TestCase):
     """كابشنات الكاريوكي (منطق Capite مُعاد تنفيذه) — تجميع الأسطر
-    + توقيت الأحداث + تمييز الكلمة النشطة بلا {\\kf} (RTL)."""
+    + توقيت الأحداث + نص سليم بلا تقسيم لوني (v0.1.47: libass
+    يعكس مقاطع RTL المقسّمة ب{\\c}...{\\r}) + قاعدة اليتيم."""
 
-    def _words(self):
-        # 10 كلمات عربية بتوقيتات متتابعة (مثل سرد حماتي م1)
-        texts = ["في", "نص", "الليل", "حماتي", "طردتني", "أنا",
-                 "وبنتي", "الصغيرة", "في", "الشارع"]
+    def _timed(self, texts):
         t = 0.0
         out = []
         for w in texts:
@@ -1082,6 +1080,12 @@ class TestCapiteCaptions(unittest.TestCase):
                         "end": round(t + 0.4, 2)})
             t += 0.5
         return out
+
+    def _words(self):
+        # 10 كلمات عربية بتوقيتات متتابعة (مثل سرد حماتي م1)
+        texts = ["في", "نص", "الليل", "حماتي", "طردتني", "أنا",
+                 "وبنتي", "الصغيرة", "في", "الشارع"]
+        return self._timed(texts)
 
     def test_group_fits_one_line(self):
         from lib import capite_captions
@@ -1108,19 +1112,83 @@ class TestCapiteCaptions(unittest.TestCase):
         total = sum(len(ln) for g in groups for ln in g["lines"])
         self.assertEqual(total, 10)
 
-    def test_events_highlight_active_word_only(self):
+    def test_events_plain_text_no_colour_split(self):
         from lib import capite_captions
         ass_text, groups = capite_captions.words_to_karaoke_ass(
             self._words(), max_chars=60)
         dialogues = [ln for ln in ass_text.splitlines()
                      if ln.startswith("Dialogue:")]
         self.assertEqual(len(dialogues), 10)
-        # كل حدث يميّز كلمة واحدة فقط، وبلا وسم كاريوكي (RTL)
+        # v0.1.47: بلا تقسيم لوني إطلاقًا (لا {\c ولا {\r}) — النص
+        # سليم حرفيًا، وبنية التوقيت (حدث لكل كلمة) كما هي
         self.assertNotIn("\\kf", ass_text)
-        for d in dialogues:
-            self.assertEqual(d.count("\\c&H0000FFFF"), 1)
+        self.assertNotIn("\\c", ass_text)
+        self.assertNotIn("\\r", ass_text)
+        self.assertIn("في نص الليل حماتي طردتني أنا وبنتي الصغيرة في الشارع",
+                      dialogues[0])
         # الحدث الأول ينتهي عند بداية الكلمة الثانية ناقص 10ms
         self.assertIn("0:00:00.00,0:00:00.49", dialogues[0])
+
+    def test_line_text_plain_with_active_word(self):
+        from lib import capite_captions
+        line = self._timed(["في", "نص", "الليل"])
+        # الكلمة النشطة وسطية — الخرج نص سليم بلا وسوم لون
+        self.assertEqual(
+            capite_captions._line_text(line, 1), "في نص الليل")
+        # والنشطة أول/آخر تعطي النص نفسه
+        self.assertEqual(
+            capite_captions._line_text(line, 0), "في نص الليل")
+        self.assertEqual(
+            capite_captions._line_text(line, 2), "في نص الليل")
+        for active in (0, 1, 2):
+            text = capite_captions._line_text(line, active)
+            self.assertNotIn("\\c", text)
+            self.assertNotIn("\\r", text)
+
+    def test_orphan_function_word_moves_to_next_line(self):
+        from lib import capite_captions
+        # «في» كانت ستنهي السطر الأول — تنتقل لبداية السطر التالي
+        groups = capite_captions.group_words_into_lines(
+            self._timed(["ذهب", "الرجل", "في", "السوق"]),
+            max_chars=15, max_lines=2)
+        self.assertEqual(len(groups), 1)
+        lines = [[w["w"] for w in ln] for ln in groups[0]["lines"]]
+        self.assertEqual(lines, [["ذهب", "الرجل"], ["في", "السوق"]])
+        # ومع علامة ترقيم ملتصقة («في،») تُعامل كوظيفية أيضًا
+        groups = capite_captions.group_words_into_lines(
+            self._timed(["ذهب", "الرجل", "في،", "السوق"]),
+            max_chars=15, max_lines=2)
+        lines = [[w["w"] for w in ln] for ln in groups[0]["lines"]]
+        self.assertEqual(lines, [["ذهب", "الرجل"], ["في،", "السوق"]])
+        # وكل الكلمات محفوظة بلا فقدان
+        total = sum(len(ln) for g in groups for ln in g["lines"])
+        self.assertEqual(total, 4)
+
+    def test_orphan_single_function_word_line_stays(self):
+        from lib import capite_captions
+        # «في» وحدها في السطر — لا تُنقل (حتى لا يُترك سطر فارغ)
+        groups = capite_captions.group_words_into_lines(
+            self._timed(["في", "الشارع", "الكبير"]),
+            max_chars=8, max_lines=2)
+        lines = [[w["w"] for w in ln] for ln in groups[0]["lines"]]
+        self.assertEqual(lines, [["في"], ["الشارع"]])
+        total = sum(len(ln) for g in groups for ln in g["lines"])
+        self.assertEqual(total, 3)
+
+    def test_english_grouping_unaffected(self):
+        from lib import capite_captions
+        # كلمات إنجليزية لا تطابق القائمة العربية أبدًا — حتى "in"
+        # في آخر سطر لا تُنقل
+        groups = capite_captions.group_words_into_lines(
+            self._timed(["go", "in", "the", "house"]),
+            max_chars=6, max_lines=2)
+        lines = [[w["w"] for w in ln] for ln in groups[0]["lines"]]
+        self.assertEqual(lines, [["go", "in"], ["the"]])
+        groups = capite_captions.group_words_into_lines(
+            self._timed(["the", "quick", "brown", "fox"]),
+            max_chars=10, max_lines=2)
+        lines = [[w["w"] for w in ln] for ln in groups[0]["lines"]]
+        self.assertEqual(lines, [["the", "quick"], ["brown", "fox"]])
 
     def test_escape_ass_text(self):
         from lib import capite_captions

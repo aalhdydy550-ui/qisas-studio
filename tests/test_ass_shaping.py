@@ -142,6 +142,61 @@ class TestCorruptedCaptions(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(res["issues"], [])
 
+    def test_orphan_function_word_flagged(self):
+        res = self._audit("bad-orphan.ass",
+                          ["عاش رجل فقير في\\Nقرية بعيدة على أطراف الصحراء."])
+        self.assertFalse(res["ok"])
+        kinds = [i["kind"] for i in res["issues"]]
+        self.assertIn("wrap_orphan_function_word", kinds)
+        detail = next(i["detail"] for i in res["issues"]
+                      if i["kind"] == "wrap_orphan_function_word")
+        self.assertIn("في", detail)
+
+    def test_orphan_function_word_last_line_not_flagged(self):
+        res = self._audit("good-orphan-last.ass",
+                          ["عاش رجل فقير في قرية\\Nبعيدة وكان يعيش في"])
+        self.assertTrue(res["ok"], res["issues"])
+        self.assertEqual(res["issues"], [])
+
+    def test_orphan_english_in_not_flagged(self):
+        res = self._audit("good-orphan-en.ass",
+                          ["The old man lived in\\Na small village far away."])
+        self.assertTrue(res["ok"], res["issues"])
+        self.assertEqual(res["issues"], [])
+
+    def test_orphan_function_word_with_comma_flagged(self):
+        res = self._audit("bad-orphan-comma.ass",
+                          ["عاش رجل فقير في،\\Nقرية بعيدة على أطراف الصحراء."])
+        self.assertFalse(res["ok"])
+        kinds = [i["kind"] for i in res["issues"]]
+        self.assertIn("wrap_orphan_function_word", kinds)
+
+    def test_clean_multiline_passes(self):
+        res = self._audit("good-multi.ass",
+                          ["عاش رجل فقير في قرية\\Nبعيدة على أطراف الصحراء."])
+        self.assertTrue(res["ok"], res["issues"])
+        self.assertEqual(res["issues"], [])
+
+    def test_rtl_highlight_split_flagged(self):
+        res = self._audit("bad-highlight.ass",
+                          ["كان {\\c&H00FFFF&}رجل{\\r} فقير يعيش في قرية."])
+        self.assertFalse(res["ok"])
+        kinds = [i["kind"] for i in res["issues"]]
+        self.assertIn("rtl_highlight_split", kinds)
+
+    def test_rtl_highlight_split_english_not_flagged(self):
+        res = self._audit("good-highlight-en.ass",
+                          ["The {\\c&H00FFFF&}old man{\\r} lived in a village."])
+        self.assertTrue(res["ok"], res["issues"])
+        self.assertEqual(res["issues"], [])
+
+    def test_rtl_highlight_split_no_tags_not_flagged(self):
+        res = self._audit("good-highlight-none.ass",
+                          ["كان رجل فقير يعيش في قرية بعيدة."])
+        self.assertTrue(res["ok"], res["issues"])
+        kinds = [i["kind"] for i in res["issues"]]
+        self.assertNotIn("rtl_highlight_split", kinds)
+
     def test_missing_file_raises(self):
         with self.assertRaises(FileNotFoundError):
             ass_shaping.audit_ass_file(
