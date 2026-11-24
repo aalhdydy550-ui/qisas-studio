@@ -1,3 +1,6 @@
+<!-- Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui) -->
+<!-- Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE. -->
+<!-- Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md. -->
 # خطة الاختبار الحي للفرع المدفوع (الطلب الـ11) — صفحة «طلب فيديو»
 
 > **تنبيه 2026-11-23 (جولة v0.1.43):** القاعدة تغيّرت في خط الأنابيب المحلي (`client_orders.py`): طلبات العميل مجانية خلال أول 30 يومًا من أول طلب **بلا حد لعدد الطلبات**، وبعدها `awaiting_payment` قبل الإنتاج. هذه الخطة تصف سلوك **الصفحة** (Space) كما هو منشور اليوم — `trial-counter.ts` وصياغة App.tsx/actions.ts ما زالت على قاعدة الـ10 طلبات حتى تُحدَّث وتُعاد نشر الـSpace (النص البديل الدقيق في تقرير جولة v0.1.43). لا تُستخدم هذه الخطة للحكم على القاعدة المحلية الجديدة.
