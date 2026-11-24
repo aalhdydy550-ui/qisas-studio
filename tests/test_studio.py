@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """اختبارات آلية لـ studio — تحويل فحوصات التحقق اليدوية (FIXES.md)
 إلى اختبارات تعمل بـ `python3 -m unittest discover -s tests -v`.
 
@@ -1041,7 +1044,7 @@ class TestMoviePyFx(unittest.TestCase):
         self.assertLessEqual(img.width, 660 + 20)
         # فيها بكسلات نص غير شفافة فعلًا
         alpha = img.split()[3]
-        self.assertGreater(max(alpha.get_flattened_data()), 0)
+        self.assertGreater(max(alpha.getdata()), 0)
         # نص طويل يُصغَّر ليدخل العرض الأقصى
         img2 = moviepy_fx.render_arabic_text_image(
             "عنزة صغيرة هزّت القاهرة كلها والناس ركعوا لها في 1184",

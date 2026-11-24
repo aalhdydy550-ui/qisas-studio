@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """اختبارات استيراد SRT إلى ASS (lib.whisper_captions — v0.1.36).
 
 تعمل بـ `python3 -m unittest tests.test_whisper_captions -v` من

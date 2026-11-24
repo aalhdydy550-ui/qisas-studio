@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """اختبارات توصيل جولة v0.1.39 في studio.py.
 
 أوامر jobs/reframe/shorts-cut الجديدة + أوامر queue publish-*
@@ -91,7 +94,7 @@ def _make_video(path, size="720x1280", seconds=2, gap=None):
 
 class TestVersion0143(unittest.TestCase):
     def test_version_is_0143(self):
-        self.assertEqual(studio.VERSION, "0.1.44")
+        self.assertEqual(studio.VERSION, "0.1.46")
 
 
 class TestJobsWiring(unittest.TestCase):
