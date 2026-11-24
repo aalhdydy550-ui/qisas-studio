@@ -1,3 +1,6 @@
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 في قرية صغيرة على ضفة النيل، عاش رجل عجوز اسمه سليم، يزرع أرضه وحده منذ أربعين سنة.
 
 وفي سنة قحط جفّت الأرض، فباع سليم بقرته واشترى بثمنها بذورًا، ووزّع نصفها على جيرانه الفقراء.
