@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """اختبارات الفيديو الطويل (lib.long_video) + الصورة الأفقية.
 
 تعمل بـ `python3 -m unittest discover -s tests -v`.
@@ -427,6 +430,49 @@ class TestMotionModes(unittest.TestCase):
         self.assertFalse(any("ken_burns" in t for t in content))
         self.assertEqual(meta["chapters"][0]["motion"]["mode"], "clips")
 
+    def test_youtube_long_uses_fast_cut_still_images(self):
+        # v0.1.45: الصور الاحتياطية 2.5 ثانية بدل 5، وبلا Ken Burns.
+        ch = _fake_chapter(self.tmp.name, "قصة طويلة", 12.0)
+        project, meta = long_video.build_project(
+            self._spec(chapters=[ch], motion="youtube-long"))
+        self.assertEqual(meta["motion"], "youtube-long")
+        images = self._image_tracks(project)
+        content = images[2:-1]
+        self.assertEqual([t["duration"] for t in content],
+                         [2.5, 2.5, 2.5, 2.5, 2.0])
+        self.assertFalse(any("ken_burns" in t
+                             for t in project["tracks"]),
+                         "youtube-long يجب ألا يحمل أي ken_burns")
+        self.assertEqual([t["transition_in"] for t in content],
+                         ["none"] * 5)
+
+    def test_youtube_long_with_motion_segments(self):
+        # v0.1.45: مقاطع الحركة تُحلّ في youtube-long كما في clips.
+        ch = dict(self.ch1)
+        ch["motion_segments"] = [
+            {"kind": "video", "src": self.video, "in": 0.0, "out": 1.0},
+            {"kind": "image", "src": self.ch1["images"][0],
+             "duration": 1.0}]
+        project, meta = long_video.build_project(
+            self._spec(chapters=[ch], motion="youtube-long"))
+        videos = [t for t in project["tracks"] if t["type"] == "video"]
+        self.assertEqual(len(videos), 1)
+        self.assertEqual(videos[0]["volume"], 0)
+        self.assertFalse(any("ken_burns" in t
+                             for t in project["tracks"]))
+        self.assertEqual(meta["chapters"][0]["motion"]["mode"],
+                         "youtube-long")
+
+    def test_clips_still_image_duration_unchanged(self):
+        # حارس: الافتراضي clips ما زال 5 ثوانٍ للصورة (v0.1.45 لم
+        # يغيّر إلا youtube-long).
+        ch = _fake_chapter(self.tmp.name, "قصة طويلة", 12.0)
+        project, _meta = long_video.build_project(
+            self._spec(chapters=[ch]))
+        images = self._image_tracks(project)
+        content = images[2:-1]
+        self.assertEqual([t["duration"] for t in content], [5.0, 7.0])
+
     def test_unknown_motion_raises(self):
         with self.assertRaises(long_video.LongVideoError):
             long_video.build_project(self._spec(motion="spin"))
@@ -466,6 +512,7 @@ class TestMotionModes(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("--motion", proc.stdout)
         self.assertIn("clips", proc.stdout)
+        self.assertIn("youtube-long", proc.stdout)
         self.assertIn("--motion-manifest", proc.stdout)
 
 

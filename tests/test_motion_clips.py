@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """اختبارات مقاطع الحركة المولّدة للفيديو الطويل (lib.motion_clips).
 
 تعمل بـ `python3 -m unittest tests.test_motion_clips -v`.
@@ -308,13 +311,118 @@ class TestResolveChapterMotion(MotionClipsBase):
         res = motion_clips.resolve_chapter_motion(
             ch, self.manifest, self.motion_dir, 1)
         kinds = [s["kind"] for s in res["segments"]]
-        self.assertEqual(kinds, ["video", "image"])
+        self.assertEqual(kinds, ["video", "image", "image"])
         self.assertAlmostEqual(res["segments"][0]["out"], 4.413, places=2)
-        self.assertAlmostEqual(res["segments"][1]["duration"], 7.587,
+        # باقي المدة (7.587ث) يُقسَّم إلى صور 5ث متناوبة بدل صورة
+        # واحدة متجمدة (إصلاح فجوة 2026-11-24): 5.0 + 2.587.
+        self.assertAlmostEqual(res["segments"][1]["duration"], 5.0,
+                               places=2)
+        self.assertAlmostEqual(res["segments"][2]["duration"], 2.587,
                                places=2)
         self.assertEqual(res["mode"], "clips")
         self.assertEqual(len(res["warnings"]), 1)
-        self.assertIn("صورة ثابتة", res["warnings"][0])
+        self.assertIn("صور ثابتة متناوبة", res["warnings"][0])
+
+    def _riddle_chapter_2_manifest(self):
+        """مانيفست بمقطع واحد 6.855ث بتوليدين — سيناريو الفصل 2
+        في الألغاز (فيديو 6.855ث وباقٍ 53.421ث)."""
+        manifest = {
+            "generation_seconds": 5.04,
+            "clips": {"C-X": {"generations": ["C-X-a", "C-X-b"],
+                              "duration_needed_s": 6.855,
+                              "coverage_note": ""}},
+            "generations": {
+                "C-X-a": {"clip_id": "C-X",
+                          "output_name": "C-X-a.mp4",
+                          "scene": "chapter 2", "slice": "",
+                          "take": "a", "first_frame": ""},
+                "C-X-b": {"clip_id": "C-X",
+                          "output_name": "C-X-b.mp4",
+                          "scene": "chapter 2", "slice": "",
+                          "take": "b", "first_frame": ""},
+            },
+        }
+        for name in ("C-X-a.mp4", "C-X-b.mp4"):
+            _touch(os.path.join(self.motion_dir, name))
+        return manifest
+
+    def _three_images(self):
+        images = [os.path.join(self.tmp.name, "img%d.jpg" % n)
+                  for n in (1, 2, 3)]
+        for p in images:
+            _touch(p)
+        return images
+
+    def test_remainder_split_into_alternating_stills_youtube_long(self):
+        # سيناريو الفصل 2 في الألغاز (تقرير التحويل §7): فيديو
+        # 6.855ث ثم باقٍ 53.421ث — قبل الإصلاح صورة واحدة 53.421ث.
+        manifest = self._riddle_chapter_2_manifest()
+        images = self._three_images()
+        ch = self._chapter(duration=60.276, motion_clips_ids=["C-X"],
+                           images=images)
+        res = motion_clips.resolve_chapter_motion(
+            ch, manifest, self.motion_dir, 2, clip_seconds=2.5)
+        video = [s for s in res["segments"] if s["kind"] == "video"]
+        stills = [s for s in res["segments"] if s["kind"] == "image"]
+        self.assertEqual(res["mode"], "clips")
+        video_s = sum(motion_clips._segment_duration(s) for s in video)
+        self.assertAlmostEqual(video_s, 6.855, places=2)
+        # 53.421 / 2.5 = 21.37 → 21 صورة: 20 × 2.5ث + الأخيرة 3.421ث
+        # (ممددة للباقي فقط — بحد أقصى 1.5 × المقدار = 3.75ث).
+        self.assertEqual(len(stills), 21)
+        self.assertTrue(all(s["duration"] == 2.5 for s in stills[:-1]))
+        self.assertAlmostEqual(stills[-1]["duration"], 3.421, places=2)
+        self.assertTrue(all(s["duration"] <= 3.75 for s in stills))
+        # الصور متناوبة من صور الفصل لا صورة واحدة مكررة.
+        self.assertEqual([s["src"] for s in stills],
+                         [images[i % 3] for i in range(21)])
+        total = sum(motion_clips._segment_duration(s)
+                    for s in res["segments"])
+        self.assertAlmostEqual(total, 60.276, places=2)
+        self.assertIn("صور ثابتة متناوبة", res["warnings"][0])
+
+    def test_remainder_split_into_alternating_stills_clips(self):
+        # نفس الفصل في وضع clips الافتراضي (5ث): 53.421ث → 11 صورة
+        # (10 × 5.0ث + الأخيرة 3.421ث) — الافتراضي يبقى 5ث كما هو.
+        manifest = self._riddle_chapter_2_manifest()
+        images = self._three_images()
+        ch = self._chapter(duration=60.276, motion_clips_ids=["C-X"],
+                           images=images)
+        res = motion_clips.resolve_chapter_motion(
+            ch, manifest, self.motion_dir, 2)
+        video = [s for s in res["segments"] if s["kind"] == "video"]
+        stills = [s for s in res["segments"] if s["kind"] == "image"]
+        self.assertEqual(res["mode"], "clips")
+        video_s = sum(motion_clips._segment_duration(s) for s in video)
+        self.assertAlmostEqual(video_s, 6.855, places=2)
+        self.assertEqual(len(stills), 11)
+        self.assertTrue(all(s["duration"] == 5.0 for s in stills[:-1]))
+        self.assertAlmostEqual(stills[-1]["duration"], 3.421, places=2)
+        total = sum(motion_clips._segment_duration(s)
+                    for s in res["segments"])
+        self.assertAlmostEqual(total, 60.276, places=2)
+
+    def test_no_clips_fallback_uses_clip_seconds(self):
+        ch = self._chapter(duration=12.0)
+        res = motion_clips.resolve_chapter_motion(
+            ch, self.manifest, self.motion_dir, 5, clip_seconds=2.5)
+        self.assertEqual(res["mode"], "still")
+        self.assertEqual([s["duration"] for s in res["segments"]],
+                         [2.5, 2.5, 2.5, 2.5, 2.0])
+        # الافتراضي (clips) يبقى 5ث كما كان قبل الإصلاح.
+        res5 = motion_clips.resolve_chapter_motion(
+            ch, self.manifest, self.motion_dir, 5)
+        self.assertEqual([s["duration"] for s in res5["segments"]],
+                         [5.0, 7.0])
+
+    def test_bad_clip_seconds_raises(self):
+        ch = self._chapter(duration=12.0)
+        for bad in (0, -1.0, "x"):
+            with self.assertRaises(motion_clips.MotionError,
+                                   msg="مقدار %r" % (bad,)):
+                motion_clips.resolve_chapter_motion(
+                    ch, self.manifest, self.motion_dir, 5,
+                    clip_seconds=bad)
 
     def test_auto_match_by_scene_chapter_1(self):
         # توليدات L-C01 وL-C03 تحملان scene "chapter 1" — تطابقان
