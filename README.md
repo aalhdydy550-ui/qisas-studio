@@ -1,3 +1,6 @@
+<!-- Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui) -->
+<!-- Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE. -->
+<!-- Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md. -->
 # studio — Unified Story-Video Production Pipeline
 
 **One command turns a short story into a vertical video ready to publish on
@@ -276,7 +279,14 @@ frame); a missing `b` freezes the last frame of `a`. Any chapter without
 a clip falls back to a still image with no Ken Burns at all, with a clear
 warning in the log and run record. `--motion still` uses still images
 only; `--motion kenburns` keeps the old slow zoom/pan — explicit opt-in
-only, never the default. The chapters file accepts `motion`,
+only, never the default. `--motion youtube-long` is like `clips` for
+resolved motion clips, but its still-image fallback cuts every 2.5s
+instead of 5s (the fast-cut rhythm measured in long YouTube story
+videos — see `~/workspace/flow-eval/youtube-motion/REPORT-AR.md`) and
+never uses Ken Burns. Since 0.1.46 the time left over after the motion
+clips in a chapter is also split into alternating stills at the mode's
+pace (2.5s in youtube-long, 5s in clips) instead of one long frozen
+image. The chapters file accepts `motion`,
 `motion_manifest`, `motion_dir`, and per-chapter `motion_clips`.
 
 ### Support the project
@@ -298,7 +308,8 @@ does not change the license: personal use stays free.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) — latest: **0.1.44 (2026-11-23)**:
-real motion in long videos (`--motion clips` by default, from a Wan 2.2
-motion manifest, with still-image fallback and no Ken Burns). Full test
-suite **1896/1896**, `doctor` 28/28.
+See [CHANGELOG.md](CHANGELOG.md) — latest: **0.1.46 (2026-11-24)**:
+frozen-image gap fix — the time left over after motion clips in a
+chapter is split into alternating stills at the mode's pace (2.5s in
+youtube-long, 5s in clips) instead of one long frozen image. Full test
+suite **1903/1903**, `doctor` 28/28.

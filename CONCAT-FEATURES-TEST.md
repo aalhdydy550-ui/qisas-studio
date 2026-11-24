@@ -1,3 +1,6 @@
+<!-- Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui) -->
+<!-- Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE. -->
+<!-- Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md. -->
 # اختبار مزايا Concat 0.2.10–0.2.12 عبر MCP — والميزات الصوتية المدمجة
 
 - **التاريخ:** 2026-11-21 — **الإصدار:** Concat 0.2.12 (API `0.2`، وضع MCP ‏`headless`)
