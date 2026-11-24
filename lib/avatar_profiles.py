@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """ملفات تعريف العتاد للأفاتار الناطق — جولة v0.1.38 (بند 5).
 
 ثلاثة ملفات من تقرير LongCat (§5.أ): t4x2-int8 (الافتراضي —
