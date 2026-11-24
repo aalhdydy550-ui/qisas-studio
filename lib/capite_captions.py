@@ -15,11 +15,20 @@ r"""كابشنات كاريوكي (كلمة-بكلمة) — منطق مستعا�
   (للعربية: نسبة عرض حرف ~0.58 وخط أصغر نسبيًا)، سطران كحد أقصى
   لكل مجموعة، ثم مجموعة جديدة.
 - حدث ASS واحد لكل كلمة: يبدأ مع الكلمة وينتهي عند بداية الكلمة
-  التالية (ناقص 10 مللي ثانية)، ونصه السطر الكامل مع تمييز الكلمة
-  النشطة بلون مختلف.
+  التالية (ناقص 10 مللي ثانية)، ونصه السطر الكامل بنص سليم بلا
+  أي تمييز لوني.
 - للعربية (RTL): لا يُستخدم وسم الكاريوكي {\\kf} — libass لا
-  يمسحه باتجاه صحيح في RTL؛ التمييز بتغيير اللون فقط ({\c...}).
-  هذا فرع RTL الصريح في كود Capite نفسه.
+  يمسحه باتجاه صحيح في RTL؛ وكان التمييز بتغيير اللون فقط
+  ({\c...}) — وهذا فرع RTL الصريح في كود Capite نفسه — لكن
+  **أُلغي التمييز اللوني كليًا في v0.1.47**: التشخيص في
+  ~/workspace/studio-work/caption-fix/DIAGNOSIS-AR.md أثبت
+  (6 إطارات) أن libass يعكس ترتيب مقاطع السطر العربي المقسّم
+  بوسمي {\c}...{\r} فيصير [بعد][النشطة][قبل]، والاختبار المعزول
+  في FIX-AR.md §1 رفض البدائل ({\c} نفسها هي المشكلة، وعكس
+  المقاطع يعكس موضع كسر السطر). فالنص الآن سليم حرفيًا بلا وسوم
+  لون، وبنية توقيت الكاريوكي محفوظة كما هي: حدث واحد لكل كلمة
+  بنفس البداية والنهاية. المعامل `highlight` ما زال مقبولًا
+  لتوافق الواجهة لكنه بلا أثر بصري حاليًا.
 - لا التفاف تلقائي يعتمد عليه: الأسطر محسوبة مسبقًا بميزانية
   الحروف، والخط Noto Naskh Arabic (نفس خط الكتابة الحالي).
 
@@ -37,6 +46,24 @@ import os
 from lib import whisper_captions
 
 HIGHLIGHT_COLOR = "&H0000FFFF"  # أصفر (ASS: &H00BBGGRR)
+# مقبول لتوافق الواجهة فقط — بلا أثر بصري منذ v0.1.47 (انظر توثيق الوحدة).
+
+# كلمات وظيفية عربية يجب ألا تنهي سطرًا مرئيًا (قاعدة «لا يتيم»،
+# v0.1.47): عند كسر السطر تنتقل الكلمة الوظيفية إلى بداية السطر
+# التالي بدل بقائها يتيمة في آخر السطر السابق — إلا إن كانت وحدها
+# في السطر (فلا يُترك سطر فارغ) أو كانت في السطر الأخير من العبارة.
+ORPHAN_FUNCTION_WORDS = frozenset([
+    "في", "من", "على", "إلى", "عن", "مع", "أو", "ثم", "أن", "إن",
+    "لا", "ما", "كل", "هل", "بل", "قد", "لم", "لن", "بين", "حتى",
+    "منذ", "لدى",
+])
+
+_ORPHAN_PUNCT = "،؛؟.!"
+
+
+def _is_function_word(word):
+    """صحيح إن كانت الكلمة وظيفية بعد تجريد علامات الترقيم الملتصقة."""
+    return word.strip(_ORPHAN_PUNCT) in ORPHAN_FUNCTION_WORDS
 
 
 class CapiteError(Exception):
@@ -57,6 +84,9 @@ def group_words_into_lines(words, max_chars=28, max_lines=2):
     كل مجموعة: {"start": ..., "end": ..., "lines": [[كلمات...], ...]}.
     كلمة جديدة تنتقل للسطر التالي إن تجاوزت ميزانية الحروف،
     ومجموعة جديدة إن امتلأ السطران.
+    قاعدة اليتيم: إن كانت آخر كلمة في السطر الحالي كلمة وظيفية
+    (من ORPHAN_FUNCTION_WORDS) والسطر يحوي أكثر من كلمة، تنتقل
+    تلك الكلمة إلى بداية السطر الجديد قبل الكلمة التي سبّبت الكسر.
     """
     groups = []
     cur_lines = [[]]
@@ -73,6 +103,22 @@ def group_words_into_lines(words, max_chars=28, max_lines=2):
         cur_chars = [0]
         cur_start = None
         cur_end = None
+
+    def _pop_orphan(idx):
+        """تنقل الكلمة الوظيفية اليتيمة من آخر السطر idx إن وُجدت.
+
+        ترجع الكلمة المنقولة أو None. لا تنقل شيئًا إن كان السطر
+        كلمة واحدة (حتى لا يُترك سطر فارغ).
+        """
+        nonlocal cur_end
+        line = cur_lines[idx]
+        if len(line) > 1 and _is_function_word(line[-1]["w"]):
+            orphan = line.pop()
+            cur_chars[idx] -= len(orphan["w"]) + 1  # الكلمة + مسافتها
+            if line:
+                cur_end = line[-1]["end"]
+            return orphan
+        return None
 
     for w in words:
         word = (w.get("w") or w.get("word") or "").strip()
@@ -93,34 +139,43 @@ def group_words_into_lines(words, max_chars=28, max_lines=2):
             cur_chars[idx] = chars
             cur_end = end
         elif idx + 1 < max_lines:
-            cur_lines.append([{"w": word, "start": start, "end": end}])
-            cur_chars.append(len(word))
+            orphan = _pop_orphan(idx)
+            new_line = ([orphan] if orphan else []) + [
+                {"w": word, "start": start, "end": end}]
+            cur_lines.append(new_line)
+            cur_chars.append(sum(len(x["w"]) for x in new_line)
+                             + max(0, len(new_line) - 1))
             cur_end = end
         else:
+            orphan = _pop_orphan(idx)
             flush()
-            cur_start = start
-            cur_lines = [[{"w": word, "start": start, "end": end}]]
-            cur_chars = [len(word)]
+            cur_start = orphan["start"] if orphan else start
+            first_line = ([orphan] if orphan else []) + [
+                {"w": word, "start": start, "end": end}]
+            cur_lines = [first_line]
+            cur_chars = [sum(len(x["w"]) for x in first_line)
+                         + max(0, len(first_line) - 1)]
             cur_end = end
     flush()
     return groups
 
 
 def _line_text(line, active_idx, highlight=HIGHLIGHT_COLOR):
-    """سطر كامل مع تمييز الكلمة النشطة (بلون) — بلا {\\kf} (RTL)."""
-    parts = []
-    for i, w in enumerate(line):
-        text = escape_ass_text(w["w"])
-        if i == active_idx:
-            parts.append("{\\c%s}%s{\\r}" % (highlight, text))
-        else:
-            parts.append(text)
-    return " ".join(parts)
+    """سطر كامل بنص سليم — بلا أي تمييز لوني للكلمة النشطة.
+
+    `active_idx` و`highlight` مقبولان لتوافق الواجهة فقط ولا أثر
+    بصريًا لهما حاليًا: التمييز بوسمي {\\c}...{\\r} أُلغي في
+    v0.1.47 لأن libass يعكس ترتيب مقاطع السطر العربي (RTL)
+    المقسّم بهما — انظر توثيق الوحدة والتشخيص في
+    ~/workspace/studio-work/caption-fix/DIAGNOSIS-AR.md.
+    """
+    return " ".join(escape_ass_text(w["w"]) for w in line)
 
 
 def words_to_karaoke_ass(words, font_size=52, max_chars=28, max_lines=2,
                          highlight=HIGHLIGHT_COLOR):
-    """كلمات بتوقيتها → نص ملف ASS كامل (حدث لكل كلمة)."""
+    """كلمات بتوقيتها → نص ملف ASS كامل (حدث لكل كلمة، نص سليم بلا
+    وسوم لون — v0.1.47؛ بنية التوقيت كما هي)."""
     groups = group_words_into_lines(words, max_chars=max_chars,
                                     max_lines=max_lines)
     if not groups:

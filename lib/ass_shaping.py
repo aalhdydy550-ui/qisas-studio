@@ -15,6 +15,13 @@
 - النص المرئي غير فارغ بعد تجريد الوسوم.
 - التفاف: سطر أطول من 70 حرفًا، أو كلمة واحدة أطول من 25 حرفًا،
   يُعلَّم كمشكلة التفاف محتملة (مع ذكر الحد في الرسالة).
+- كلمة وظيفية عربية يتيمة في نهاية سطر مرئي ليس الأخير
+  (kind ‏wrap_orphan_function_word) — تُفحص الأسطر المرئية
+  المقسومة على ‎\\N بعد تجريد الوسوم، كل سطر عدا الأخير.
+- تقسيم تلوين في سطر عربي (‏{\\c}...{\\r}) ‏(kind
+  ‏rtl_highlight_split) — يُفحص على نص Dialogue الخام
+  (مع الوسوم)، لأن تجريد الوسوم يخفي التقسيم الذي يقلب
+  libass ترتيب مقاطعه عند العرض؛ والإنجليزي LTR لا يُعلَّم.
 
 ثنائية اللغة (الجولة v0.1.41): `detect_text_lang` يصنّف
 السطر ar/en/mixed/other بعدّ الحروف العربية مقابل اللاتينية؛
@@ -38,8 +45,19 @@ MAX_WORD_CHARS = 25
 _REPLACEMENT_CHAR = "\ufffd"
 _ARABIC_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
 _TAG_RE = re.compile(r"\{[^}]*\}")
+_COLOUR_TAG_RE = re.compile(r"\{\\c[^}]*\}")
+_RESET_TAG_RE = re.compile(r"\{\\r[^}]*\}")
 _LATIN_RE = re.compile(r"[A-Za-z]")
 _DIGITS = set("0123456789٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹")
+
+# كلمات وظيفية عربية (21 كلمة) لا تُترك يتيمة في نهاية
+# سطر مرئي ليس الأخير — من خطة قاعدة اليتيم.
+_FUNCTION_WORDS = frozenset([
+    "في", "من", "على", "إلى", "عن", "مع", "أو", "ثم", "أن", "إن",
+    "لا", "ما", "كل", "هل", "بل", "قد", "لم", "لن", "بين", "حتى",
+    "منذ", "لدى",
+])
+_ORPHAN_PUNCT = "،؛؟.!"
 
 
 def strip_ass_tags(text):
@@ -47,6 +65,20 @@ def strip_ass_tags(text):
     text = _TAG_RE.sub("", text or "")
     text = text.replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
     return text
+
+
+def _strip_tags_keep_breaks(text):
+    """أزل وسوم ASS مع الإبقاء على فواصل الأسطر ‎\\N (و‎\\n)
+    فواصل — لفحص الأسطر المرئية قبل تسطيحها."""
+    text = _TAG_RE.sub("", text or "")
+    text = text.replace("\\h", " ")
+    return text
+
+
+def _visual_lines(text):
+    """الأسطر المرئية لنص Dialogue: تجريد الوسوم مع الإبقاء
+    على ‎\\N فاصلًا، ثم التقسيم عليه."""
+    return re.split(r"\\[Nn]", _strip_tags_keep_breaks(text))
 
 
 def _count_letters(text):
@@ -151,6 +183,38 @@ def _check_line(text, file_name, line_no):
                                               MAX_WORD_CHARS),
             })
             break
+    # قاعدة اليتيم: كلمة وظيفية في نهاية سطر مرئي ليس الأخير.
+    # تُفحص الأسطر المرئية (التقسيم على ‎\N) لا النص المسطّح،
+    # وكل سطر بقاعدة bidi_applies الخاصة به.
+    visual = _visual_lines(text)
+    for visual_line in visual[:-1]:
+        stripped = visual_line.strip()
+        if not stripped:
+            continue
+        if not classify_line(stripped)["bidi_applies"]:
+            continue
+        words = stripped.split()
+        orphan = words[-1].strip(_ORPHAN_PUNCT)
+        if orphan in _FUNCTION_WORDS:
+            issues.append({
+                "file": file_name, "line_no": line_no,
+                "kind": "wrap_orphan_function_word",
+                "detail": "سطر مرئي ينتهي بالكلمة الوظيفية %r — "
+                          "يتيمة في نهاية السطر (انقلها إلى السطر "
+                          "التالي مع ما بعدها)" % orphan,
+            })
+    # تقسيم التلوين: ‎{\c}...{\r} في سطر عربي يقلب libass
+    # ترتيب مقاطعه عند العرض. يُفحص النص الخام (مع الوسوم)
+    # لأن تجريدها يخفي التقسيم؛ والإنجليزي LTR سليم فلا يُعلَّم.
+    if (_COLOUR_TAG_RE.search(text or "")
+            and _RESET_TAG_RE.search(text or "")
+            and classify_line(visible)["bidi_applies"]):
+        issues.append({
+            "file": file_name, "line_no": line_no,
+            "kind": "rtl_highlight_split",
+            "detail": "سطر عربي يحوي تقسيم تلوين (‎{\\c}...{\\r}) — "
+                      "libass يقلب ترتيب مقاطع السطر عند العرض",
+        })
     return issues
 
 
