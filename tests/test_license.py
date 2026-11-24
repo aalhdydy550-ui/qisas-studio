@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """اختبارات وحدة الترخيص — جولة v0.1.43، بند 2 (شهر مجاني).
 
 كل الاختبارات على مجلد مؤقت عبر QISAS_LICENSE_DIR — لا تلمس
