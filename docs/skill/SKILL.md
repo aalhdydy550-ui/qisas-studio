@@ -1,3 +1,6 @@
+<!-- Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui) -->
+<!-- Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE. -->
+<!-- Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md. -->
 # مهارة وكيل قصص وعبر — توليد فيديو قصة كامل من جملة واحدة
 
 > نسخة الاستوديو: v0.1.39 — أوامر حقيقية فقط من `studio.py`.
