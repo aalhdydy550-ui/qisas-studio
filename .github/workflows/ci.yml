@@ -22,8 +22,13 @@ jobs:
       # TestQaSafeAreaBands بـModuleNotFoundError و3 اختبارات
       # فيديو QA بـ«True is not false» — الفحص يُتخطى بلا
       # numpy فيُرجع qa ‏ok=True.
+      # requirements.txt: الاعتماديات الإلزامية للاستوديو نفسه —
+      # Pillow مثبّتة (13.0.0) وmcp[cli] إلزامية منذ v0.1.49
+      # (tests/test_studio.py يستورد mcp وanyio على مستوى الوحدة،
+      # والـCLI يحتاج mcp للتجميع)؛ غيابها في التشغيل #45666118604
+      # أسقط خطوة Run tests كلها بـModuleNotFoundError عند الجمع.
       - name: Install dependencies
-        run: pip install pyyaml pillow numpy
+        run: pip install pyyaml numpy -r requirements.txt
       # أدوات الفيديو الرخيصة: معظم الاختبارات تستدعي ffmpeg/ffprobe
       # مباشرةً (بلا محاكاة)، فغيابها كان يُسقط ~50 اختبارًا بـ
       # FileNotFoundError. melt خلفية تجميع بديلة — تثبيته
