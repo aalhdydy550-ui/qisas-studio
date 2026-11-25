@@ -199,7 +199,7 @@ def _print_translated(prefix, exc, context, lang="ar"):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.49"
+VERSION = "0.1.51"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
 # مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،
@@ -870,11 +870,14 @@ def cmd_produce(cfg, project, run_dir):
 
 # -------------------------------------------------------------- assemble
 def cmd_assemble(cfg, run_dir, title, out_path, watermark_on=True,
-                 cards_dir=None, grade=None):
+                 cards_dir=None, grade=None, sfx_events=(),
+                 overlays=(), assets_dir=None):
     """تجميع وتصدير، ثم (افتراضيًا) شعار الصفحة أعلى اليمين، ثم
     بطاقات الاقتباس الختامية إن أُعطي مجلدها. البطاقات تحمل الشعار
     أصلًا، فتُلحق بعد الشعار. المدة الكلية المستهدفة 40-60 ثانية:
-    المحتوى 31-51 ثانية + 9 ثوانٍ بطاقات.
+    المحتوى 31-51 ثانية + 9 ثوانٍ بطاقات. الأصول الاختيارية
+    (sfx_events/overlays/assets_dir) تُطبَّق بعد الإنهاء
+    عبر lib/assets.py؛ وبلا أي منها لا يُستدعى شيء.
     """
     manifest_path = os.path.join(run_dir, "manifest.json")
     if not os.path.isfile(manifest_path):
@@ -882,7 +885,7 @@ def cmd_assemble(cfg, run_dir, title, out_path, watermark_on=True,
                                      "produce أولًا: %s" % manifest_path)
     with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
-    assets_dir = os.path.join(run_dir, "assets")
+    concat_assets_dir = os.path.join(run_dir, "assets")
     concat_bin = expand(cfg["concat"]["bin"])
     if not os.path.isfile(concat_bin):
         raise concat_mcp.ConcatError("ثنائي Concat غير موجود: %s"
@@ -894,13 +897,22 @@ def cmd_assemble(cfg, run_dir, title, out_path, watermark_on=True,
     os.makedirs(out_dir, exist_ok=True)
     t0 = time.time()
     out = concat_mcp.assemble(
-        concat_bin, projects_root, project_name, assets_dir, manifest,
-        title, out_path, cfg["video"], log_path)
+        concat_bin, projects_root, project_name, concat_assets_dir,
+        manifest, title, out_path, cfg["video"], log_path)
     print("صُدّر الفيديو: %s (%.0f ثانية تصدير)"
           % (out, time.time() - t0))
     if grade:
         out = _apply_grade(out, grade)
     out = _finish_video(out, watermark_on, cards_dir)
+    if sfx_events or overlays:
+        # أصول اختيارية (مؤثرات/طبقات) في المكان نفسه —
+        # الاستيراد كسول لأن lib/assets.py وحدة اختيارية قد لا
+        # تكون موجودة بعد؛ وبلا أعلام لا يُستدعى apply_assets
+        # إطلاقًا فيبقى سلوك اليوم نفسه.
+        from lib import assets as assets_lib
+        out = assets_lib.apply_assets(
+            out, out, sfx=tuple(sfx_events or ()),
+            overlays=tuple(overlays or ()), assets_dir=assets_dir)
     _write_assemble_manifest(cfg, run_dir, title, out, "concat")
     return out, round(time.time() - t0, 1)
 
@@ -4767,6 +4779,16 @@ def main():
     p.add_argument("--size",
                    help="مقاس الفيديو WxH — الافتراضي 720x1280 (عمودي)؛ "
                         "1280x720 للأفقي (الفيديو الطويل الأسبوعي)")
+    p.add_argument("--sfx", action="append",
+                   help="مؤثر صوتي عند ثانية معينة بصيغة NAME@SECONDS "
+                        "(مثال: whoosh@2.5) — قابل للتكرار")
+    p.add_argument("--overlay", action="append",
+                   choices=["burn", "grain"],
+                   help="طبقة بصرية فوق الفيديو: burn أو grain — "
+                        "قابلة للتكرار")
+    p.add_argument("--assets-dir",
+                   help="مجلد أصول بديل (يتجاوز QISAS_ASSETS_DIR "
+                        "والمجلد الافتراضي)")
     p = sub.add_parser("clean-audio",
                          help="قص صمت الصوت الخام عبر Auto-Editor "
                               "(أبدًا على السرد النهائي)")
@@ -5536,11 +5558,33 @@ def main():
                                       if args.cards_dir else None,
                                       args.grade)
             else:
+                sfx_events = []
+                for spec in args.sfx or []:
+                    if "@" not in spec:
+                        print("صيغة --sfx خاطئة: %s — الصيغة NAME@SECONDS "
+                              "(مثال: whoosh@2.5)" % spec)
+                        return 2
+                    name, _, at = spec.rpartition("@")
+                    try:
+                        seconds = float(at)
+                    except ValueError:
+                        print("صيغة --sfx خاطئة: %s — الزمن يجب أن يكون "
+                              "رقمًا بالثواني (مثال: whoosh@2.5)" % spec)
+                        return 2
+                    if not name or seconds < 0:
+                        print("صيغة --sfx خاطئة: %s — الاسم فارغ أو "
+                              "الزمن سالب (مثال: whoosh@2.5)" % spec)
+                        return 2
+                    sfx_events.append((name, seconds))
                 cmd_assemble(cfg, run_dir, title, expand(args.out),
                              not args.no_watermark,
                              expand(args.cards_dir)
                              if args.cards_dir else None,
-                             args.grade)
+                             args.grade,
+                             sfx_events=sfx_events,
+                             overlays=args.overlay,
+                             assets_dir=expand(args.assets_dir)
+                             if args.assets_dir else None)
         except concat_mcp.ConcatError as e:
             _print_translated("فشل التجميع", e, "assemble")
             return 1

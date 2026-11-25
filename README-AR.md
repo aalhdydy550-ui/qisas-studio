@@ -136,6 +136,14 @@ python3 studio.py assemble --run <RUN_ID> --out ~/workspace/videos/out.mp4 \
 # وتدرج لوني بعد الريندر وقبل الشعار (أي خلفية):
 python3 studio.py assemble --run <RUN_ID> --out ~/workspace/videos/out.mp4 \
     --grade warm
+# وأصول اختيارية (مؤثرات + تراكبان — جولة 0.1.50، والموسيقى أُزيلت في 0.1.51):
+# المؤثرات والتراكبات من مجلد محلي خارج المستودع
+# (~/workspace/studio-work/drive-assets/adapted/ — Mixkit + CC0)،
+# ولا تُنسخ إلى المستودع أبدًا؛ وغيابها يُتخطى بتحذير لا بخطأ.
+python3 studio.py assemble --run <RUN_ID> --out ~/workspace/videos/out.mp4 \
+    --sfx impact@5.0 --overlay burn
+# --sfx قابل للتكرار بصيغة NAME@SECONDS، و--overlay يقبل burn/grain،
+# و--assets-dir يحدد مجلد أصول بديل. بلا هذه الأعلام لا يتغير شيء.
 ```
 
 كل تشغيل ينشئ مجلدًا في `runs/<story>-<وقت>/` فيه:

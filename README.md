@@ -324,6 +324,31 @@ pace (2.5s in youtube-long, 5s in clips) instead of one long frozen
 image. The chapters file accepts `motion`,
 `motion_manifest`, `motion_dir`, and per-chapter `motion_clips`.
 
+### Optional assets (v0.1.50; music removed in 0.1.51)
+
+`assemble` accepts opt-in audio/visual assets from a local assets
+folder — sound effects at chosen timestamps, and film overlays that
+never touch the caption band (the bottom 200 px at 720×1280 stay
+structurally untouched):
+
+```
+python3 studio.py assemble --run <RUN_ID> --out out.mp4 \
+    --sfx impact@5.0 --overlay burn
+```
+
+- `--sfx NAME@SECONDS` (repeatable), `--overlay burn|grain`
+  (repeatable), `--assets-dir PATH` (overrides `QISAS_ASSETS_DIR`
+  and the default folder).
+- The assets live **outside** the repo in
+  `~/workspace/studio-work/drive-assets/adapted/` (Mixkit Free License
+  + one Freesound CC0 file, documented in `ADAPTED-AR.md`) — they are
+  never copied into the repo and never shipped with studio copies, per
+  their license. A missing assets folder or a missing asset is skipped
+  with a warning, never an error.
+- Without these flags nothing changes: the daily publish line renders
+  exactly as before. Making assets a default is a separate decision
+  after the demo is watched and heard.
+
 ### Support the project
 
 If the project saved you time or money, you can support it monthly via
