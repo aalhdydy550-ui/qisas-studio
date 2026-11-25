@@ -304,7 +304,11 @@ def count_gold_pixels(image_path, width):
     im = Image.open(image_path).convert("RGB")
     region = im.crop((width - LOGO_REGION, 0, width, LOGO_REGION))
     gold = 0
-    for r, g, b in region.getdata():
+    # Pillow 13: get_flattened_data() على صورة RGB تُرجع ثلاثية
+    # لكل بكسل (نفس شكل getdata() — «مسطّحة» تعني الصفوف
+    # متتابعة لا القنوات)؛ فهي بديل حرفي هنا، والمنطق الذهبي
+    # أدناه لم يتغيّر. (تحقّق تجريبيًا على Pillow 13.0.0.)
+    for r, g, b in region.get_flattened_data():
         if r >= 150 and g >= 90 and b <= 130 and r - b >= 40:
             gold += 1
     return gold
