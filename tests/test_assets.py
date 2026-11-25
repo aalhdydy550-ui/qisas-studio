@@ -432,6 +432,12 @@ class TestAssets(unittest.TestCase):
         self.assertEqual(BURN_OPACITY, 0.85)
         self.assertEqual(GRAIN_OPACITY, 0.12)
         self.assertEqual(CAPTION_BAND_PX, 200)
+        if not os.path.exists(ADAPTED_MD):
+            # ADAPTED-AR.md وثيقة أصول تعيش خارج الشجرة
+            # (studio-work/) فلا توجد في CI أبدًا — فحص التوثيق
+            # يعمل محليًا فقط، وتأكيدات الثوابت أعلاه تعمل
+            # في كل البيئات.
+            self.skipTest("ADAPTED-AR.md غير موجود في هذه البيئة")
         with open(ADAPTED_MD, encoding="utf-8") as fh:
             doc = fh.read()
         catalog = dict(SFX)
