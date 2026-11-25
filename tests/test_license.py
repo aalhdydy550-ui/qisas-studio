@@ -31,7 +31,12 @@ D31 = date(2026, 12, 1)   # اليوم 31 — منتهية
 
 class LicenseTestBase(unittest.TestCase):
     def setUp(self):
-        self.td = tempfile.mkdtemp()
+        # مجلد مؤقت يُنظَّف صراحةً عبر addCleanup (لا يُترك لجامع
+        # القمامة): mkdtemp() القديم كان يتسرّب على القرص بعد كل
+        # اختبار بلا تنظيف أبدًا.
+        self._td = tempfile.TemporaryDirectory()
+        self.td = self._td.name
+        self.addCleanup(self._td.cleanup)
         self.env = mock.patch.dict(
             os.environ, {lic.LICENSE_DIR_ENV: self.td})
         self.env.start()

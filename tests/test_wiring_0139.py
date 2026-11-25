@@ -94,7 +94,7 @@ def _make_video(path, size="720x1280", seconds=2, gap=None):
 
 class TestVersion0143(unittest.TestCase):
     def test_version_is_0143(self):
-        self.assertEqual(studio.VERSION, "0.1.49")
+        self.assertEqual(studio.VERSION, "0.1.51")
 
 
 class TestJobsWiring(unittest.TestCase):

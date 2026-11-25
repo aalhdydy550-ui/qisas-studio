@@ -36,7 +36,8 @@ class TestBuildPreview(unittest.TestCase):
             self.assertTrue(os.path.isfile(out))
             self.assertEqual(out, os.path.join(td,
                                                "قصة تجريبية-preview.html"))
-            page = open(out, encoding="utf-8").read()
+            with open(out, encoding="utf-8") as fh:
+                page = fh.read()
             self.assertIn("25%", page)
             self.assertIn("50%", page)
             self.assertIn("75%", page)
@@ -56,7 +57,8 @@ class TestBuildPreview(unittest.TestCase):
             _make_video(video, seconds=5)
             out, _result = preview.build_preview(video)
             self.assertEqual(out, os.path.join(td, "v-preview.html"))
-            page = open(out, encoding="utf-8").read()
+            with open(out, encoding="utf-8") as fh:
+                page = fh.read()
             self.assertIn("لم يُحدد كابشن بعد", page)
             self.assertIn("لم يُحدد أول تعليق بعد", page)
 

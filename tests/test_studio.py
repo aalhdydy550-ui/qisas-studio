@@ -586,7 +586,8 @@ class TestConcatArabicFeatures(unittest.TestCase):
             # مجلد مشروع قديم من تجميع سابق بملف داخله
             stale = os.path.join(tmp, "p1", "stale.txt")
             os.makedirs(os.path.dirname(stale))
-            open(stale, "w").write("قديم")
+            with open(stale, "w") as f:
+                f.write("قديم")
             open(os.path.join(tmp, "out.mp4"), "w").close()
             with mock.patch.object(concat_mcp, "MCP", FakeMCP):
                 out = concat_mcp.assemble(
@@ -976,7 +977,8 @@ class TestHeadlessStage(unittest.TestCase):
         from lib import headless_stage
         with tempfile.TemporaryDirectory() as d:
             editor = os.path.join(d, "editor.py")
-            open(editor, "w").write("# fake editor\n")
+            with open(editor, "w") as f:
+                f.write("# fake editor\n")
             out = os.path.join(d, "out.mp4")
 
             class R:
@@ -1003,7 +1005,8 @@ class TestHeadlessStage(unittest.TestCase):
         from lib import headless_stage
         with tempfile.TemporaryDirectory() as d:
             editor = os.path.join(d, "editor.py")
-            open(editor, "w").write("# fake editor\n")
+            with open(editor, "w") as f:
+                f.write("# fake editor\n")
 
             class R:
                 returncode = 1
@@ -1056,7 +1059,8 @@ class TestAutoEdit(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "narration-male", "scene1.wav")
             os.makedirs(os.path.dirname(src))
-            open(src, "wb").write(b"fake")
+            with open(src, "wb") as f:
+                f.write(b"fake")
             with self.assertRaises(autoedit.AutoEditError) as ctx:
                 autoedit.clean_audio(src, os.path.join(d, "out.wav"))
         self.assertIn("سرد نهائي", str(ctx.exception))
@@ -1070,7 +1074,8 @@ class TestAutoEdit(unittest.TestCase):
         from lib import autoedit
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "raw.wav")
-            open(src, "wb").write(b"fake")
+            with open(src, "wb") as f:
+                f.write(b"fake")
             with self.assertRaises(autoedit.AutoEditError):
                 autoedit.clean_audio(src, os.path.join(d, "out.wav"),
                                      threshold=2.0)
@@ -1079,10 +1084,12 @@ class TestAutoEdit(unittest.TestCase):
         from lib import autoedit
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "raw.wav")
-            open(src, "wb").write(b"fake")
+            with open(src, "wb") as f:
+                f.write(b"fake")
             out = os.path.join(d, "clean.wav")
             editor = os.path.join(d, "auto-editor")
-            open(editor, "w").write("# fake\n")
+            with open(editor, "w") as f:
+                f.write("# fake\n")
 
             class R:
                 returncode = 0
@@ -1152,7 +1159,7 @@ class TestMoviePyFx(unittest.TestCase):
         self.assertLessEqual(img.width, 660 + 20)
         # فيها بكسلات نص غير شفافة فعلًا
         alpha = img.split()[3]
-        self.assertGreater(max(alpha.getdata()), 0)
+        self.assertGreater(max(alpha.get_flattened_data()), 0)
         # نص طويل يُصغَّر ليدخل العرض الأقصى
         img2 = moviepy_fx.render_arabic_text_image(
             "عنزة صغيرة هزّت القاهرة كلها والناس ركعوا لها في 1184",
@@ -1343,7 +1350,8 @@ class TestTrim(unittest.TestCase):
         from lib import trim
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "in.mp4")
-            open(src, "wb").write(b"fake")
+            with open(src, "wb") as f:
+                f.write(b"fake")
             with self.assertRaises(trim.TrimError):
                 trim.trim_lossless(src, os.path.join(d, "out.mp4"),
                                    start=0, end=5, duration=5)
@@ -1352,7 +1360,8 @@ class TestTrim(unittest.TestCase):
         from lib import trim
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "in.mp4")
-            open(src, "wb").write(b"fake")
+            with open(src, "wb") as f:
+                f.write(b"fake")
             with self.assertRaises(trim.TrimError):
                 trim.trim_lossless(src, os.path.join(d, "out.mp4"),
                                    start=-1, duration=2)
@@ -1361,7 +1370,8 @@ class TestTrim(unittest.TestCase):
         from lib import trim
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "in.mp4")
-            open(src, "wb").write(b"fake")
+            with open(src, "wb") as f:
+                f.write(b"fake")
             out = os.path.join(d, "out.mp4")
 
             class R:
@@ -1482,7 +1492,8 @@ class TestMltStage(unittest.TestCase):
         from lib import mlt_stage
         with tempfile.TemporaryDirectory() as d:
             mlt_path = os.path.join(d, "proj.mlt")
-            open(mlt_path, "w").write("<mlt/>")
+            with open(mlt_path, "w") as f:
+                f.write("<mlt/>")
             out = os.path.join(d, "out.mp4")
 
             class FakePopen:
@@ -1517,7 +1528,8 @@ class TestMltStage(unittest.TestCase):
         from lib import mlt_stage
         with tempfile.TemporaryDirectory() as d:
             mlt_path = os.path.join(d, "proj.mlt")
-            open(mlt_path, "w").write("<mlt/>")
+            with open(mlt_path, "w") as f:
+                f.write("<mlt/>")
             out = os.path.join(d, "out.mp4")
             killed = []
 
@@ -1563,7 +1575,8 @@ class TestMltStage(unittest.TestCase):
                 os.path.join(d, "filled"), 720, 1280)
             self.assertEqual(sorted(out), ["a.jpg", "b.jpg"])
             for p in out.values():
-                self.assertEqual(Image.open(p).size, (720, 1280))
+                with Image.open(p) as im:
+                    self.assertEqual(im.size, (720, 1280))
 
     def test_prepare_fill_images_missing_source_raises(self):
         from lib import mlt_stage

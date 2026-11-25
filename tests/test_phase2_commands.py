@@ -125,7 +125,8 @@ class TestPreviewCmd(unittest.TestCase):
             self.assertEqual(rc, 0)
             page_path = os.path.join(td, "قصة-preview.html")
             self.assertTrue(os.path.isfile(page_path))
-            page = open(page_path, encoding="utf-8").read()
+            with open(page_path, encoding="utf-8") as fh:
+                page = fh.read()
             self.assertIn("&lt;b&gt;تجريبي&lt;/b&gt;", page)
             self.assertIn("تعليق أول", page)
             self.assertIn("صفحة المعاينة", out)
