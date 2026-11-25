@@ -70,7 +70,14 @@ class TestCiNumpy(unittest.TestCase):
                             "ci.yml")
         with open(path, encoding="utf-8") as fh:
             content = fh.read()
-        self.assertIn("pip install pyyaml pillow numpy", content)
+        # منذ v0.1.49: requirements.txt هي مصدر Pillow وmcp —
+        # السطر الصريح صار pyyaml + numpy فقط + ‎-r requirements.txt.
+        self.assertIn("pip install pyyaml numpy -r requirements.txt",
+                      content)
+        req_path = os.path.join(STUDIO_DIR, "requirements.txt")
+        with open(req_path, encoding="utf-8") as fh:
+            req = fh.read()
+        self.assertIn("Pillow==13.0.0", req)
 
     def test_qa_video_tests_fail_without_numpy(self):
         """انحدار: بلا numpy تفشل اختبارات فيديو QA الثلاثة
