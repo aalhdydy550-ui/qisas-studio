@@ -6,6 +6,9 @@
 **One command turns a short story into a vertical video ready to publish on
 Facebook and YouTube Shorts.**
 
+> ⭐ **If this project saves you time or money, please star it on GitHub** —
+> one click, and it helps others find it.
+
 `studio` is an **orchestration layer only**: it unifies three tools installed
 on the same machine into a single pipeline for short Arabic moral-story
 videos. It contains no code from any of the three tools and does not modify
