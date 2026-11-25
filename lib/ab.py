@@ -91,6 +91,29 @@ def _norm(text):
     return re.sub(r"\s+", " ", (text or "").strip())
 
 
+class HooksResult(tuple):
+    """نتيجة suggest_hooks: (هوك أ، هوك ب، المصدر) + سمة
+    nearest_video — قاموس {hook, title, views, hook_score,
+    similarity} أو None عند غياب الفهرس (فيُحذف الحقل بصمت
+    fail-open). صفّ (tuple) عادي: كل تفكيك قديم
+    `a, b, src = suggest_hooks(...)` يعمل كما هو."""
+
+    def __new__(cls, values, nearest_video=None):
+        obj = super().__new__(cls, tuple(values))
+        obj.nearest_video = nearest_video
+        return obj
+
+
+def _nearest_video(hook_text, index, embed_fn):
+    """أقرب فيديو سابق — أو None (غلاف fail-open)."""
+    try:
+        from lib import story_index as story_index_lib
+    except Exception:
+        return None
+    return story_index_lib.nearest_video_for(
+        hook_text, index=index, embed_fn=embed_fn)
+
+
 def average_units_per_clip(ledger_entries):
     """متوسط الوحدات الفعلية لكل مقطع من قيود سجل التكاليف.
 
@@ -411,10 +434,14 @@ def format_bench(result):
     return "\n".join(lines) + "\n"
 
 
-def suggest_hooks(title, chat_fn=None):
+def suggest_hooks(title, chat_fn=None, index=None, embed_fn=None):
     """اقترح هوكين مختلفين للعنوان: النموذج أولًا، وبديل محلي
     (العنوان نفسه + صيغة سؤال) عند غياب الشبكة. يرجع
-    (هوك أ، هوك ب، المصدر)."""
+    (هوك أ، هوك ب، المصدر) — مع سمة nearest_video (أقرب
+    فيديو سابق من الفهرس عند توفّره، أو None فيُحذف الحقل
+    بصمت fail-open). index/embed_fn (اختياريان — جولة
+    v0.1.48): فهرس فيديوهات (كائن StoryIndex أو مسار) +
+    دالة تضمين — التفعيل صريح، وبلا تمرير لا بحث ولا تكلفة."""
     title = _norm(title)
     if chat_fn is not None:
         prompt = (
@@ -430,10 +457,15 @@ def suggest_hooks(title, chat_fn=None):
             hooks = [l for l in lines
                      if ideas_lib.valid_hook(l)]
             if len(hooks) >= 2 and hooks[0] != hooks[1]:
-                return hooks[0], hooks[1], "omniroute"
+                return HooksResult(
+                    (hooks[0], hooks[1], "omniroute"),
+                    nearest_video=_nearest_video(
+                        title, index, embed_fn))
         except Exception:
             pass
-    return title, title + _LOCAL_HOOK_B_SUFFIX, "local"
+    return HooksResult(
+        (title, title + _LOCAL_HOOK_B_SUFFIX, "local"),
+        nearest_video=_nearest_video(title, index, embed_fn))
 
 
 def suggest_hooks_n(title, chat_fn=None, n=3):
@@ -482,13 +514,27 @@ def suggest_hooks_n(title, chat_fn=None, n=3):
     return hooks[:n], src
 
 
-def score_hooks(hooks, story_text=None):
+def score_hooks(hooks, story_text=None, index=None, embed_fn=None):
     """درجة DNA لكل هوك عبر dna.score_hook الموجود (جدول
     maquina 0–10). يرجع قائمة قواميس score_hook بنفس ترتيب
-    الإدخال؛ كل قاموس فيه hook/total/max/breakdown/verdict."""
+    الإدخال؛ كل قاموس فيه hook/total/max/breakdown/verdict —
+    وعند توفّر فهرس فيديوهات (index/embed_fn — جولة v0.1.48)
+    يُضاف لكل قاموس حقل "nearest_video" {hook, title, views,
+    hook_score, similarity} لأقرب فيديو سابق للهوك، وعند
+    غياب الفهرس يُحذف الحقل بصمت (fail-open) بلا تغيير في
+    باقي المخرجات."""
     from lib import dna
-    return [dna.score_hook(h, story_text=story_text)
-            for h in (hooks or [])]
+    out = []
+    for h in (hooks or []):
+        score = dict(dna.score_hook(h, story_text=story_text))
+        # يُبحث فقط عند تمرير index/embed_fn صراحةً (التفعيل
+        # صريح — بلا تمرير لا بحث ولا تكلفة)؛ وبلا فهرس
+        # يُحذف الحقل بصمت (nearest_video_for ترجع None).
+        nearest = _nearest_video(h, index, embed_fn)
+        if nearest:
+            score["nearest_video"] = nearest
+        out.append(score)
+    return out
 
 
 def create_ab_variants(video, hooks, out_dir, title=None,

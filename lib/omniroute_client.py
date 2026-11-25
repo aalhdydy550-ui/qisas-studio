@@ -88,6 +88,17 @@ GEMINI_LITE_DEFAULT_MODEL = "gemini-3.1-flash-lite"
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 OLLAMA_DEFAULT_MODEL = "qwen2.5:7b"
 
+# نموذج تضمين Ollama الافتراضي (جولة v0.1.48 — فهرس القصص):
+# bge-m3 — متعدد اللغات قوي (1024 بُعدًا، ~1.2GB)، ويعمل
+# على CPU. اختير بعد معايرة حية ضد nomic-embed-text على
+# القصص الحقيقية نفسها (انظر lib/story_index.py): ‏bge-m3
+# يفصل شبه المكررة (0.75–0.80) عن المختلف (≤0.53)، بينما
+# ‏nomic-embed-text خلطهما (شبه مكررة 0.91 مقابل قصة مختلفة
+# 0.90). الاسم والحجم متحقق منهما حيًا بـ `ollama list` في
+# هذه الجولة — لا من الذاكرة. يُمرَّر صراحةً عبر وسيط model
+# في embed_ollama.
+OLLAMA_DEFAULT_EMBED_MODEL = "bge-m3"
+
 # أنماط تصنيف أخطاء LLM: حصة (429/402) مقابل مصادقة (401/403)
 # مقابل خادم (5xx) مقابل شبكة — التصنيف يقرر التهدئة.
 _QUOTA_PATTERNS = ("429", "402", "rate limit", "rate_limit", "quota",
@@ -426,6 +437,60 @@ def chat_ollama(prompt, model=OLLAMA_DEFAULT_MODEL,
         raise OmniRouteError("رد غير متوقع من Ollama: %s"
                              % str(data)[:300])
     return content.strip()
+
+
+def embed_ollama(text, model=OLLAMA_DEFAULT_EMBED_MODEL,
+                 base_url=OLLAMA_DEFAULT_BASE_URL, timeout=120):
+    """تضمين نص واحد عبر Ollama المحلي (POST /api/embed).
+    يرجع قائمة أعداد عشرية (المتجه).
+
+    على نمط chat_ollama تمامًا: نفس معالجة base_url/model/
+    timeout والأخطاء — خادم متوقف (URLError) أو موديل غير
+    مثبّت (HTTP 404) = OmniRouteError برسالة عربية واضحة
+    (تُصنَّف network / not_found — بلا تهدئة) فيتخطاه
+    المستدعي بهدوء (فهرس القصص fail-open)، ولا يكسر أي
+    سلسلة أبدًا. بلا مفاتيح ولا حسابات.
+    """
+    base_url = (base_url or OLLAMA_DEFAULT_BASE_URL).rstrip("/")
+    model = (model or OLLAMA_DEFAULT_EMBED_MODEL).strip()
+    text = (text or "").strip()
+    if not text:
+        raise OmniRouteError("نص التضمين فارغ")
+    body = json.dumps({
+        "model": model,
+        "input": text,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        base_url + "/api/embed",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:400]
+        if e.code == 404:
+            raise OmniRouteError(
+                "الموديل %s غير موجود في Ollama — نزّله بـ: "
+                "ollama pull %s (%s)"
+                % (model, model, detail or "model not found"))
+        raise OmniRouteError("HTTP %s من Ollama: %s"
+                             % (e.code, detail or "بلا تفاصيل"))
+    except urllib.error.URLError as e:
+        raise OmniRouteError(
+            "خادم Ollama غير متاح على %s — شغّله بـ: ollama "
+            "serve (%s)" % (base_url, e.reason))
+    try:
+        embeddings = data["embeddings"]
+        vector = embeddings[0]
+    except (KeyError, IndexError, TypeError):
+        raise OmniRouteError("رد غير متوقع من Ollama: %s"
+                             % str(data)[:300])
+    if not isinstance(vector, list) or not vector:
+        raise OmniRouteError("رد غير متوقع من Ollama: %s"
+                             % str(data)[:300])
+    return [float(v) for v in vector]
 
 
 def ollama_status(base_url=OLLAMA_DEFAULT_BASE_URL,

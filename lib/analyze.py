@@ -197,14 +197,52 @@ def _like_rate(likes, views):
     return likes / views
 
 
-def suggest(fb, yt):
+class Suggestions(list):
+    """قائمة اقتراحات تحمل حقل «أقرب فيديو سابق».
+
+    قائمة عادية (كل كود قديم يعمل عليها كما هو) + سمة
+    nearest_video: قاموس {hook, title, views, hook_score,
+    similarity} أو None عند غياب الفهرس — فيُحذف الحقل
+    بصمت (fail-open) بلا تغيير في باقي المخرجات.
+    """
+
+    def __init__(self, tips, nearest_video=None):
+        super().__init__(tips)
+        self.nearest_video = nearest_video
+
+
+def _nearest_video_for_suggest(fb, yt, index, embed_fn):
+    """أقرب فيديو سابق لآخر فيديو (عنوان يوتيوب أو كابشن
+    فيسبوك) — أو None. غلاف fail-open: أي فشل يرجع None."""
+    query = None
+    if yt and (yt.get("title") or "").strip():
+        query = yt["title"].strip()
+    elif fb and (fb.get("caption") or "").strip():
+        query = fb["caption"].strip()
+    if not query:
+        return None
+    try:
+        from lib import story_index as story_index_lib
+    except Exception:
+        return None
+    return story_index_lib.nearest_video_for(
+        query, index=index, embed_fn=embed_fn)
+
+
+def suggest(fb, yt, index=None, embed_fn=None):
     """اقتراحات تحسين (2–3) مشتقة من الأرقام — بلا قوالب عامة.
 
     fb/yt: قاموسا الأرقام أو None (المصدر غير معروف).
+    index/embed_fn (اختياريان — جولة v0.1.48): فهرس فيديوهات
+    سابقة (كائن StoryIndex أو مسار) + دالة تضمين — التفعيل
+    صريح، وبلا تمرير لا بحث ولا تكلفة؛ عند توفّر أقرب فيديو
+    سابق يُلحق سطر «أقرب فيديو سابق: …» بالاقتراحات ويظهر في
+    سمة nearest_video — وعند غيابه يُحذف الحقل بصمت بلا
+    تغيير في باقي الاقتراحات (fail-open).
     """
     if fb is None and yt is None:
-        return ["لا أرقام متاحة من فيسبوك أو يوتيوب — تعذّرت قراءة "
-                "المنصتين، فلا اقتراحات مبنية على أرقام."]
+        return Suggestions(["لا أرقام متاحة من فيسبوك أو يوتيوب — تعذّرت قراءة "
+                "المنصتين، فلا اقتراحات مبنية على أرقام."])
     tips = []
     fb_views = (fb or {}).get("views") if fb else None
     fb_comments = (fb or {}).get("comments") if fb else None
@@ -245,7 +283,21 @@ def suggest(fb, yt):
     if not tips:
         tips.append("الأرقام جيدة — واصل نفس الصيغة (هوك صادم، عبرة "
                     "في أول تعليق، وسؤال محيّر في الختام).")
-    return tips[:3]
+    tips = tips[:3]
+    nearest = _nearest_video_for_suggest(fb, yt, index, embed_fn)
+    if nearest:
+        views = nearest.get("views")
+        views_txt = ("%s مشاهدة" % views) if views is not None \
+            else "مشاهدات غير معروفة"
+        hook_score = nearest.get("hook_score")
+        score_txt = (" — درجة الهوك %s" % hook_score) \
+            if hook_score is not None else ""
+        tips.append("أقرب فيديو سابق: «%s» (%s — %s، تشابه %.2f%s)"
+                    % (nearest.get("hook") or nearest.get("title") or "؟",
+                       nearest.get("title") or "بلا عنوان",
+                       views_txt, nearest.get("similarity") or 0.0,
+                       score_txt))
+    return Suggestions(tips, nearest_video=nearest)
 
 
 def format_value(value):

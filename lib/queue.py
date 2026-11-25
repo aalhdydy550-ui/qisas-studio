@@ -361,13 +361,95 @@ def publish_summary(entries):
     return summary
 
 
+def _resolve_story_index(story_index, embed_fn):
+    """حلّ فهرس التشابه لخطاف add_story — أو None إن لم يوجد.
+
+    التفعيل صريح: يُفحص فقط عند تمرير story_index (كائن
+    StoryIndex أو مسار مجلد) — وبلا تمرير يُرجع None فلا
+    فحص ولا تكلفة ولا إنشاء مجلدات، ويعمل add_story كما كان
+    تمامًا. استيراد كسول: lib.queue تبقى قابلة للاستيراد
+    حتى لو تعذّر استيراد طبقة الفهرس.
+    """
+    try:
+        from lib import story_index as story_index_lib
+    except Exception:
+        return None
+    try:
+        return story_index_lib.resolve_index(story_index, embed_fn)
+    except Exception:
+        return None
+
+
+def _check_similar_story(title, text, index):
+    """فحص شبه التكرار قبل الإضافة — يرجع (نتيجة، ملاحظة).
+
+    index: كائن StoryIndex محلول مسبقًا (أو None = تخطَّ
+    الفحص بصمت). نتيجة: {"checked": True, "best_score":
+    float|None, "best_title": str|None} عند نجاح الفحص، أو
+    None عند التخطي/التعذّر. ملاحظة: سطر عربي واحد عند
+    fail-open (الفهرس/التضمين غير متاح) — تُعرض في نتيجة
+    الإضافة ولا تمنعها. أي استثناء من الفهرس/التضمين يُبتلع
+    هنا عمدًا (fail-open) — الفحص مساعِد لا بوابة.
+    """
+    if index is None:
+        return None, None
+    if not getattr(index, "available", False):
+        return None, ("تعذّر فحص التشابه (مكتبة qdrant_client غير "
+                      "مثبّتة) — أُضيفت القصة دون فحص")
+    try:
+        from lib import story_index as story_index_lib
+        hits = index.find_similar(
+            title + "\n" + text,
+            threshold=story_index_lib.SIMILARITY_THRESHOLD)
+    except Exception:
+        return None, ("تعذّر فحص التشابه (الفهرس أو التضمينات "
+                      "غير متاحة) — أُضيفت القصة دون فحص")
+    if hits:
+        best = hits[0]
+        return ({"checked": True,
+                 "best_score": best.get("score"),
+                 "best_title": best.get("title")},
+                None)
+    return {"checked": True, "best_score": None,
+            "best_title": None}, None
+
+
 def add_story(queue_path, title, text, parts=1, note=None,
-              stories_dir=None):
+              stories_dir=None, story_index=None, embed_fn=None):
     """أضف قصة إلى ملف الطابور. يرجع {"number", "title", "text_file"}.
 
     يرفع QueueError عند: عنوان فارغ، نص فارغ، عنوان مكرر، عدد
     أجزاء غير صالح، أو مجلد نصوص غير قابل للكتابة. ملف طابور
     غائب يُنشأ بالهيكل المعتاد بدل الرفض.
+
+    خطاف شبه التكرار (جولة v0.1.48 — فهرس Qdrant المحلي):
+    بعد فحص التكرار الحرفي، إن مُرِّر فهرس (story_index:
+    كائن StoryIndex أو مسار مجلد، مع embed_fn اختياريًا)
+    يُضمَّن النص الجديد ويُبحث عن شبيه؛ وأفضل تشابه فوق
+    عتبة 0.70 يرفع QueueError يسمّي القصة الموجودة والدرجة —
+    والرفض قبل أي كتابة فلا يبقى أثر. وإن تعذّر الفهرس/
+    التضمين تُتابع الإضافة (fail-open) مع سطر ملاحظة واحد
+    في النتيجة ("index_note"). والقصة المضافة تُفهرس
+    (best-effort) بعد نجاح الكتابة. بلا story_index ممرَّر
+    يُتخطى الفحص بصمت بلا أي تكلفة — فالمسار القديم (بلا
+    فهرس) يعمل كما كان تمامًا، والتوصيل في studio.py
+    (مالك المنسّق) بتمرير الفهرس الافتراضي صراحةً.
+
+    سلوك المستدعين عند رفض شبه مكرر (QueueError — مُتحقق
+    بالقراءة، لا تعديل عليهم في هذه الجولة):
+    - cmd_queue_add (studio.py): يمسك QueueError → يطبع
+      «رفضت الإضافة: …» ويرجع 1 — رفض نظيف بلا أي كتابة.
+    - request_flow._default_queue_add: يغلّف QueueError في
+      RequestFlowError («تعذّر حفظ القصة في الطابور: …») —
+      طلب العميل يفشل قبل أي تشغيل إنتاج، بلا قصة نصف
+      محفوظة وبلا فيديو.
+    - ideas.add_idea: يمرّر QueueError كما هو إلى أمر ideas
+      في studio.py الذي يمسكه → «رفضت الإضافة: …» ويرجع 1.
+    - queue_import.import_story: يمرّر QueueError إلى أمر
+      queue import الذي يمسكه → «فشل الاستيراد: …» ويرجع 1؛
+      تنبيه: الأجزاء السابقة للجزء المرفوض تبقى مضافة
+      (استيراد جزئي) لأن الإضافة تتم جزءًا جزءًا — فحص
+      الاستيراد الكامل قبل أي إضافة عمل مستقبلي لا هذه الجولة.
 
     إصلاح اختراق 2026-11-22: الإضافة كانت قراءة-تعديل-كتابة
     بلا قفل وبلا ذرية — إضافتان متوازيتان فقدتا إحداهما (أُثبت
@@ -400,13 +482,14 @@ def add_story(queue_path, title, text, parts=1, note=None,
             fcntl.flock(lock_f, fcntl.LOCK_EX)
             try:
                 return _add_story_locked(queue_path, title, text,
-                                         parts, note, stories_dir)
+                                         parts, note, stories_dir,
+                                         story_index, embed_fn)
             finally:
                 fcntl.flock(lock_f, fcntl.LOCK_UN)
 
 
 def _add_story_locked(queue_path, title, text, parts, note,
-                      stories_dir):
+                      stories_dir, story_index=None, embed_fn=None):
     """جسم الإضافة — يُستدعى والقفل ممسوك."""
     if not os.path.isfile(queue_path):
         content = "# طابور قصص\n\n## في الانتظار\n\n"
@@ -418,6 +501,21 @@ def _add_story_locked(queue_path, title, text, parts, note,
         if _norm_title(e["title"]) == title:
             raise QueueError("القصة موجودة أصلًا في الطابور (رقم %d): %s"
                              % (e["number"], title))
+    # خطاف شبه التكرار (قبل أي كتابة): شبه مكرر فوق العتبة
+    # يرفض هنا فلا يُكتب نص ولا سطر — انظر _check_similar_story.
+    # الفهرس يُحلّ مرة واحدة ويُعاد استخدامه للفهرسة بعد الكتابة
+    # (عميل Qdrant محلي واحد لنفس المسار).
+    index = _resolve_story_index(story_index, embed_fn)
+    similarity, index_note = _check_similar_story(title, text, index)
+    if similarity and similarity.get("best_score") is not None:
+        from lib import story_index as story_index_lib
+        if similarity["best_score"] >= \
+                story_index_lib.SIMILARITY_THRESHOLD:
+            raise QueueError(
+                "قصة شبه مكررة (تشابه %.2f) مع القصة الموجودة "
+                "«%s» — راجعها قبل الإضافة"
+                % (similarity["best_score"],
+                   similarity.get("best_title") or "؟"))
     number = max((e["number"] for e in entries), default=0) + 1
     # حفظ نص القصة الكامل بجانب studio (لا داخل ملف الطابور).
     text_file = None
@@ -458,7 +556,25 @@ def _add_story_locked(queue_path, title, text, parts, note,
                 break
     lines.insert(insert_at, new_line)
     _write_atomic(queue_path, "\n".join(lines) + "\n")
-    return {"number": number, "title": title, "text_file": text_file}
+    result = {"number": number, "title": title,
+              "text_file": text_file}
+    if similarity is not None:
+        result["similarity"] = similarity
+    if index_note:
+        result["index_note"] = index_note
+    # فهرسة القصة المضافة (best-effort بعد نجاح الكتابة):
+    # فشل الفهرسة لا يتراجع عن إضافة ناجحة — سطر ملاحظة فقط.
+    if index is not None and getattr(index, "available", False):
+        try:
+            if index.index_story(title, text) is None \
+                    and not index_note:
+                result["index_note"] = (
+                    "تعذّرت فهرسة القصة الجديدة — أُضيفت دون فهرسة")
+        except Exception:
+            if not index_note:
+                result["index_note"] = (
+                    "تعذّرت فهرسة القصة الجديدة — أُضيفت دون فهرسة")
+    return result
 
 
 def _write_atomic(path, text):
