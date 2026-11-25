@@ -97,7 +97,8 @@ Vertical 720×1280 video ready to publish
 **Earning**
 - A ready client-order system: a "request a video" page — the client writes
   a description and the system generates the video automatically. The first
-  10 orders per client are free; payment is required from the 11th.
+  30 days are free for each new client, with no limit on the number of
+  orders; payment is required after that.
 - Free-API-key tooling (`studio/free-keys/`): catalogue and safe setup for
   free Groq, OpenRouter, and HuggingFace keys.
 
@@ -251,6 +252,20 @@ forever: run with `--noncommercial` (before the command) to declare it,
 e.g. `python3 studio.py --noncommercial run --demo`. The studio owner's
 own install is exempt as licensor.
 
+### Star gate (v0.1.48)
+
+Before the production commands (`run`, `produce`, `assemble`, `publish`,
+`batch`, `daily`, `long-video`, `client-run`) the studio checks once that
+you starred this repository on GitHub — via the public GitHub API, no
+token, and the positive result is cached locally (`~/.qisas-studio/star.json`)
+so it is asked only once. `doctor`, `license`, `--help`, and `--dry-run`
+are never gated, and the studio owner's own install is exempt as licensor.
+Be honest about what it does **not** do: it cannot prevent cloning — `git
+clone` works without any account. If GitHub is unreachable with no cached
+result, it warns and lets the run proceed (fail-open, documented in
+`lib/star_gate.py`), and re-checks on the next online run. Tests can
+disable it with `QISAS_SKIP_STAR_CHECK=1` (tests only).
+
 ### On-demand video requests
 
 `python3 studio.py request "a topic or a full story"` — a full story text
@@ -260,6 +275,19 @@ in the page's style, saved to the queue, and produced with the current
 pipeline. Without a ready OpenMontage project the request ends honestly
 as `queued` (story saved, number known) — building a project from free
 text is not supported yet.
+
+### Story index (local, optional — v0.1.48)
+
+`queue add` refuses a semantically near-duplicate story (cosine ≥ 0.70)
+instead of adding it, and `analyze` / `ab` show the «nearest previous
+video» when one exists. The index is a local-only Qdrant collection
+(`runs/story-index/`, no server, no Docker, no cloud) with embeddings
+from local Ollama (`POST /api/embed`, default model `bge-m3`, 1024 dims).
+`qdrant-client` is an optional dependency: install it with
+`pip install qdrant-client` to enable the index; without it (or without
+Ollama) every command works exactly as before (fail-open). Threshold
+calibration (live, bge-m3): near-duplicates 0.75–0.80, different topics
+0.49–0.53, unrelated 0.28–0.42.
 
 ### Second narrator voice (optional)
 

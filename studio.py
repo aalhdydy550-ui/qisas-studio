@@ -145,6 +145,7 @@ from lib import analyze
 from lib import insights
 from lib import help_ar
 from lib import license as license_lib
+from lib import star_gate as star_gate_lib
 from lib import request_flow
 from lib import check as check_lib
 from lib import fix_audio as fix_audio_lib
@@ -198,7 +199,7 @@ def _print_translated(prefix, exc, context, lang="ar"):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.47"
+VERSION = "0.1.48"
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
 # مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،
@@ -2988,19 +2989,31 @@ def cmd_queue_add(cfg, title, text_file, parts=1, note=None,
         print("تعذر قراءة ملف نص القصة: %s" % e)
         return 1
     stories_dir = os.path.join(STUDIO_DIR, "queue")
+    # توصيل فهرس القصص الدلالي (جولة v0.1.48): يُمرَّر صراحةً —
+    # بلا qdrant-client أو Ollama يرجع get_default_index() ‏None
+    # فلا فحص (fail-open)؛ وشبه مكرر فوق العتبة يرفضه add_story
+    # بـQueueError قبل أي كتابة.
+    from lib import story_index as story_index_lib
+    _index = story_index_lib.get_default_index()
     try:
         result = queue_lib.add_story(queue_path, title, text, parts=parts,
-                                     note=note, stories_dir=stories_dir)
+                                     note=note, stories_dir=stories_dir,
+                                     story_index=_index)
     except queue_lib.QueueError as e:
         print("رفضت الإضافة: %s" % e)
         return 1
     except OSError as e:
         print("فشل الكتابة في ملف الطابور: %s" % e)
         return 1
+    finally:
+        if _index is not None:
+            _index.close()
     print("أُضيفت القصة رقم %d إلى الطابور: %s"
           % (result["number"], result["title"]))
     if result["text_file"]:
         print("نص القصة محفوظ في: %s" % result["text_file"])
+    if result.get("index_note"):
+        print(result["index_note"])
     return 0
 
 
@@ -3139,7 +3152,18 @@ def cmd_analyze(cfg, page_id=None, channel_id=None, dna=False,
     else:
         print("غير معروف — %s" % (yt_note or "تعذرت القراءة"))
     print("-- ما يُحسَّن في الفيديو التالي --")
-    for i, tip in enumerate(analyze.suggest(fb, yt), 1):
+    # توصيل فهرس الفيديوهات (جولة v0.1.48): يُمرَّر صراحةً إلى
+    # suggest() مرة واحدة ويُعاد استخدام نتيجته في الطباعة
+    # وملف JSON؛ وبلا qdrant-client أو Ollama يرجع None
+    # فيُحذف سطر «أقرب فيديو سابق» بصمت (fail-open).
+    from lib import story_index as story_index_lib
+    _index = story_index_lib.get_default_index()
+    try:
+        _suggestions = analyze.suggest(fb, yt, index=_index)
+    finally:
+        if _index is not None:
+            _index.close()
+    for i, tip in enumerate(_suggestions, 1):
         print("%d. %s" % (i, tip))
     runs_dir = expand(cfg["paths"]["runs_dir"])
     os.makedirs(runs_dir, exist_ok=True)
@@ -3150,7 +3174,7 @@ def cmd_analyze(cfg, page_id=None, channel_id=None, dna=False,
                    "snapshot_file": _snapshot_path,
                    "facebook": fb, "facebook_note": fb_note,
                    "youtube": yt, "youtube_note": yt_note,
-                   "suggestions": analyze.suggest(fb, yt)},
+                   "suggestions": _suggestions},
                   f, ensure_ascii=False, indent=2)
     print("حُفظ التحليل في: %s" % out_path)
     print("حُفظت اللقطة الخام في: %s" % _snapshot_path)
@@ -3892,11 +3916,27 @@ def cmd_ab(cfg, video, hook_a=None, hook_b=None, title=None,
             _ab2_llm["model"] = _model
             return text
 
-        sug_a, sug_b, src = ab_lib.suggest_hooks(
-            title or os.path.basename(video), chat_fn)
+        # توصيل فهرس الفيديوهات (جولة v0.1.48): يُمرَّر صراحةً؛
+        # وبلا qdrant-client أو Ollama يُحذف «أقرب فيديو سابق»
+        # بصمت (fail-open).
+        from lib import story_index as story_index_lib
+        _index = story_index_lib.get_default_index()
+        try:
+            _hooks = ab_lib.suggest_hooks(
+                title or os.path.basename(video), chat_fn, index=_index)
+        finally:
+            if _index is not None:
+                _index.close()
+        sug_a, sug_b, src = _hooks
         hook_a = hook_a or sug_a
         hook_b = hook_b or sug_b
         print("الهوكان المقترحان (%s)" % src)
+        _nv = getattr(_hooks, "nearest_video", None)
+        if _nv:
+            print("أقرب فيديو سابق: «%s» (%s — تشابه %.2f)"
+                  % (_nv.get("hook") or _nv.get("title") or "؟",
+                     _nv.get("title") or "بلا عنوان",
+                     _nv.get("similarity") or 0.0))
     try:
         record = ab_lib.create_ab(expand(video), hook_a, hook_b,
                                   runs_dir, title=title,
@@ -4476,6 +4516,16 @@ def cmd_logs(cfg, today=True, limit=20):
 # مدفوع. الأوامر غير المذكورة هنا (قراءة/تشخيص/صيانة/إعداد)
 # معفاة ولا تبدأ ساعة التجربة. `run --demo` معفى أيضًا (طريق
 # التقييم للمستخدم الجديد) — يُفحص في main() لا هنا.
+# الأوامر المُبوَّبة بالنجمة (جولة v0.1.48): الثمانية فقط —
+# run/produce/assemble/publish/batch/daily/long-video/client-run.
+# تُتخطى البوابة مع --dry-run؛ وتسري بغض النظر عن --noncommercial
+# (ليست بوابة تجارية). doctor/license/--help بلا بوابة بطبيعتها.
+STAR_GATED_COMMANDS = frozenset((
+    "run", "produce", "assemble", "publish", "batch", "daily",
+    "long-video", "client-run",
+))
+
+
 COMMERCIAL_COMMANDS = frozenset((
     "run", "produce", "assemble", "long-video", "long-narration",
     "daily", "batch", "run-queue", "publish", "schedule",
@@ -5345,13 +5395,6 @@ def main():
     except ValueError as e:
         print(i18n_lib.t("main_bad_value", lang, e))
         return 2
-    if args.cmd == "run":
-        if args.demo and (args.story or args.project):
-            print(i18n_lib.t("main_demo_conflict", lang))
-            return 2
-        if not args.demo and not (args.story and args.project and args.out):
-            print(i18n_lib.t("main_run_needs", lang))
-            return 2
     # doctor يقرأ الحالة الخام بلا إصلاح (وظيفته الإبلاغ لا الإصلاح).
     if args.cmd != "doctor":
         _ensure_environment()  # إصلاح ذاتي: أعد الأدوات/الخدمة إن غابتا
@@ -5371,6 +5414,26 @@ def main():
             if not allowed:
                 print(msg)
                 return 1
+
+    # بوابة النجمة (جولة v0.1.48): الأوامر الثمانية في
+    # STAR_GATED_COMMANDS فقط — تُتخطى مع --dry-run، وتسري
+    # بغض النظر عن --noncommercial (ليست بوابة تجارية).
+    # عند الرفض تطبع check_star_gate الرسالة العربية وتخرج 1.
+    if args.cmd in STAR_GATED_COMMANDS \
+            and not getattr(args, "dry_run", False):
+        if not star_gate_lib.check_star_gate():
+            return 1
+
+    # تحقق وسائط run — بعد البوابتين عمدًا (جولة v0.1.48):
+    # حتى يُقيَّم فحص النجمة ويُطبع تحذير fail-open قبل الخروج
+    # برمز 2 عند نقص الوسائط، بدل تجاوز البوابة بصمت.
+    if args.cmd == "run":
+        if args.demo and (args.story or args.project):
+            print(i18n_lib.t("main_demo_conflict", lang))
+            return 2
+        if not args.demo and not (args.story and args.project and args.out):
+            print(i18n_lib.t("main_run_needs", lang))
+            return 2
 
     if args.cmd == "doctor":
         return cmd_doctor(cfg, fix=args.fix, accounts_flag=args.accounts,
