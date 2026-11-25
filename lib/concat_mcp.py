@@ -4,132 +4,182 @@
 # Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
 """تجميع Concat — طبقة التجميع النهائي في studio.
 
-يقود خادم Concat بلا شاشة (`concat --mcp headless`) عبر MCP/stdin
-بنفس تسلسل الاستدعاءات المثبت في اختبار Concat (مشروع عمودي، استيراد
-وسائط، تسلسل صور، مسار صوتي، عنوان هوك، كتابة متزامنة، حفظ، تصدير).
+يقود خادم Concat بلا شاشة (`concat --mcp headless`) عبر عميل MCP
+الرسمي (حزمة `mcp`) فوق stdio، بنفس تسلسل الاستدعاءات المثبت في
+اختبار Concat (مشروع عمودي، استيراد وسائط، تسلسل صور، مسار صوتي،
+عنوان هوك، كتابة متزامنة، حفظ، تصدير).
 
 تحسين عن الاختبار الأول: الكتابة والعنوان بحدود سوداء (strokeWidth)
 لتكون مقروءة فوق الصور الفاتحة.
 """
 import json
 import os
-import select
 import shutil
-import subprocess
-import time
+
+# الاستيراد الكسول لـ mcp/anyio (انظر _ensure_mcp أدناه): استيرادهما
+# أعلى الوحدة كان يكسر اختبارات البيئة العارية (test_ci_skips
+# وtest_publish) — فعملياتها الفرعية تعمل بـHOME مؤقت بلا
+# site-packages للمستخدم، و`import studio` يجب أن ينجح فيها بلا
+# mcp. تُستوردان عند أول استخدام فعلي (assemble أو دخول MCP)،
+# وتُرفع ConcatError واضحة إن غابتا. الأسماء الأربعة تبقى سمات
+# على مستوى الوحدة لتحافظ اختبارات TestMcpClientConnect على نقطة
+# الترقيع نفسها (mock.patch.object(concat_mcp, "Client", ...)).
+anyio = None
+Client = None
+StdioServerParameters = None
+MCPError = None
+
+
+def _ensure_mcp():
+    """استورد mcp/anyio عند أول حاجة إليهما (لا عند استيراد الوحدة).
+
+    لا يكتب فوق اسم رقّعه اختبار (Client وهمي مثلًا) — يُستورد
+    فقط ما ما زال None. يرفع ConcatError واضحة إن غابت الحزمة.
+    """
+    global anyio, Client, StdioServerParameters, MCPError
+    if (anyio is None or Client is None
+            or StdioServerParameters is None or MCPError is None):
+        try:
+            import anyio as _anyio
+            from mcp import Client as _Client
+            from mcp import StdioServerParameters as _Params
+            from mcp.shared.exceptions import MCPError as _MCPError
+        except ImportError as exc:
+            raise ConcatError(
+                "حزمة mcp غير مثبّتة — ثبّت المتطلبات: "
+                "pip install -r requirements.txt (mcp[cli]==2.3.0)"
+            ) from exc
+        if anyio is None:
+            anyio = _anyio
+        if Client is None:
+            Client = _Client
+        if StdioServerParameters is None:
+            StdioServerParameters = _Params
+        if MCPError is None:
+            MCPError = _MCPError
 
 
 class ConcatError(Exception):
     pass
 
 
+# الأدوات الـ12 التي يستدعيها assemble() فعليًا، بترتيب الاستدعاء.
+EXPECTED_TOOLS = [
+    "project_create", "timeline_read", "media_import",
+    "clips_add_sequence", "track_add", "clip_add", "title_add",
+    "clip_update", "captions_add", "project_save", "export_start",
+    "export_wait",
+]
+
+
 class MCP:
+    """عميل Concat عبر الـSDK الرسمي (`mcp`).
+
+    مدير سياق غير متزامن: الدخول يطلق الخادم (`concat --mcp headless`)
+    ويتفاوض على البروتوكول ويتحقق من الأدوات الـ12؛ والخروج يغلق
+    العميل وملف السجل.
+    """
+
     def __init__(self, concat_bin, log_path):
+        self.concat_bin = concat_bin
+        self.log_path = log_path
+        self.client = None
+        self.log = None
+        self._client = None
+
+    async def __aenter__(self):
+        _ensure_mcp()
+        params = StdioServerParameters(
+            command=self.concat_bin, args=["--mcp", "headless"])
+        self._client = Client(params, read_timeout_seconds=300)
         try:
-            self.proc = subprocess.Popen(
-                [concat_bin, "--mcp", "headless"],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, bufsize=0)
-        except FileNotFoundError:
-            raise ConcatError("ثنائي Concat غير موجود: %s" % concat_bin)
-        except OSError as e:
-            raise ConcatError("تعذر تشغيل Concat (%s): %s"
-                              % (concat_bin, e))
-        self.rid = 0
-        self.log = open(log_path, "a", encoding="utf-8")
+            self.client = await self._client.__aenter__()
+            if not self.client.protocol_version:
+                raise ConcatError("لم يتفاوض Concat على إصدار بروتوكول")
+            caps = self.client.server_capabilities
+            if caps is None or not getattr(caps, "tools", None):
+                raise ConcatError("خادم Concat لا يعلن قدرة الأدوات")
+            tools = await self.client.list_tools()
+            names = [t.name for t in tools.tools]
+            missing = [t for t in EXPECTED_TOOLS if t not in names]
+            if missing:
+                raise ConcatError("أدوات ناقصة في Concat: %s"
+                                  % ", ".join(missing))
+            self.log = open(self.log_path, "a", encoding="utf-8")
+        except Exception:
+            try:
+                await self._client.__aexit__(None, None, None)
+            except Exception:
+                pass
+            raise
+        return self
 
-    def send(self, obj):
+    async def __aexit__(self, *exc):
         try:
-            self.proc.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
-            self.proc.stdin.flush()
-        except (BrokenPipeError, OSError) as e:
-            raise ConcatError("انقطع الاتصال مع Concat أثناء الإرسال: %s"
-                              % e)
-
-    def read(self, timeout=300, expect_id=None):
-        """يقرأ أول رسالة JSON-RPC مطابقة لـ expect_id.
-
-        يتخطى الإشعارات (بلا id) وسطور السجل غير JSON حتى لا يلتقط
-        الاستدعاء ردًا لا يخصه.
-        """
-        fd = self.proc.stdout.fileno()
-        buf = b""
-        start = time.time()
-        while True:
-            if time.time() - start > timeout:
-                raise ConcatError("لا رد من Concat خلال %s ثانية" % timeout)
-            r, _, _ = select.select([fd], [], [], 1.0)
-            if not r:
-                if self.proc.poll() is not None:
-                    raise ConcatError("خرج Concat برمز %s" % self.proc.returncode)
-                continue
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                raise ConcatError("أُغلق خرج Concat، رمز الخروج=%s"
-                                  % self.proc.returncode)
-            buf += chunk
-            while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                line = line.strip()
-                if not line:
-                    continue
+            if self._client is not None:
+                await self._client.__aexit__(*exc)
+        finally:
+            if self.log is not None:
                 try:
-                    msg = json.loads(line)
-                except ValueError:
-                    continue  # سطر سجل غير JSON من الخادم — يُتخطى
-                if not isinstance(msg, dict):
-                    continue
-                if expect_id is not None and msg.get("id") != expect_id:
-                    continue  # إشعار أو رد لطلب آخر
-                return msg
+                    self.log.close()
+                except Exception:
+                    pass
+                self.log = None
+        return False
 
-    def call(self, tool, args, timeout=300):
-        self.rid += 1
-        self.send({"jsonrpc": "2.0", "id": self.rid, "method": "tools/call",
-                   "params": {"name": tool, "arguments": args}})
-        res = self.read(timeout, expect_id=self.rid)
-        self.log.write(json.dumps({"tool": tool, "res": res},
-                                 ensure_ascii=False) + "\n")
-        self.log.flush()
+    async def call(self, tool, args, timeout=300):
+        _ensure_mcp()
+        try:
+            with anyio.fail_after(timeout):
+                res = await self.client.call_tool(tool, args)
+        except TimeoutError:
+            raise ConcatError("لا رد من Concat خلال %s ثانية" % timeout)
+        except MCPError as e:
+            raise ConcatError("%s فشل: %s" % (tool, str(e)[:600]))
+        except Exception as e:
+            raise ConcatError("%s فشل: %s" % (tool, str(e)[:600]))
+        self._log_call(tool, res)
         return res
 
+    def _log_call(self, tool, res):
+        """سطر JSON واحد {tool, res} في السجل؛ لا يرفع أبدًا."""
+        try:
+            data = res.model_dump(mode="json")
+        except Exception:
+            try:
+                data = {
+                    "content": [
+                        {"type": getattr(c, "type", None),
+                         "text": getattr(c, "text", "")}
+                        for c in res.content
+                    ],
+                    "is_error": bool(getattr(res, "is_error", False)),
+                }
+                sc = getattr(res, "structured_content", None)
+                if sc is not None:
+                    data["structured_content"] = sc
+            except Exception:
+                return
+        try:
+            self.log.write(json.dumps({"tool": tool, "res": data},
+                                      ensure_ascii=False, default=str) + "\n")
+            self.log.flush()
+        except Exception:
+            pass
+
     def result(self, res, tool):
-        if "error" in res:
-            raise ConcatError("%s فشل: %s"
-                              % (tool, json.dumps(res["error"])[:600]))
-        result = res.get("result", {})
-        # أخطاء الأدوات تأتي كـ result مع isError=true (نمط MCP) لا
-        # كـ error على مستوى JSON-RPC؛ وإن لم تُرفع هنا تُبتلع ويكمل
-        # التجميع بقيم null فينتهي بخطأ غامض لاحقًا (عيب 2026-11-21:
-        # رفض export_start لمسار خارج /home/hatch ظهر كـ job=null
-        # ثم «invalid type: null» في export_wait).
-        if result.get("isError"):
-            content = result.get("content", [])
-            text = "".join(c.get("text", "") for c in content
-                           if c.get("type") == "text")
+        if res.is_error:
+            text = "".join(c.text for c in res.content
+                           if getattr(c, "type", None) == "text")
             raise ConcatError("%s فشل: %s" % (tool, text[:600]))
-        content = result.get("content", [])
-        text = "".join(c.get("text", "") for c in content
-                       if c.get("type") == "text")
+        if res.structured_content is not None:
+            return res.structured_content
+        text = "".join(c.text for c in res.content
+                       if getattr(c, "type", None) == "text")
         try:
             return json.loads(text) if text else {}
         except Exception:
-            return {"_text": text}
-
-    def close(self):
-        try:
-            self.proc.stdin.close()
-        except Exception:
-            pass
-        try:
-            self.proc.terminate()
-        except Exception:
-            pass
-        try:
-            self.proc.wait(timeout=10)
-        except Exception:
-            self.proc.kill()
-        self.log.close()
+            return {}
 
 
 TITLE_STYLE = {
@@ -187,6 +237,15 @@ TITLE_MOTION = {
 def assemble(concat_bin, projects_root, project_name, assets_dir, manifest,
              title, out_path, video, log_path):
     """يبني مشروع Concat ويصدّره. يرجع مسار ملف الفيديو عند النجاح."""
+    _ensure_mcp()
+    return anyio.run(_assemble_async, concat_bin, projects_root,
+                     project_name, assets_dir, manifest, title, out_path,
+                     video, log_path)
+
+
+async def _assemble_async(concat_bin, projects_root, project_name, assets_dir,
+                          manifest, title, out_path, video, log_path):
+    """التسلسل نفسه كما في assemble() المتزامنة سابقًا، عبر الـSDK."""
     from lib.paths import resolve_inside, safe_component
     images_dir = os.path.join(assets_dir, "images")
     images = []
@@ -210,21 +269,14 @@ def assemble(concat_bin, projects_root, project_name, assets_dir, manifest,
         print("مشروع Concat موجود سلفًا — يُستبدل: %s" % proj_dir)
         shutil.rmtree(proj_dir)
 
-    m = MCP(concat_bin, log_path)
-    try:
-        m.send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-            "protocolVersion": "2025-03-26", "capabilities": {},
-            "clientInfo": {"name": "studio", "version": "0.1.3"}}})
-        m.read(expect_id=1)
-        m.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-
-        r = m.call("project_create", {
+    async with MCP(concat_bin, log_path) as m:
+        r = await m.call("project_create", {
             "location": projects_root, "name": project_name,
             "video": {"width": video["width"], "height": video["height"],
                       "rateNum": video["fps"], "rateDen": 1}})
         m.result(r, "project_create")
 
-        r = m.call("timeline_read", {"path": proj_dir})
+        r = await m.call("timeline_read", {"path": proj_dir})
         tl = m.result(r, "timeline_read")
         tracks = tl.get("tracks", [])
 
@@ -233,17 +285,17 @@ def assemble(concat_bin, projects_root, project_name, assets_dir, manifest,
             # استيراد كل صورة مرة واحدة حتى لو تكررت في التسلسل
             name = os.path.basename(path)
             if name not in ids:
-                r = m.call("media_import", {"path": proj_dir, "file": path})
+                r = await m.call("media_import", {"path": proj_dir, "file": path})
                 ids[name] = m.result(r, "media_import").get("createdId")
-        r = m.call("media_import", {"path": proj_dir, "file": narration})
+        r = await m.call("media_import", {"path": proj_dir, "file": narration})
         aud_id = m.result(r, "media_import").get("createdId")
 
         seq_ids = [ids[os.path.basename(p)] for p in images]
         start = 0.0
         # تسلسل على دفعتين كالاختبار المثبت (أولًا حتى 35ث ثم الباقي)
         # — هنا دفعة واحدة تكفي لأن clips_add_sequence يقبل القائمة كاملة.
-        r = m.call("clips_add_sequence",
-                   {"path": proj_dir, "mediaIds": seq_ids, "start": start})
+        r = await m.call("clips_add_sequence",
+                         {"path": proj_dir, "mediaIds": seq_ids, "start": start})
         m.result(r, "clips_add_sequence")
 
         audio_track = None
@@ -252,14 +304,14 @@ def assemble(concat_bin, projects_root, project_name, assets_dir, manifest,
                 audio_track = t.get("id")
                 break
         if audio_track is None:
-            r = m.call("track_add", {"path": proj_dir, "bottom": True})
+            r = await m.call("track_add", {"path": proj_dir, "bottom": True})
             audio_track = m.result(r, "track_add").get("createdId")
-        r = m.call("clip_add", {"path": proj_dir, "mediaId": aud_id,
-                                "trackId": audio_track, "start": 0})
+        r = await m.call("clip_add", {"path": proj_dir, "mediaId": aud_id,
+                                      "trackId": audio_track, "start": 0})
         m.result(r, "clip_add")
 
         style = dict(TITLE_STYLE)
-        r = m.call("title_add", {
+        r = await m.call("title_add", {
             "path": proj_dir, "start": 0, "duration": 4,
             # قاعدة دائمة 2026-11-22: العنوان أسفل الشاشة فوق
             # الكابشنات (HOOK_OFFSET_Y) — لا نص أعلى أبدًا.
@@ -269,29 +321,29 @@ def assemble(concat_bin, projects_root, project_name, assets_dir, manifest,
         title_clip = m.result(r, "title_add").get("createdId")
         # حركة العنوان المُتحقق منها (TITLE_MOTION) — دخول وخروج ونبض.
         if title_clip:
-            r = m.call("clip_update", {
+            r = await m.call("clip_update", {
                 "path": proj_dir, "clipId": title_clip,
                 "patch": {"motion": TITLE_MOTION}})
             m.result(r, "clip_update")
 
         caps = [{"start": p["start"], "end": p["end"], "text": p["text"]}
                 for p in phrases]
-        r = m.call("captions_add", {"path": proj_dir, "captions": caps,
-                                    "offsetY": 0.35, "style": CAPTION_STYLE})
+        r = await m.call("captions_add", {"path": proj_dir, "captions": caps,
+                                          "offsetY": 0.35, "style": CAPTION_STYLE})
         m.result(r, "captions_add")
 
-        r = m.call("project_save", {"path": proj_dir})
+        r = await m.call("project_save", {"path": proj_dir})
         m.result(r, "project_save")
 
-        r = m.call("export_start", {
+        r = await m.call("export_start", {
             "path": proj_dir, "output": out_path,
             "codec": video["codec"], "crf": video["crf"],
             "width": video["width"], "height": video["height"]})
         job = m.result(r, "export_start").get("job")
         state = {}
         for _ in range(10):
-            r = m.call("export_wait", {"job": job, "timeoutSeconds": 120},
-                       timeout=180)
+            r = await m.call("export_wait", {"job": job, "timeoutSeconds": 120},
+                             timeout=180)
             state = m.result(r, "export_wait")
             if state.get("state") in ("done", "failed", "cancelled"):
                 break
@@ -301,5 +353,3 @@ def assemble(concat_bin, projects_root, project_name, assets_dir, manifest,
             raise ConcatError("انتهى التصدير لكن ملف الخرج غير موجود: %s"
                               % out_path)
         return out_path
-    finally:
-        m.close()
