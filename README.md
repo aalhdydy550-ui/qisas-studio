@@ -223,6 +223,10 @@ personal and non-commercial use is free. Third-party notices (the
 orchestrated tools and re-implemented logic) are in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
 
+**No profiting from copies:** selling, renting, or commercially using
+copies or forks of this software is prohibited without a paid commercial
+license. Cloning for personal, non-commercial use is free.
+
 ### Commercial license
 
 Commercial use needs a paid license:
