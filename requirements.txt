@@ -20,3 +20,9 @@ Pillow==13.0.0
 # (fail-open: بلا فحص دلالي وبلا فهرسة) — فلا تُثبَّت قسرًا هنا.
 # التثبيت اليدوي: `pip install qdrant-client` (1.20.0).
 # qdrant-client==1.20.0
+# mcp (إلزامية — جولة v0.1.49): يستوردها lib/concat_mcp.py عند بدء
+# الاستوديو (وstudio.py يستورد lib.concat_mcp في السطر 118)، فغيابها
+# يكسر الـCLI كاملًا — خلاف qdrant-client الاختيارية أعلاه.
+# التثبيت: `pip install --user --break-system-packages "mcp[cli]==2.3.0"`
+# (النسخة 2.3.0 متحقق منها حيًا في اختبار الدخان ضد الثنائي 0.2.12).
+mcp[cli]==2.3.0
