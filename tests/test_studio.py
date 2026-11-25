@@ -6,7 +6,9 @@
 إلى اختبارات تعمل بـ `python3 -m unittest discover -s tests -v`.
 
 مكتبة قياسية فقط، بلا شبكة وبلا خوادم خارجية: كل ما يحتاج خادمًا
-يُستبدل بمحاكاة (mock).
+يُستبدل بمحاكاة (mock) — عدا استيراد حزمتي `mcp` و`anyio` اللتين
+تستخدمهما اختبارات Concat لبناء كائنات نتائج حقيقية ومحاكاة عميل
+الـSDK (بلا أي اتصال فعلي).
 """
 import importlib
 import json
@@ -16,6 +18,11 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+
+import anyio
+from mcp.shared.exceptions import MCPError
+from mcp.types import (CallToolResult, ListToolsResult, ServerCapabilities,
+                       TextContent, Tool)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -57,71 +64,174 @@ class TestFallbackScript(unittest.TestCase):
         self.assertIn("التاجر", title)
 
 
-class TestMcpRead(unittest.TestCase):
-    def test_skips_notifications_and_non_json(self):
-        # أنبوب وهمي: إشعار + سطر غير JSON + رد مطابق للمعرّف
-        rfd, wfd = os.pipe()
-        payload = (b'{"jsonrpc": "2.0", "method": "note"}\n'
-                   b'not json at all\n'
-                   b'{"jsonrpc": "2.0", "id": 2, "result": {"ok": true}}\n')
-        os.write(wfd, payload)
-        os.close(wfd)
+class TestMcpClientConnect(unittest.TestCase):
+    """اتصال عميل Concat عبر الـSDK الرسمي (v0.1.49).
 
-        class FakeProc:
-            def __init__(self, fd):
-                self._fd = fd
-                self.returncode = None
+    يستبدل TestMcpRead الذي كان يختبر read() اليدوي بأنبوب وهمي
+    (حُذف مع العميل اليدوي): الدخول يتحقق من إصدار البروتوكول
+    والقدرات ووجود الأدوات الـ12، ومهلة call وأخطاء call_tool
+    تتحول إلى ConcatError. العميل الحقيقي (mcp.Client) يُستبدل
+    بعميل وهمي مدير سياق غير متزامن عبر mock.patch.object،
+    والكود غير المتزامن يُشغَّل بـ anyio.run داخل الاختبارات
+    المتزامنة.
+    """
 
-            @property
-            def stdout(self):
-                class F:
-                    def __init__(self, fd):
-                        self._fd = fd
+    # الأدوات الـ12 التي يستدعيها assemble() فعليًا، بترتيبه نفسه
+    # (العقد §0) — القائمة هنا مستقلة عن الوحدة لتختبرها هي نفسها.
+    TOOLS = ["project_create", "timeline_read", "media_import",
+             "clips_add_sequence", "track_add", "clip_add", "title_add",
+             "clip_update", "captions_add", "project_save", "export_start",
+             "export_wait"]
 
-                    def fileno(self):
-                        return self._fd
-                return F(self._fd)
+    def _fake_client_class(self, tools=None, protocol_version="2026-07-28",
+                           capabilities_tools=True, call_tool=None):
+        """عميل SDK وهمي: مدير سياق غير متزامن بخصائص
+        protocol_version وserver_capabilities وlist_tools()
+        وcall_tool() — نفس السطح الذي يستخدمه MCP الجديد."""
+        tools = list(self.TOOLS) if tools is None else list(tools)
+        seen = {}
 
-            def poll(self):
-                return None
+        class FakeClient:
+            def __init__(self, params, *args, **kwargs):
+                seen["params"] = params
+                self.protocol_version = protocol_version
+                self.server_capabilities = ServerCapabilities(
+                    tools={"listChanged": False}
+                    if capabilities_tools else None)
+                self._tools = tools
+                self._call_tool = call_tool
 
-        m = concat_mcp.MCP.__new__(concat_mcp.MCP)
-        m.proc = FakeProc(rfd)
-        try:
-            msg = m.read(timeout=5, expect_id=2)
-        finally:
-            os.close(rfd)
-        self.assertEqual(msg, {"jsonrpc": "2.0", "id": 2,
-                               "result": {"ok": True}})
+            async def __aenter__(self):
+                seen["entered"] = True
+                return self
 
-    def test_timeout_raises_concat_error(self):
-        rfd, wfd = os.pipe()  # أنبوب فارغ بلا كاتب — يبقى مفتوحًا
-        try:
-            class FakeProc:
-                def __init__(self, fd):
-                    self._fd = fd
-                    self.returncode = None
+            async def __aexit__(self, *exc):
+                seen["exited"] = True
+                return False
 
-                @property
-                def stdout(self):
-                    class F:
-                        def __init__(self, fd):
-                            self._fd = fd
+            async def list_tools(self):
+                return ListToolsResult(tools=[
+                    Tool(name=name, inputSchema={"type": "object"})
+                    for name in self._tools])
 
-                        def fileno(self):
-                            return self._fd
-                    return F(self._fd)
+            async def call_tool(self, tool, args):
+                if self._call_tool is not None:
+                    return await self._call_tool(tool, args)
+                return CallToolResult(
+                    content=[TextContent(type="text", text="{}")])
 
-                def poll(self):
-                    return None
+        return FakeClient, seen
 
-            m = concat_mcp.MCP.__new__(concat_mcp.MCP)
-            m.proc = FakeProc(rfd)
-            with self.assertRaises(concat_mcp.ConcatError):
-                m.read(timeout=1, expect_id=1)
-        finally:
-            os.close(rfd)
-            os.close(wfd)
+    def _enter(self, log):
+        async def _run():
+            async with concat_mcp.MCP("/bin/false", log) as m:
+                return m
+        return _run
+
+    def test_connect_success_verifies_twelve_tools(self):
+        fake_cls, seen = self._fake_client_class()
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "log.jsonl")
+            with mock.patch.object(concat_mcp, "Client", fake_cls):
+                m = anyio.run(self._enter(log))
+            self.assertIsNotNone(m)
+            self.assertTrue(seen.get("entered"))
+            self.assertTrue(seen.get("exited"))
+            # نفس معاملات إطلاق الخادم كما في العقد §0
+            self.assertEqual(seen["params"].command, "/bin/false")
+            self.assertEqual(seen["params"].args, ["--mcp", "headless"])
+            # الدخول يفتح ملف السجل (append) فينشئه ولو بلا استدعاءات
+            self.assertTrue(os.path.exists(log))
+
+    def test_missing_tool_raises_naming_it(self):
+        tools = [t for t in self.TOOLS if t != "export_wait"]
+        fake_cls, _seen = self._fake_client_class(tools=tools)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "log.jsonl")
+            with mock.patch.object(concat_mcp, "Client", fake_cls):
+                with self.assertRaises(concat_mcp.ConcatError) as cm:
+                    anyio.run(self._enter(log))
+            self.assertIn("export_wait", str(cm.exception))
+
+    def test_empty_protocol_version_raises(self):
+        fake_cls, _seen = self._fake_client_class(protocol_version="")
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "log.jsonl")
+            with mock.patch.object(concat_mcp, "Client", fake_cls):
+                with self.assertRaises(concat_mcp.ConcatError):
+                    anyio.run(self._enter(log))
+
+    def test_missing_tools_capability_raises(self):
+        fake_cls, _seen = self._fake_client_class(capabilities_tools=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "log.jsonl")
+            with mock.patch.object(concat_mcp, "Client", fake_cls):
+                with self.assertRaises(concat_mcp.ConcatError):
+                    anyio.run(self._enter(log))
+
+    def test_call_timeout_raises(self):
+        async def _never(tool, args):
+            await anyio.sleep_forever()
+
+        fake_cls, _seen = self._fake_client_class(call_tool=_never)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "log.jsonl")
+
+            async def _call():
+                async with concat_mcp.MCP("/bin/false", log) as m:
+                    await m.call("project_create", {}, timeout=1)
+
+            with mock.patch.object(concat_mcp, "Client", fake_cls):
+                with self.assertRaises(concat_mcp.ConcatError) as cm:
+                    anyio.run(_call)
+            self.assertIn("لا رد من Concat خلال 1 ثانية",
+                          str(cm.exception))
+
+    def test_mcp_error_becomes_concat_error(self):
+        async def _boom(tool, args):
+            raise MCPError(-32602, "unknown tool boom")
+
+        fake_cls, _seen = self._fake_client_class(call_tool=_boom)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "log.jsonl")
+
+            async def _call():
+                async with concat_mcp.MCP("/bin/false", log) as m:
+                    await m.call("project_create", {})
+
+            with mock.patch.object(concat_mcp, "Client", fake_cls):
+                with self.assertRaises(concat_mcp.ConcatError) as cm:
+                    anyio.run(_call)
+            self.assertIn("project_create فشل:", str(cm.exception))
+            self.assertIn("boom", str(cm.exception))
+
+    def test_call_returns_result_and_logs_one_line(self):
+        async def _ok(tool, args):
+            return CallToolResult(
+                content=[TextContent(type="text",
+                                     text='{"createdId": "m1"}')],
+                structured_content={"createdId": "m1"})
+
+        fake_cls, _seen = self._fake_client_class(call_tool=_ok)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "log.jsonl")
+
+            async def _call():
+                async with concat_mcp.MCP("/bin/false", log) as m:
+                    return await m.call(
+                        "media_import",
+                        {"path": "/tmp/p", "file": "a.jpg"})
+
+            with mock.patch.object(concat_mcp, "Client", fake_cls):
+                res = anyio.run(_call)
+            self.assertFalse(res.is_error)
+            self.assertEqual(res.structured_content, {"createdId": "m1"})
+            with open(log, encoding="utf-8") as f:
+                lines = [ln for ln in f.read().splitlines() if ln.strip()]
+            self.assertEqual(len(lines), 1)
+            entry = json.loads(lines[0])
+            self.assertEqual(entry["tool"], "media_import")
+            self.assertIn("res", entry)
 
 
 class TestConfigValidation(unittest.TestCase):
@@ -357,16 +467,18 @@ class TestConcatArabicFeatures(unittest.TestCase):
         calls = []
 
         class FakeMCP:
+            """محاكاة MCP الجديد: مدير سياق غير متزامن."""
+
             def __init__(self, *a, **k):
                 pass
 
-            def send(self, obj):
-                pass
+            async def __aenter__(self):
+                return self
 
-            def read(self, timeout=300, expect_id=None):
-                return {}
+            async def __aexit__(self, *exc):
+                return False
 
-            def call(self, tool, args, timeout=300):
+            async def call(self, tool, args, timeout=300):
                 calls.append((tool, args))
                 canned = {
                     "project_create": {},
@@ -386,9 +498,6 @@ class TestConcatArabicFeatures(unittest.TestCase):
 
             def result(self, res, tool):
                 return res
-
-            def close(self):
-                pass
 
         manifest = {"sequence": ["img.jpg"],
                     "phrases": [{"start": 0, "end": 1,
@@ -433,16 +542,18 @@ class TestConcatArabicFeatures(unittest.TestCase):
         calls = []
 
         class FakeMCP:
+            """محاكاة MCP الجديد: مدير سياق غير متزامن."""
+
             def __init__(self, *a, **k):
                 pass
 
-            def send(self, obj):
-                pass
+            async def __aenter__(self):
+                return self
 
-            def read(self, timeout=300, expect_id=None):
-                return {}
+            async def __aexit__(self, *exc):
+                return False
 
-            def call(self, tool, args, timeout=300):
+            async def call(self, tool, args, timeout=300):
                 calls.append((tool, args))
                 canned = {
                     "project_create": {},
@@ -462,9 +573,6 @@ class TestConcatArabicFeatures(unittest.TestCase):
 
             def result(self, res, tool):
                 return res
-
-            def close(self):
-                pass
 
         manifest = {"sequence": ["img.jpg"],
                     "phrases": [{"start": 0, "end": 1,
@@ -1615,29 +1723,53 @@ class TestEnsureOmnirouteServer(unittest.TestCase):
 
 
 class TestConcatResultError(unittest.TestCase):
-    """أخطاء أدوات MCP (isError) يجب أن تُرفع فورًا برسالة واضحة
-    بدل ابتلاعها وإكمال التجميع بقيم null (عيب v0.1.16)."""
+    """أخطاء أدوات MCP (is_error) يجب أن تُرفع فورًا برسالة واضحة
+    بدل ابتلاعها وإكمال التجميع بقيم null (عيب v0.1.16).
+
+    أُعيدت كتابته في v0.1.49 على كائنات CallToolResult حقيقية من
+    mcp.types بدل قواميس JSON-RPC الخام (حُذفت مع العميل اليدوي)؛
+    وفرع {"_text": ...} أُلغي — نص غير-JSON بلا structured_content
+    يرجع {}."""
 
     def _mcp(self):
-        return concat_mcp.MCP.__new__(concat_mcp.MCP)
+        # __init__ الجديد يخزّن المعاملات فقط (بلا عملية فرعية)،
+        # فيُبنى مباشرة بلا دخول سياق.
+        return concat_mcp.MCP(
+            "/bin/false",
+            os.path.join(tempfile.gettempdir(), "concat-mcp-test.jsonl"))
+
+    def _text_result(self, text, is_error=False):
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)],
+            is_error=is_error)
 
     def test_is_error_raises_with_message(self):
         m = self._mcp()
-        res = {"jsonrpc": "2.0", "id": 1, "result": {
-            "content": [{"text": "/tmp/x.mp4 is outside where this API "
-                         "writes (/home/hatch) (code: refused)",
-                         "type": "text"}],
-            "isError": True}}
+        res = self._text_result(
+            "/tmp/x.mp4 is outside where this API writes (/home/hatch) "
+            "(code: refused)", is_error=True)
         with self.assertRaises(concat_mcp.ConcatError) as cm:
             m.result(res, "export_start")
+        self.assertIn("export_start فشل:", str(cm.exception))
         self.assertIn("outside where this API writes", str(cm.exception))
 
     def test_ok_result_still_parses(self):
         m = self._mcp()
-        res = {"jsonrpc": "2.0", "id": 1, "result": {
-            "content": [{"text": "{\"job\": \"j1\"}", "type": "text"}],
-            "isError": False}}
+        res = self._text_result('{"job": "j1"}')
         self.assertEqual(m.result(res, "export_start"), {"job": "j1"})
+
+    def test_structured_content_returned_directly(self):
+        m = self._mcp()
+        res = CallToolResult(
+            content=[TextContent(type="text", text='{"job": "j1"}')],
+            structured_content={"job": "j1", "state": "done"})
+        self.assertEqual(m.result(res, "export_wait"),
+                         {"job": "j1", "state": "done"})
+
+    def test_non_json_text_without_structured_content_returns_empty(self):
+        m = self._mcp()
+        res = self._text_result("ok - not json at all")
+        self.assertEqual(m.result(res, "project_save"), {})
 
 
 class TestParseSize(unittest.TestCase):
