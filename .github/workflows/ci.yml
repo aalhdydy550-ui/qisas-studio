@@ -46,3 +46,19 @@ jobs:
         run: python -m py_compile studio.py lib/*.py tests/*.py
       - name: Run tests
         run: python -m unittest discover -s tests -v
+      # تقرير دخان APIs (جولة الأنماط W3 — فكرة تقارير Newman):
+      # يُولَّد دائمًا (if: always) حتى عند فشل الاختبارات،
+      # ويسرد مدخلات العقد «متخطَّى» لأن الدخان الحي مبوَّب
+      # خارج التشغيل الافتراضي (بلا STUDIO_LIVE_SMOKE=1 وبلا
+      # مفاتيح) — والخطوة لا تُسقط التشغيل أبدًا (|| echo).
+      - name: Generate smoke report
+        if: always()
+        run: python -m lib.smoke_report --html smoke-report.html --junit smoke-report-junit.xml || echo "smoke report failed — continuing"
+      - name: Upload smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-report
+          path: |
+            smoke-report.html
+            smoke-report-junit.xml
