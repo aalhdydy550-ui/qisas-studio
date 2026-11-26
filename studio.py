@@ -23,6 +23,8 @@
       # قابلة للاستئناف بلا إرسال أي بايت وبلا نشر
   studio.py version
       # إصدار studio + حالة البعيد من سجل المزامنة المحلي
+  studio.py debug-config [--profile NAME] [--set KEY=VALUE ...]
+      # الإعداد الفعّال ومصدر كل قيمة (قراءة فقط — بلا أي تنفيذ)
   studio.py youtube-auth     # تبادل OAuth ليوتيوب لمرة واحدة
   studio.py script   --story NAME [--allow-fallback]
   studio.py produce  --project NAME [--run RUN_ID]
@@ -36,29 +38,46 @@
   studio.py whisper-ass --audio PATH --out PATH [--model small]
       # كابشنات من faster-whisper (خيار تجريبي — انظر WHISPER-TEST.md)
   studio.py run      --story NAME --project NAME [--out PATH] [--allow-fallback] [--dry-run] [--backend concat|headless|mlt] [--size WxH]
+      [--lang ar|en] [--voice NAME]
       # المقاس الافتراضي 720×1280 (عمودي)؛ --size 1280x720 للأفقي
       # (الفيديو الطويل الأسبوعي ليوتيوب).
   studio.py long-video --out PATH --title TITLE [--story NAME | --project NAME
       | --run RUN_ID | --chapter-dir DIR | --chapter-text TITLE --text-file FILE
       --cover IMG ...] [--chapters-file FILE] [--music PATH] [--atempo X]
       [--motion clips|still|kenburns|youtube-long] [--motion-manifest FILE]
-      [--motion-dir DIR]
+      [--motion-dir DIR] [--improve-motion] [--lang ar|en] [--voice NAME]
       # فيديو طويل أفقي 1280×720 (8–12 دقيقة) من عدة قصص: مقدمة بهوك
       # + فصل لكل قصة (بطاقة عنوان + محتوى بعبرته) + خاتمة باشتراك واحد.
-      # --motion الافتراضي clips: مقاطع حركة مولّدة من مانيفست الحركة
-      # (--motion-manifest) مع رجوع لصورة ثابتة بلا Ken Burns عند غياب
-      # المقاطع؛ still = صور ثابتة بلا أي حركة؛ kenburns = السلوك القديم
-      # (Ken Burns) — اختياري صريح فقط؛ youtube-long = مثل clips لكن
-      # الصور الاحتياطية 2.5 ثانية بدل 5 (إيقاع القطع السريع في قصص
-      # يوتيوب الطويلة) وبلا Ken Burns أبدًا.
+      # --motion الافتراضي kenburns (المسار السريع بلا GPU): صور ثابتة
+      # بحركة Ken Burns خفيفة؛ clips = مقاطع حركة مولّدة من مانيفست
+      # الحركة (--motion-manifest) مع رجوع لصورة ثابتة بلا Ken Burns
+      # عند غياب المقاطع — خيار صريح فقط؛ still = صور ثابتة بلا أي
+      # حركة؛ youtube-long = مثل clips لكن الصور الاحتياطية 2.5 ثانية
+      # بدل 5 (إيقاع القطع السريع في قصص يوتيوب الطويلة) وبلا Ken Burns
+      # أبدًا. --improve-motion يبدّل صور الفصول بمقاطع مولّدة من
+      # المانيفست (مع إعادة استخدام الإطارات المجمّدة).
       # فيديو طويل أفقي 1280×720 (8–12 دقيقة) من عدة قصص: مقدمة بهوك
       # + فصل لكل قصة (بطاقة عنوان + محتوى بعبرته) + خاتمة باشتراك واحد.
       # سرد Piper مقسّم، كتابة كلمة-بكلمة، شعار الصفحة تلقائي، وبلا
       # بطاقات اقتباس أبدًا. ينتج أيضًا طوابع الفصول ووصف يوتيوب.
   studio.py long-narration --text TEXT | --text-file FILE --out WAV
-      [--gap SEC] [--atempo X]
+      [--gap SEC] [--atempo X] [--lang ar|en] [--voice NAME]
       # سرد طويل مقسّم بصوت Piper (رجل) — نص طويل إلى WAV واحد
       # بفواصل صمت بين الجمل، مع أزمنة كل جملة.
+  studio.py quick "عنوان القصة" [--lang ar|en] [--voice NAME] [--out PATH]
+      [--allow-fallback] [--dry-run] [--publish]
+      # أمر واحد بلا أسئلة: عنوان ← قصة قصيرة بصيغة الاستوديو
+      # (هوك صادم جملة واحدة + عبرة + سؤال ختامي محيّر) عبر LLM
+      # بالموجّه حسب اللغة، مع رجوع لقالب مدمج عند غياب LLM فقط
+      # مع --allow-fallback؛ سرد Piper (رجل) + صور ثابتة بحركة
+      # Ken Burns خفيفة عبر المسار السريع (بلا انتظار GPU) +
+      # تجميع؛ وبلا نشر تلقائي — النشر فقط مع --publish الصريح.
+  studio.py expand-motion-prompts --prompts FILE --out FILE
+      # وسّع موجّهات حركة قصيرة إلى موجّهات مفصلة (عبر
+      # lib.prompt_expand.expand_motion_prompts)؛ وأي موجّه
+      # فشل توسيعه يُحفظ بأصله في الناتج مع سبب الرجوع؛
+      # ويُطبع ملخص عربي بعد الكتابة. أمر صريح فقط — لا
+      # يُستدعى تلقائيًا من أي مسار قائم.
   studio.py run-queue [--limit N] [--continue-on-error] [--dry-run]
       # دفعة جماعية من ملف الطابور: القصص الجاهزة فقط (مشروع
       # OpenMontage موجود) تُشغَّل بالتتابع؛ بلا مشروع تُتخطى.
@@ -70,6 +89,10 @@
       # فحص السقف — الجولة 7.
   studio.py tiktok-auth [--token TOKEN] / instagram-auth [--token TOKEN]
       # خطوات ربط TikTok/Instagram يدويًا + حفظ التوكن (600).
+  studio.py tiktok-bundle --video F --title T [--caption C] [--dry-run]
+      # حزمة رفع TikTok لمهمة متصفح (كابشن + خطوات — بلا نشر).
+  studio.py tiktok-status
+      # حالة إعداد TikTok (قراءة فقط، بلا شبكة).
   studio.py analyze --dna --video F [--title T] [--hook H]
       # تحليل DNA الفيروسي (الجولة 7): درجة الهوك 0–10 + الإيقاع
       # + الصمت + كثافة الكلمات + حكم مربوط بالأرقام الحقيقية.
@@ -120,6 +143,7 @@ from lib import headless_stage
 from lib import autoedit
 from lib import moviepy_fx
 from lib import capite_captions
+from lib import latin_captions
 from lib import trim
 from lib import mlt_stage
 from lib import thumbnail
@@ -157,6 +181,8 @@ from lib import daily
 from lib import ab as ab_lib
 from lib import update_backup
 from lib import balance as balance_lib
+from lib import run_log as run_log_lib
+from lib import stage_cache as stage_cache_lib
 from lib import batch as batch_lib
 from lib import dna as dna_lib
 from lib import avatar_job as avatar_job_lib
@@ -164,6 +190,8 @@ from lib import avatar_profiles as avatar_profiles_lib
 from lib import audio_profile as audio_profile_lib
 from lib import scene_plan as scene_plan_lib
 from lib import social_publish as social_lib
+from lib import tiktok_publish as tiktok_lib
+from lib import tiktok_long as tiktok_long_lib
 from lib import ass_shaping as ass_shaping_lib
 from lib import script_meta as script_meta_lib
 from lib import schedule_watch as schedule_watch_lib
@@ -174,6 +202,32 @@ from lib import shorts_cut as shorts_cut_lib
 from lib import avatar_aspect as avatar_aspect_lib
 from lib import cost_ledger as cost_ledger_lib
 from lib import i18n as i18n_lib
+from lib import profiles as profiles_lib
+from lib import channel_audit as channel_audit_lib
+from lib import hook_panel as hook_panel_lib
+from lib import retention_read as retention_read_lib
+from lib import seo_check as seo_check_lib
+from lib import title_lint as title_lint_lib
+from lib import viral_rank as viral_rank_lib
+from lib import trend_scout as trend_scout_lib
+from lib import scene_shorts as scene_shorts_lib
+from lib import tiktok_check as tiktok_check_lib
+from lib import script_check as script_check_lib
+from lib import topic_brief as topic_brief_lib
+from lib import hook_title as hook_title_lib
+from lib import reliability_report as reliability_report_lib
+from lib import failure_classify as failure_classify_lib
+from lib import incident_probe as incident_probe_lib
+from lib import id_mask as id_mask_lib
+from lib import runbook_check as runbook_check_lib
+from lib import failure_drill as failure_drill_lib
+from lib import keyword_analyze as keyword_analyze_lib
+from lib import content_optimizer as content_optimizer_lib
+from lib import keyword_generate as keyword_generate_lib
+from lib import micro_niche as micro_niche_lib
+from lib import page_analyze as page_analyze_lib
+from lib import fresh_keywords as fresh_keywords_lib
+from lib import topical_authority as topical_authority_lib
 
 
 def _print_translated(prefix, exc, context, lang="ar"):
@@ -199,7 +253,14 @@ def _print_translated(prefix, exc, context, lang="ar"):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.51"
+VERSION = "0.1.62"
+# قيد ترخيص الصوت الإنجليزي (الموجة الأولى — W3، مقروء من بطاقة
+# الموديل en_US-ryan-medium: CC BY-NC-SA 4.0، انظر docs/voices.md):
+# يظهر حرفيًا في نص مساعدة --lang في أوامر run/long-video/
+# long-narration/karaoke-ass/quick.
+EN_VOICE_LICENSE_NOTE = ("الصوت الإنجليزي للاستخدام الشخصي/التجريبي "
+                         "فقط (CC BY-NC-SA 4.0) — لا يُستخدم لفيديوهات "
+                         "عملاء مدفوعة")
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 # سجل مزامنة GitHub المحلي (يكتبه سكربت الرفع في ~/workspace) —
 # مصدر سطر «حالة البعيد» في أمر `version` (قراءة محلية فقط،
@@ -560,7 +621,10 @@ def _log_auto_script(script, reason):
         pass
 
 
-def _ensure_environment():
+_READONLY_COMMANDS = ("version",)
+
+
+def _ensure_environment(read_only=False):
     """أصلح البيئة بنفسك قبل حلّ الأدوات (best-effort، بلا فشل).
 
     يضيف مجلدي أدوات الـhome إلى PATH أولًا (شل التنفيذ لا يشملهما
@@ -570,6 +634,16 @@ def _ensure_environment():
     أي فشل يُسجَّل تحذيرًا فقط ولا يوقف التشغيل. حارس البيئة
     STUDIO_ENV_RESTORED يمنع إعادة تشغيل سكربت الاستعادة في
     الاستدعاءات المتداخلة؛ أما فحص الخادم فرخيص فيُعاد كل مرة.
+
+    إصلاح بطء بدء التشغيل 2026-11-26 (عيب: `version` استغرق
+    323 ثانية): غياب ملف الخدمة وحده كان يطلق الاستعادة المتزامنة
+    بمهلة 300 ثانية حتى مع وجود كل الأدوات — فصار يُطلقها في
+    الخلفية (Popen) بلا حظر، لأن خطوة 0 من setup-env.sh تعيد
+    الملف من نسخة الـhome في ثوانٍ. أما أمر قراءة فقط
+    (`read_only=True`، مثل `version`) فلا يطلق أي استرداد إطلاقًا
+    ولا فحص أدوات الحماية ولا خادم OmniRoute — تحذير على stderr
+    فقط. والأداة الغائبة فعلًا في أمر إنتاجي ما زالت تطلق
+    الاسترداد المتزامن كما هو (مهلة 300 ثانية معلنة في التحذير).
     """
     import shutil
     home = os.path.expanduser("~")
@@ -604,26 +678,61 @@ def _ensure_environment():
                     reasons.append("أدوات غائبة (%s)" % ", ".join(missing))
                 if unit_missing:
                     reasons.append("ملف الخدمة غائب")
-                print("تحذير: %s — تشغيل سكربت الاستعادة…"
-                      % " و".join(reasons), file=sys.stderr)
-                if not _script_safe_to_run(script):
-                    print("تحذير: سكربت الاستعادة غير آمن للتشغيل "
-                          "التلقائي (مالك/صلاحيات) — يُتخطى: %s" % script,
-                          file=sys.stderr)
+                reason_text = " و".join(reasons)
+                if read_only:
+                    # أمر قراءة فقط: تحذير فقط، بلا أي استرداد
+                    # (لا متزامن ولا خلفي) وبلا فحص حماية/خادم.
+                    print("تحذير: %s — أمر قراءة فقط، لا استرداد"
+                          % reason_text, file=sys.stderr)
+                elif missing:
+                    print("تحذير: %s — تشغيل سكربت الاستعادة… "
+                          "(قد يستغرق حتى 300 ثانية)"
+                          % reason_text, file=sys.stderr)
+                    if not _script_safe_to_run(script):
+                        print("تحذير: سكربت الاستعادة غير آمن للتشغيل "
+                              "التلقائي (مالك/صلاحيات) — يُتخطى: %s"
+                              % script, file=sys.stderr)
+                    else:
+                        _log_auto_script(script, reason_text)
+                        env = dict(os.environ)
+                        env["STUDIO_ENV_RESTORED"] = "1"
+                        try:
+                            subprocess.run(["/bin/bash", script], env=env,
+                                           timeout=300,
+                                           stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.DEVNULL,
+                                           check=False)
+                        except (OSError,
+                                subprocess.TimeoutExpired) as e:
+                            print("تحذير: فشلت استعادة البيئة تلقائيًا "
+                                  "(%s) — أكمل بدونها" % e, file=sys.stderr)
                 else:
-                    _log_auto_script(script, " و".join(reasons))
-                    env = dict(os.environ)
-                    env["STUDIO_ENV_RESTORED"] = "1"
-                    try:
-                        subprocess.run(["/bin/bash", script], env=env,
-                                       timeout=300,
-                                       stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL,
-                                       check=False)
-                    except (OSError,
-                            subprocess.TimeoutExpired) as e:
-                        print("تحذير: فشلت استعادة البيئة تلقائيًا (%s) — "
-                              "أكمل بدونها" % e, file=sys.stderr)
+                    # غياب ملف الخدمة وحده: الاستعادة في الخلفية
+                    # بلا حظر — خطوة 0 من السكربت تعيد الملف
+                    # من نسخة الـhome في ثوانٍ (نفس نمط
+                    # _ensure_protection_tools).
+                    print("تحذير: %s — تشغيل سكربت الاستعادة في الخلفية…"
+                          % reason_text, file=sys.stderr)
+                    if not _script_safe_to_run(script):
+                        print("تحذير: سكربت الاستعادة غير آمن للتشغيل "
+                              "التلقائي (مالك/صلاحيات) — يُتخطى: %s"
+                              % script, file=sys.stderr)
+                    else:
+                        _log_auto_script(script, reason_text)
+                        env = dict(os.environ)
+                        env["STUDIO_ENV_RESTORED"] = "1"
+                        try:
+                            subprocess.Popen(
+                                ["/bin/bash", script], env=env,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                stdin=subprocess.DEVNULL,
+                                start_new_session=True,
+                                close_fds=True)
+                        except OSError:
+                            pass
+    if read_only:
+        return
     _ensure_protection_tools()
     _ensure_omniroute_server()
 
@@ -768,8 +877,12 @@ def _fallback_script(story):
             "قصة قصيرة حقيقية عن %s — والنهاية أغرب مما تتخيل." % desc)
 
 
-def _llm_chat(cfg, prompt, max_tokens=200, temperature=0.7):
+def _llm_chat(cfg, prompt, max_tokens=200, temperature=0.7, system=None):
     """استدعاء LLM عبر سلسلة المزودين مع تسجيل الحالة.
+
+    system: موجّه نظام صريح (يُمرَّر كما هو إلى omniroute_client.chat؛
+    وبلاه يحمّل chat الموجّه العربي الافتراضي كما كان — فكل الاستدعاءات
+    القديمة بلا system تعمل حرفيًا كما اليوم).
 
     يبني السلسلة من قسم omniroute في config (الموديل، البديل،
     Gemini) ويسجّل كل محاولة مزود في
@@ -798,19 +911,24 @@ def _llm_chat(cfg, prompt, max_tokens=200, temperature=0.7):
         prompt, cfg_o.get("model"), cfg_o.get("fallback_model"),
         cfg_o.get("base_url", "http://localhost:20128"),
         max_tokens=max_tokens, temperature=temperature,
+        system=system,
         retries=int(cfg_o.get("retries", 1)),
         retry_delay=int(cfg_o.get("retry_delay_seconds", 5)),
         providers=providers, state=state, on_attempt=on_attempt)
 
 
-def cmd_script(cfg, story, allow_fallback, run_dir=None):
+def cmd_script(cfg, story, allow_fallback, run_dir=None, lang="ar"):
     cfg_o = cfg["omniroute"]
+    # الموجّه حسب اللغة (الموجة الأولى — W4): العربي افتراضيًا حرفيًا
+    # كما كان؛ و--lang en يمرّر الموجّه الإنجليزي الأصلي.
+    _system = omniroute_client.load_system_prompt(lang)
     prompt = SCRIPT_PROMPT.format(
         story=STORY_TEXTS.get(story, story))
     t0 = time.time()
     try:
         text, via, model = _llm_chat(cfg, prompt,
-                                     max_tokens=200, temperature=0.7)
+                                     max_tokens=200, temperature=0.7,
+                                     system=_system)
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         result = {"source": "omniroute", "via": via, "model": model,
                   "title": lines[0] if lines else "",
@@ -837,7 +955,8 @@ def cmd_script(cfg, story, allow_fallback, run_dir=None):
 
     def _chat(prompt):
         text, _via, _model = _llm_chat(cfg, prompt,
-                                       max_tokens=200, temperature=0.7)
+                                       max_tokens=200, temperature=0.7,
+                                       system=_system)
         _meta_llm["via"] = _via
         _meta_llm["model"] = _model
         return text
@@ -868,16 +987,102 @@ def cmd_produce(cfg, project, run_dir):
     return manifest
 
 
+# ------------------------------------------- مقروئية الكابشن (v0.1.55)
+def _format_ass_time(seconds):
+    """نسّق ثوانيًا كوقت ASS (H:MM:SS.cc) لسطر Dialogue مولَّد محليًا."""
+    total_cs = int(round(float(seconds) * 100))
+    hours, rem = divmod(total_cs, 360000)
+    minutes, rem = divmod(rem, 6000)
+    secs, cs = divmod(rem, 100)
+    return "%d:%02d:%02d.%02d" % (hours, minutes, secs, cs)
+
+
+def _phrases_ass_text(phrases):
+    """حوّل عبارات {start,end,text} إلى نص ASS صالح للتحليل.
+
+    العبارات هي نفسها الممرَّرة إلى الكابشنات وقت التجميع،
+    فالقياس على النص المولَّد فعلًا لا على ملف قديم.
+    """
+    lines = [
+        "[Script Info]",
+        "Title: captions",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
+        "MarginV, Effect, Text",
+    ]
+    for phrase in phrases or []:
+        try:
+            start = float(phrase.get("start"))
+            end = float(phrase.get("end"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        text = str(phrase.get("text") or "").replace("\n", " ").strip()
+        if not text:
+            continue
+        lines.append("Dialogue: 0,%s,%s,Default,,0,0,0,,%s"
+                     % (_format_ass_time(start),
+                        _format_ass_time(end), text))
+    return "\n".join(lines) + "\n"
+
+
+def _readability_summary(report, formatted, ass_path, source):
+    """لخّص تقرير المقروئية في قاموس JSON صالح للسجل والمانيفست."""
+    def _short(phrase):
+        return {"text": phrase["text"], "start": phrase["start"],
+                "end": phrase["end"], "cps": round(phrase["cps"], 1)}
+    return {"ass_path": ass_path, "source": source,
+            "total": report["total"],
+            "flashing": [_short(p) for p in report["flashing"]],
+            "borderline": [_short(p) for p in report["borderline"]],
+            "max_cps": round(report["max_cps"], 1),
+            "median_cps": round(report["median_cps"], 1),
+            "report": formatted}
+
+
+def _print_readability(summary):
+    """اطبع تقرير المقروئية (تحذير + تقرير فقط — لا أثر في النتيجة)."""
+    print("مقروئية الكابشن:")
+    for line in summary["report"].splitlines():
+        print("  " + line)
+
+
+def _check_phrases_readability(phrases):
+    """حلّل عبارات الكابشن بمقياس المقروئية (تحذير فقط).
+
+    استيراد كسول للوحدة؛ وأي عطل (غياب الوحدة، عبارات تالفة)
+    يطبع تحذيرًا ويعيد None — لا يفشل التجميع أبدًا ولا يلمس
+    أي ملف (الفحص قراءة فقط على نص مبني في الذاكرة).
+    """
+    try:
+        from lib import caption_readability as readability_lib
+    except ImportError:
+        print("تحذير: وحدة فحص مقروئية الكابشن غير متاحة — "
+              "تخطّى الفحص")
+        return None
+    try:
+        report = readability_lib.analyze_ass_text(
+            _phrases_ass_text(phrases))
+    except Exception as e:
+        print("تحذير: تعذّر فحص مقروئية الكابشن (%s)" % e)
+        return None
+    return _readability_summary(
+        report, readability_lib.format_report(report), None, "phrases")
+
+
 # -------------------------------------------------------------- assemble
 def cmd_assemble(cfg, run_dir, title, out_path, watermark_on=True,
                  cards_dir=None, grade=None, sfx_events=(),
-                 overlays=(), assets_dir=None):
+                 overlays=(), assets_dir=None, no_title=False):
     """تجميع وتصدير، ثم (افتراضيًا) شعار الصفحة أعلى اليمين، ثم
     بطاقات الاقتباس الختامية إن أُعطي مجلدها. البطاقات تحمل الشعار
     أصلًا، فتُلحق بعد الشعار. المدة الكلية المستهدفة 40-60 ثانية:
     المحتوى 31-51 ثانية + 9 ثوانٍ بطاقات. الأصول الاختيارية
     (sfx_events/overlays/assets_dir) تُطبَّق بعد الإنهاء
     عبر lib/assets.py؛ وبلا أي منها لا يُستدعى شيء.
+    no_title=True (جولة v0.1.62): لا يُحرق عنوان الهوك في Concat
+    (title=None) ولا يدّعي البيان الجانبي عنوانًا محروقًا، فيبقى
+    hook-title لاحقًا ممكنًا بلا رفض من حارس التضاعف.
     """
     manifest_path = os.path.join(run_dir, "manifest.json")
     if not os.path.isfile(manifest_path):
@@ -898,7 +1103,8 @@ def cmd_assemble(cfg, run_dir, title, out_path, watermark_on=True,
     t0 = time.time()
     out = concat_mcp.assemble(
         concat_bin, projects_root, project_name, concat_assets_dir,
-        manifest, title, out_path, cfg["video"], log_path)
+        manifest, None if no_title else title, out_path, cfg["video"],
+        log_path)
     print("صُدّر الفيديو: %s (%.0f ثانية تصدير)"
           % (out, time.time() - t0))
     if grade:
@@ -913,17 +1119,21 @@ def cmd_assemble(cfg, run_dir, title, out_path, watermark_on=True,
         out = assets_lib.apply_assets(
             out, out, sfx=tuple(sfx_events or ()),
             overlays=tuple(overlays or ()), assets_dir=assets_dir)
-    _write_assemble_manifest(cfg, run_dir, title, out, "concat")
+    _write_assemble_manifest(cfg, run_dir, None if no_title else title,
+                             out, "concat", no_title=no_title)
     return out, round(time.time() - t0, 1)
 
 
 def _write_assemble_manifest(cfg, run_dir, title, out_path,
-                               backend, source="studio"):
+                               backend, source="studio", no_title=False):
     """اكتب بيان مصدر الفيديو بعد التجميع (جولة v0.1.37).
 
     يقرأ بيان الإنتاج (run_dir/manifest.json: الهوك والعبارات
     والنص الكامل) وسيناريو الذكاء (script-ai.json: العنوان).
     لا يفشل التجميع أبدًا — أي عطل يُطبع تحذيرًا فقط.
+    no_title=True (جولة v0.1.62): لم يُحرق أي عنوان، فلا يُكتب
+    عنوان في البيان — وإلا رفض حارس hook-title (lib/hook_title.py)
+    حرق الهوك لاحقًا ظنًا أن العنوان محروق أصلًا.
     """
     try:
         produce = {}
@@ -950,15 +1160,30 @@ def _write_assemble_manifest(cfg, run_dir, title, out_path,
                 "voice": (cfg.get("narration") or {}).get("voice", "piper"),
                 "atempo": (cfg.get("narration") or {}).get("atempo", 1.0),
                 "duration_seconds": produce.get("narration_duration")}
+        # مقروئية الكابشن (جولة v0.1.55): عبارات الإنتاج هي نفسها
+        # الممرَّرة إلى الكابشنات وقت التجميع — تحذير + تقرير فقط،
+        # لا يفشل التجميع أبدًا؛ وتُسجَّل النتيجة في بيان المصدر.
+        readability = _check_phrases_readability(
+            produce.get("phrases") or [])
+        if readability is not None:
+            _print_readability(readability)
+        extra = {"backend": backend,
+                 "project": produce.get("project"),
+                 "script_source": script.get("source")}
+        if readability is not None:
+            extra["caption_readability"] = readability
+        # عنوان البيان هو العنوان المحروق الذي يقرأه حارس
+        # hook-title — فبلا حرق (no_title) يبقى فارغًا حتى لو
+        # حمل السيناريو عنوانًا؛ وحقل hook وحده لا يفعّل الحارس.
+        man_title = "" if no_title else (script.get("title")
+                                         or title or "")
         man = manifest_lib.build_manifest(
-            out_path, title=script.get("title") or title or "",
+            out_path, title=man_title,
             hook=hook, story=produce.get("full_text", ""),
             source=source, scenes=scenes,
             phrases=produce.get("phrases") or [],
             narration=narration,
-            extra={"backend": backend,
-                   "project": produce.get("project"),
-                   "script_source": script.get("source")})
+            extra=extra)
         path = manifest_lib.write_manifest(out_path, man)
         print("بيان المصدر: %s" % path)
         return path
@@ -1186,10 +1411,32 @@ def cmd_fx(cfg, image, output, duration, text, audio, zoom_to, fontsize):
 
 
 # ------------------------------------------------------------ karaoke-ass
-def cmd_karaoke_ass(cfg, audio, ass_path, model, max_chars):
+def cmd_karaoke_ass(cfg, audio, ass_path, model, max_chars, lang="ar"):
     """كابشنات كاريوكي (كلمة-بكلمة) من faster-whisper — منطق Capite
     مُعاد تنفيذه (انظر lib/capite_captions.py). خيار تجريبي فقط؛
-    راجع النص قبل النشر (small يخطئ في ~22% من الكلمات)."""
+    راجع النص قبل النشر (small يخطئ في ~22% من الكلمات).
+    مع lang="en" (الموجة الأولى — W5): النسخ إنجليزي والملف
+    يُبنى بالمسار اللاتيني LTR (words_to_latin_ass) بدل مسار
+    الكاريوكي العربي — والموضع أسفل الصورة فقط في المسارين."""
+    lang = i18n_lib.normalize_lang(lang)
+    if lang == "en":
+        words, text = whisper_captions.transcribe_words(
+            audio, model=model, language="en")
+        if not words:
+            raise capite_captions.CapiteError(
+                "لم يسمع whisper أي كلام في: %s" % audio)
+        ass_text, groups = latin_captions.words_to_latin_ass(words)
+        out_dir = os.path.dirname(os.path.abspath(ass_path))
+        os.makedirs(out_dir, exist_ok=True)
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_text)
+        n_words = sum(len(ln) for g in groups for ln in g["lines"])
+        print("كُتبت %d كلمة لاتينية (LTR) في %d مجموعة في %s"
+              % (n_words, len(groups), ass_path))
+        print("النص المسموع: %s" % text)
+        print("راجع النص قبل النشر — حتى موديل small يخطئ في ~22% "
+              "من كلمات سرد Piper (WHISPER-TEST.md).")
+        return groups
     groups, text = capite_captions.karaoke_ass(
         audio, ass_path, model=model, max_chars=max_chars)
     n_words = sum(len(ln) for g in groups for ln in g["lines"])
@@ -1270,16 +1517,30 @@ def _request_run_fn(cfg):
 
 def cmd_run(cfg, story, project, out_path, allow_fallback, dry_run=False,
             backend="concat", watermark_on=True, cards_dir=None,
-            grade=None, lang="ar", resume=None):
+            grade=None, lang="ar", resume=None, voice=None):
     runs_dir = expand(cfg["paths"]["runs_dir"])
     if backend not in ("concat", "headless", "mlt", "openreel"):
         print(i18n_lib.t("run_unknown_backend", lang, backend))
         return 1
+    # صوت الراوي (الموجة الأولى — W3): --voice قد يكون اسم محرك أو
+    # اسم موديل Piper رجاليًا؛ والاسم غير المعروف أو غير الذكوري
+    # يُرفض بخطأ واضح قبل أي خطوة. السرد نفسه من أصول مشروع
+    # OpenMontage الجاهز، فالصوت هنا يُتحقق منه ويُسجَّل في سجل
+    # التشغيل (ولا يُعاد تركيب سرد المشروع الجاهز في هذا الأمر).
+    try:
+        _run_engine, _run_model = _resolve_voice_arg(voice)
+    except ValueError as e:
+        print(str(e))
+        return 2
+    voice_engine = _run_engine or _default_voice(cfg)
     if dry_run:
         # وضع تجريبي: يطبع ما سيفعله التشغيل دون استدعاء أي طبقة.
         root = expand(cfg["openmontage"]["root"])
         proj = os.path.join(root, "projects", project)
         print(i18n_lib.t("run_dry_header", lang))
+        print("اللغة: %s — صوت السرد: %s%s"
+              % (lang, voice_engine,
+                 " (%s)" % _run_model if _run_model else ""))
         print(i18n_lib.t("run_dry_scenario", lang, story,
                          cfg["omniroute"]["model"],
                          cfg["omniroute"].get("fallback_model"),
@@ -1381,6 +1642,12 @@ def cmd_run(cfg, story, project, out_path, allow_fallback, dry_run=False,
         run_record.print_settings(_settings)
         _record_path, _ = run_record.begin_record(
             runs_dir, "run", _settings, run_id=run_id)
+    log["voice"] = voice_engine
+    log["voice_model"] = _run_model
+    # سجل تشغيل بنيوي (جولة الأنماط W5b): ملف JSON واحد
+    # runs/run-log-<معرّف>.json بمعرّف ارتباط وتوقيت المراحل
+    # ورموز الأخطاء؛ لا يغيّر أي مخرج أو رمز خروج.
+    _run_log = run_log_lib.RunLog("run", out_dir=runs_dir)
     try:
         # مدخلات نقاط التفتيش (جولة v0.1.41 — بند 6): تُحفظ
         # مع كل خطوة مكتملة ليستعيدها الاستئناف لاحقًا.
@@ -1389,69 +1656,135 @@ def cmd_run(cfg, story, project, out_path, allow_fallback, dry_run=False,
                       "watermark": watermark_on, "grade": grade,
                       "cards_dir": cards_dir, "lang": lang,
                       "allow_fallback": allow_fallback,
+                      "voice": voice_engine, "voice_model": _run_model,
                       "run_dir": run_dir}
         # 1) السيناريو عبر OmniRoute (مع بديل موثق عند الفشل)
-        if (_resume_plan is not None
-                and run_resume.should_skip("script", _resume_plan)):
-            _script_result = run_resume.load_script_result(run_dir)
-            title = _script_result["title"]
-            log["steps"]["script"] = {"status": "skipped",
-                                      "resumed": True}
-            print("تخطَّت خطوة السيناريو (مكتملة من قبل)")
-        else:
-            result, step = cmd_script(cfg, story, allow_fallback, run_dir)
-            log["steps"]["script"] = step
-            if result is None:
-                raise RuntimeError("توقف خط الإنتاج: فشل توليد السيناريو "
-                                   "وبلا بديل مسموح")
-            title = result["title"]
-            run_record.save_checkpoint(
-                _record_path, "script", inputs=_cp_inputs,
-                outputs={"title": title, "script_file": "script-ai.json"})
+        with _run_log.stage("script"):
+            if (_resume_plan is not None
+                    and run_resume.should_skip("script", _resume_plan)):
+                _script_result = run_resume.load_script_result(run_dir)
+                title = _script_result["title"]
+                log["steps"]["script"] = {"status": "skipped",
+                                          "resumed": True}
+                print("تخطَّت خطوة السيناريو (مكتملة من قبل)")
+            else:
+                # ذاكرة مراحل (جولة الأنماط W5a): مدخلات مطابقة
+                # حرفيًا تعيد السيناريو المخزّن بلا استدعاء LLM؛
+                # وأي فشل في الذاكرة يرجع للمسار العادي بصمت.
+                _script_inputs = {
+                    "story": story,
+                    "lang": lang,
+                    "model": cfg["omniroute"].get("model"),
+                    "fallback_model": cfg["omniroute"].get(
+                        "fallback_model"),
+                    "allow_fallback": allow_fallback,
+                    "prompt": SCRIPT_PROMPT.format(
+                        story=STORY_TEXTS.get(story, story))}
+                _cached_path = None
+                try:
+                    _cached_path = stage_cache_lib.StageCache().lookup(
+                        "script", _script_inputs)
+                except Exception:
+                    _cached_path = None
+                if _cached_path:
+                    try:
+                        with open(_cached_path, encoding="utf-8") as _sf:
+                            result = json.load(_sf)
+                        if (not isinstance(result, dict)
+                                or not result.get("title")):
+                            raise ValueError("سيناريو مخزّن غير صالح")
+                        step = {"source": "stage-cache",
+                                "status": "cached"}
+                        with open(os.path.join(
+                                run_dir, "script-ai.json"),
+                                "w", encoding="utf-8") as _sf:
+                            json.dump(result, _sf, ensure_ascii=False,
+                                      indent=2)
+                        print("استُخدم السيناريو المخزّن (ذاكرة المراحل)")
+                    except Exception:
+                        _cached_path = None
+                if not _cached_path:
+                    result, step = cmd_script(
+                        cfg, story, allow_fallback, run_dir, lang=lang)
+                    # يُخزَّن السيناريو الحقيقي فقط (لا البديل):
+                    # بديل OpenMontage قد يخفي فشل LLM لاحقًا.
+                    if (result is not None
+                            and result.get("source") == "omniroute"):
+                        try:
+                            stage_cache_lib.StageCache().store(
+                                "script", _script_inputs,
+                                os.path.join(run_dir, "script-ai.json"))
+                        except Exception:
+                            pass
+                log["steps"]["script"] = step
+                if result is None:
+                    raise RuntimeError("توقف خط الإنتاج: فشل توليد "
+                                       "السيناريو وبلا بديل مسموح")
+                title = result["title"]
+                run_record.save_checkpoint(
+                    _record_path, "script", inputs=_cp_inputs,
+                    outputs={"title": title,
+                             "script_file": "script-ai.json"})
         # 2) الإنتاج: تجهيز أصول OpenMontage
         t0 = time.time()
-        if (_resume_plan is not None
-                and run_resume.should_skip("produce", _resume_plan)):
-            with open(os.path.join(run_dir, "manifest.json"),
-                      encoding="utf-8") as _mf:
-                manifest = json.load(_mf)
-            log["steps"]["produce"] = {"status": "skipped",
-                                       "resumed": True,
-                                       "images": len(manifest["images"]),
-                                       "phrases": len(manifest["phrases"])}
-            print("تخطَّت خطوة الإنتاج (مكتملة من قبل)")
-        else:
-            manifest = cmd_produce(cfg, project, run_dir)
-            log["steps"]["produce"] = {"status": "ok",
-                                       "seconds": round(time.time() - t0, 1),
-                                       "images": len(manifest["images"]),
-                                       "phrases": len(manifest["phrases"])}
-            run_record.save_checkpoint(
-                _record_path, "produce", inputs=_cp_inputs,
-                outputs={"manifest_file": "manifest.json",
-                         "images": len(manifest["images"]),
-                         "phrases": len(manifest["phrases"])})
+        with _run_log.stage("produce"):
+            if (_resume_plan is not None
+                    and run_resume.should_skip("produce", _resume_plan)):
+                with open(os.path.join(run_dir, "manifest.json"),
+                          encoding="utf-8") as _mf:
+                    manifest = json.load(_mf)
+                log["steps"]["produce"] = {"status": "skipped",
+                                           "resumed": True,
+                                           "images": len(manifest["images"]),
+                                           "phrases": len(manifest["phrases"])}
+                print("تخطَّت خطوة الإنتاج (مكتملة من قبل)")
+            else:
+                manifest = cmd_produce(cfg, project, run_dir)
+                log["steps"]["produce"] = {"status": "ok",
+                                           "seconds": round(time.time() - t0, 1),
+                                           "images": len(manifest["images"]),
+                                           "phrases": len(manifest["phrases"])}
+                run_record.save_checkpoint(
+                    _record_path, "produce", inputs=_cp_inputs,
+                    outputs={"manifest_file": "manifest.json",
+                             "images": len(manifest["images"]),
+                             "phrases": len(manifest["phrases"])})
         # 3) التجميع والتصدير (Concat افتراضيًا، أو headless-editor أو MLT
         #    أو OpenReel) ثم شعار الصفحة وبطاقات الاقتباس الختامية
         #    (داخل assemble).
         t0 = time.time()
-        if backend == "headless":
-            out, secs = cmd_assemble_headless(
-                cfg, run_dir, title, out_path, watermark_on, cards_dir,
-                grade)
-        elif backend == "mlt":
-            out, secs = cmd_assemble_mlt(
-                cfg, run_dir, title, out_path, watermark_on, cards_dir,
-                grade)
-        elif backend == "openreel":
-            out, secs = cmd_assemble_openreel(
-                cfg, run_dir, title, out_path, watermark_on, cards_dir,
-                grade)
-        else:
-            out, secs = cmd_assemble(cfg, run_dir, title, out_path,
-                                     watermark_on, cards_dir, grade)
-        log["steps"]["assemble"] = {"status": "ok", "seconds": secs,
-                                    "backend": backend, "output": out}
+        with _run_log.stage("assemble"):
+            if backend == "headless":
+                out, secs = cmd_assemble_headless(
+                    cfg, run_dir, title, out_path, watermark_on, cards_dir,
+                    grade)
+            elif backend == "mlt":
+                out, secs = cmd_assemble_mlt(
+                    cfg, run_dir, title, out_path, watermark_on, cards_dir,
+                    grade)
+            elif backend == "openreel":
+                out, secs = cmd_assemble_openreel(
+                    cfg, run_dir, title, out_path, watermark_on, cards_dir,
+                    grade)
+            else:
+                out, secs = cmd_assemble(cfg, run_dir, title, out_path,
+                                         watermark_on, cards_dir, grade)
+            log["steps"]["assemble"] = {"status": "ok", "seconds": secs,
+                                        "backend": backend, "output": out}
+        # تسجيل الفيديو في ذاكرة المراحل (جولة الأنماط W5a):
+        # تسجيل بلا نسخ وبلا إصابة تخطٍّ للتجميع في هذه الجولة؛
+        # وأي فشل هنا لا يمسّ الفيديو المنتج.
+        try:
+            stage_cache_lib.StageCache().record(
+                "video",
+                {"title": title,
+                 "manifest_hash": stage_cache_lib.hash_file(
+                     os.path.join(run_dir, "manifest.json")),
+                 "backend": backend, "grade": grade,
+                 "watermark": watermark_on},
+                out)
+        except Exception:
+            pass
         log["status"] = "done"
         print(i18n_lib.t("run_done", lang, out))
         run_record.finish_record(_record_path, "done", outputs=[out])
@@ -1459,11 +1792,344 @@ def cmd_run(cfg, story, project, out_path, allow_fallback, dry_run=False,
         log["status"] = "failed"
         log["error"] = str(e)
         run_record.finish_record(_record_path, "failed", error=e)
+        # المرحلة الفاشلة سجّلت الاستثناء نفسه أصلًا (عبر
+        # stage()) — لا يُسجَّل مرة ثانية؛ والتسجيل هنا فقط
+        # لخطأ وقع خارج أي مرحلة.
+        if not _run_log.errors:
+            _run_log.record_error(e, context="run")
+        _run_log.finish("failed")
         _print_translated("فشل خط الإنتاج", e, "run", lang)
         write_log(run_dir, log)
         return 1
+    _run_log.finish("ok", output={"video": out})
     write_log(run_dir, log)
     return 0
+
+
+# ------------------------------------------------------------------ quick
+_QUICK_PROMPT_AR = (
+    "اكتب قصة قصيرة بعنوان «{title}» بصيغة الاستوديو: هوك صادم من "
+    "جملة واحدة يخفي النهاية، ثم القصة في 3–4 جمل قصيرة (الجسم كله "
+    "≤ 250 حرفًا — الفيديو الكامل 40–60 ثانية فقط)، قرار أخلاقي "
+    "واحد ثم انقلاب أو عوض، ثم عبرة من سطر واحد تُستنتج من الأحداث "
+    "لا تُلَقَّن، ثم سؤال ختامي محيّر. أرجعها بهذا الشكل بالضبط:\n"
+    "هوك: <جملة واحدة>\n"
+    "القصة: <نص القصة>\n"
+    "العبرة: <سطر واحد>\n"
+    "سؤال: <سؤال ختامي>")
+_QUICK_PROMPT_EN = (
+    "Write a short story titled \"{title}\" in the studio format: a "
+    "shocking one-sentence hook that hides the ending, then the story "
+    "in 3-4 short sentences (the story body between 450 and 600 "
+    "characters — the whole video is only 40-60 seconds), one moral "
+    "decision, "
+    "then a twist or a reward, then a one-line moral drawn from the "
+    "events, then a puzzling closing question. Return it in exactly "
+    "this shape:\n"
+    "HOOK: <one sentence>\n"
+    "STORY: <the story text>\n"
+    "MORAL: <one line>\n"
+    "QUESTION: <closing question>")
+_QUICK_LABELS = {
+    "hook": ("هوك", "hook"),
+    "body": ("القصة", "story"),
+    "moral": ("العبرة", "moral"),
+    "question": ("سؤال", "question"),
+}
+_QUICK_DEFAULT_QUESTION = {
+    "ar": "لو كنت مكانه، كنت هتعمل إيه؟",
+    "en": "What would you do if you were in their place?",
+}
+
+
+def _parse_quick_story(text, lang="ar"):
+    """قسّم نص قصة مولّدة إلى {hook, body, moral, question}.
+
+    يقبل الصيغة الموسومة (هوك:/القصة:/العبرة:/سؤال: أو
+    HOOK:/STORY:/MORAL:/QUESTION:)؛ وبلاها يشتق الأجزاء من الجمل:
+    الأولى هوك، والأخيرة سؤال إن انتهت بعلامة استفهام، وما قبلها
+    عبرة، والوسط جسم القصة. يرفع ValueError عند نص بلا جمل صالحة."""
+    import re
+    lang = i18n_lib.normalize_lang(lang)
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("نص القصة المولّدة فارغ")
+    parts = {}
+    current = None
+    rest_lines = []
+    for line in text.splitlines():
+        m = re.match(r"^\s*([^:：]{1,20})\s*[:：]\s*(.*)$", line.strip())
+        label = None
+        if m:
+            head = m.group(1).strip().lower()
+            for key, names in _QUICK_LABELS.items():
+                if head in [n.lower() for n in names]:
+                    label = key
+                    break
+        if label:
+            current = label
+            parts[current] = m.group(2).strip()
+        elif current:
+            parts[current] = (parts[current] + " " + line.strip()).strip()
+        else:
+            rest_lines.append(line.strip())
+    if parts.get("hook") or parts.get("moral") or parts.get("question"):
+        body = parts.get("body") or " ".join(
+            l for l in rest_lines if l)
+        hook = parts.get("hook") or ""
+        moral = parts.get("moral") or ""
+        question = parts.get("question") or ""
+        if not hook or not body or not moral:
+            raise ValueError("القصة المولّدة ناقصة الأجزاء (هوك/جسم/عبرة)")
+        if not question:
+            question = _QUICK_DEFAULT_QUESTION[lang]
+        return {"hook": hook.strip(), "body": body.strip(),
+                "moral": moral.strip(), "question": question.strip()}
+    sentences = [s.strip() for s in
+                 long_narration.split_sentences(text) if s.strip()]
+    if len(sentences) < 3:
+        raise ValueError("القصة المولّدة أقصر من أن تُقسَّم (هوك/جسم/عبرة)")
+    hook = sentences[0]
+    if sentences[-1].rstrip().endswith(("?", "؟")):
+        question = sentences[-1]
+        moral = sentences[-2]
+        body = " ".join(sentences[1:-2])
+    else:
+        question = _QUICK_DEFAULT_QUESTION[lang]
+        moral = sentences[-1]
+        body = " ".join(sentences[1:-1])
+    if not body:
+        raise ValueError("القصة المولّدة بلا جسم بعد الهوك والعبرة")
+    return {"hook": hook, "body": body, "moral": moral,
+            "question": question}
+
+
+def _quick_template_story(title, lang="ar"):
+    """قصة مدمجة من القوالب (رجوع بلا LLM): قالب honesty_charity
+    ببطل هو العنوان نفسه وموقف عام يختبر الأمانة — هوك جملة واحدة
+    + عبرة + سؤال ختامي من القالب نفسه."""
+    lang = i18n_lib.normalize_lang(lang)
+    situation = ("faced a moment that tested his honesty"
+                 if lang == "en"
+                 else "واجه موقفًا يختبر أمانته")
+    outline = story_templates_lib.build_scene_outline(
+        "honesty_charity", title, hero=title, situation=situation,
+        clips=6, lang=lang)
+    scenes = outline["scenes"]
+    story = {"hook": scenes[0]["prompt"],
+             "body": " ".join(s["prompt"] for s in scenes[1:-1]),
+             "moral": scenes[-1]["prompt"],
+             "question": outline["closing_question"],
+             "source": "template:honesty_charity"}
+    return story
+
+
+def _quick_llm_story(cfg, title, lang="ar"):
+    """ولّد قصة quick عبر LLM بالموجّه حسب اللغة (W4). يرفع
+    OmniRouteError عند فشل كل المزودين، وValueError عند نص ناقص."""
+    lang = i18n_lib.normalize_lang(lang)
+    prompt = (_QUICK_PROMPT_EN if lang == "en" else _QUICK_PROMPT_AR
+              ).format(title=title)
+    system = omniroute_client.load_system_prompt(lang)
+    text, _via, _model = _llm_chat(cfg, prompt, max_tokens=800,
+                                   temperature=0.7, system=system)
+    story = _parse_quick_story(text, lang)
+    story["source"] = "omniroute"
+    return story
+
+
+_QUICK_CHAPTER_MAX_SECONDS = 40.0
+
+
+def _fit_quick_chapter(story, chapter_text, chapter_info, narr_dir,
+                       voice_engine, model_path, lang):
+    """قصّر فصل quick لميزانية 40 ثانية (الفيديو الكامل 40–60 ثانية).
+
+    المقدمة (الهوك) ~13ث والخاتمة (السؤال) ~7ث ثابتتان تقريبًا،
+    فيبقى للفصل (جسم + عبرة) 40ث. إن تجاوزت مدته المقاسة الحد،
+    تُحذف جمل الجسم الأخيرة واحدة تلو الأخرى ويُعاد تركيب الفصل
+    (العبرة والهوك والسؤال بلا مساس أبدًا) حتى يدخل في الميزانية
+    أو يبقى جملة واحدة. يرجع (chapter_text, chapter_info) —
+    وقد يكونان الأصلين بلا تغيير.
+    """
+    if chapter_info["duration"] <= _QUICK_CHAPTER_MAX_SECONDS:
+        return chapter_text, chapter_info
+    sentences = [s for s in long_narration.split_sentences(story["body"])
+                 if s.strip()]
+    trimmed = list(sentences)
+    info = chapter_info
+    text = chapter_text
+    while (len(trimmed) > 1
+           and info["duration"] > _QUICK_CHAPTER_MAX_SECONDS):
+        trimmed = trimmed[:-1]
+        text = (" ".join(trimmed) + " " + story["moral"]).strip()
+        info = long_narration.synthesize_long(
+            text, os.path.join(narr_dir, "chapter.wav"),
+            voice=voice_engine, model=model_path, lang=lang)
+    if info["duration"] > _QUICK_CHAPTER_MAX_SECONDS:
+        print("تحذير: فصل quick ما زال %.1f ثانية بعد التقليص "
+              "(الميزانية %.0f) — الفيديو الكامل قد يتجاوز 60 ثانية"
+              % (info["duration"], _QUICK_CHAPTER_MAX_SECONDS))
+    else:
+        print("قُصّر فصل quick من %.1f إلى %.1f ثانية ليبقى الفيديو "
+              "الكامل ضمن 40–60 ثانية"
+              % (chapter_info["duration"], info["duration"]))
+    return text, info
+
+
+def cmd_quick(cfg, title, lang="ar", voice=None, out_path=None,
+              dry_run=False, allow_fallback=False, publish=False):
+    """أمر واحد `quick`: عنوان ← فيديو قصة قصيرة كامل بلا أسئلة.
+
+    LLM بالموجّه حسب اللغة (أو قالب مدمج مع --allow-fallback عند
+    غياب LLM — نفس دلالة allow_fallback في cmd_run)؛ سرد Piper
+    (رجل، باللغة المطلوبة) + صور ثابتة مولّدة محليًا بحركة Ken Burns
+    خفيفة عبر build_fast_draft (بلا انتظار GPU) + تجميع + شعار
+    الصفحة؛ والكتابة أسفل الصورة فقط (مسار build_project نفسه)؛
+    وبلا موسيقى أبدًا؛ وبلا نشر تلقائي — النشر فقط مع --publish
+    الصريح. مع lang="en" يُكتب أيضًا ملف ASS لاتيني جانبي.
+    يرجع 0 عند النجاح، و1 عند فشل الإنتاج، و2 عند وسائط غير صالحة.
+    """
+    lang = i18n_lib.normalize_lang(lang)
+    title = (title or "").strip()
+    if not title:
+        print("عنوان القصة مطلوب: qisas quick \"عنوان القصة\"")
+        return 2
+    try:
+        engine, model_path = _resolve_voice_arg(voice)
+    except ValueError as e:
+        print(str(e))
+        return 2
+    voice_engine = engine or _default_voice(cfg)
+    runs_dir = expand(cfg["paths"]["runs_dir"])
+    videos_dir = expand(cfg["paths"]["videos_dir"])
+    out = expand(out_path) if out_path else os.path.join(
+        videos_dir, "quick-%s.mp4" % time.strftime("%Y%m%d-%H%M%S"))
+    if dry_run:
+        print("== خطة quick (وضع تجريبي — لن يُنتج شيء) ==")
+        print("العنوان: %s" % title)
+        print("اللغة: %s" % lang)
+        print("الصوت: %s%s" % (voice_engine,
+                               " (%s)" % model_path if model_path else ""))
+        print("الحركة: kenburns (صور ثابتة بحركة Ken Burns خفيفة — "
+              "بلا انتظار GPU)")
+        print("المخرج: %s" % out)
+        print("السيناريو: LLM بالموجّه (%s)%s"
+              % (lang,
+                 " مع رجوع لقالب مدمج عند الفشل"
+                 if allow_fallback else " — بلا رجوع عند الفشل"))
+        print("النشر: %s" % ("مطلوب بعد الإنتاج (--publish)"
+                             if publish
+                             else "لا — لاحق بأمر publish الصريح"))
+        if lang == "en":
+            print(EN_VOICE_LICENSE_NOTE)
+        return 0
+    run_id, run_dir = new_run(runs_dir, "quick")
+    log = {"run": run_id, "cmd": "quick", "title": title, "lang": lang,
+           "voice": voice_engine, "voice_model": model_path,
+           "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "steps": {}}
+    try:
+        try:
+            story = _quick_llm_story(cfg, title, lang)
+        except (omniroute_client.OmniRouteError, ValueError) as e:
+            print("فشل توليد القصة عبر LLM: %s" % e)
+            if not allow_fallback:
+                raise RuntimeError(
+                    "توقف quick: فشل توليد القصة وبلا بديل مسموح "
+                    "(استخدم --allow-fallback لقالب مدمج)")
+            story = _quick_template_story(title, lang)
+            print("استُخدمت القصة المدمجة من القوالب: %s"
+                  % story["hook"])
+        log["steps"]["story"] = {"status": "ok",
+                                 "source": story["source"],
+                                 "hook": story["hook"]}
+        print("الهوك: %s" % story["hook"])
+        width = int(cfg["video"]["width"])
+        height = int(cfg["video"]["height"])
+        images = []
+        for i, hue in enumerate(("gold", "earth", "green")):
+            img_path = os.path.join(run_dir, "scene-%d.jpg" % (i + 1))
+            demo.make_scene_image(img_path, width, height,
+                                  hue=hue, seed=7 + i)
+            images.append(img_path)
+        narr_dir = os.path.join(run_dir, "narration")
+        os.makedirs(narr_dir, exist_ok=True)
+        intro_info = long_narration.synthesize_long(
+            story["hook"], os.path.join(narr_dir, "intro.wav"),
+            voice=voice_engine, model=model_path, lang=lang)
+        chapter_text = (story["body"] + " " + story["moral"]).strip()
+        chapter_info = long_narration.synthesize_long(
+            chapter_text, os.path.join(narr_dir, "chapter.wav"),
+            voice=voice_engine, model=model_path, lang=lang)
+        chapter_text, chapter_info = _fit_quick_chapter(
+            story, chapter_text, chapter_info, narr_dir,
+            voice_engine, model_path, lang)
+        chapter = long_video.chapter_from_text(
+            title, chapter_text, chapter_info, images,
+            moral=story["moral"])
+        outro_info = long_narration.synthesize_long(
+            story["question"], os.path.join(narr_dir, "outro.wav"),
+            voice=voice_engine, model=model_path, lang=lang)
+        spec = {"title": title, "hook": story["hook"],
+                "intro": {"text": story["hook"],
+                          "narration": intro_info["output"],
+                          "duration": intro_info["duration"]},
+                "outro": {"text": story["question"],
+                          "narration": outro_info["output"],
+                          "duration": outro_info["duration"]},
+                "chapters": [chapter],
+                "width": width, "height": height,
+                "fps": int(cfg["video"]["fps"])}
+        result = long_video.build_fast_draft(
+            spec, out, voice=voice_engine, work_dir=run_dir)
+        video = _finish_video(result["output"], True, None)
+        log["steps"]["video"] = {"status": "ok", "output": video,
+                                 "duration": result["duration"]}
+        print("اكتمل quick: %s (%.1f ثانية)"
+              % (video, result["duration"]))
+        ass_path = None
+        if lang == "en":
+            try:
+                with open(result["report"]["project_json"],
+                          encoding="utf-8") as f:
+                    project = json.load(f)
+            except (OSError, ValueError) as e:
+                print("تحذير: تعذّرت قراءة مشروع quick للكابشن (%s) — "
+                      "الفيديو سليم" % e)
+                project = None
+            if project is not None:
+                ass_path = _write_latin_ass_from_project(
+                    project,
+                    os.path.splitext(video)[0] + "-captions-en.ass")
+                if ass_path:
+                    log["captions_ass"] = ass_path
+                    print("كابشن لاتيني (LTR): %s" % ass_path)
+        story_record = dict(story)
+        story_record.update({"lang": lang, "voice": voice_engine,
+                             "output": video, "duration": result["duration"],
+                             "captions_ass": ass_path})
+        with open(os.path.join(run_dir, "quick-story.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(story_record, f, ensure_ascii=False, indent=2)
+        log["status"] = "done"
+        log["output"] = video
+        log["duration"] = result["duration"]
+        if publish:
+            caption = "%s\n\n%s\n\n%s" % (story["hook"], story["moral"],
+                                         story["question"])
+            rc = cmd_publish(cfg, video, title, caption, lang=lang)
+            log["publish_rc"] = rc
+            write_log(run_dir, log)
+            return rc
+        print("النشر: لم يُنشر — انشر لاحقًا بأمر publish الصريح")
+        write_log(run_dir, log)
+        return 0
+    except Exception as e:
+        log["status"] = "failed"
+        log["error"] = str(e)
+        _print_translated("فشل quick", e, "quick", lang)
+        write_log(run_dir, log)
+        return 1
 
 
 # ---------------------------------------------------------------- doctor
@@ -1481,7 +2147,11 @@ def cmd_check(cfg, video, long_mode=False, as_json=False,
     try:
         result = check_lib.run_checks(expand(video), long_mode=long_mode)
     except check_lib.CheckError as e:
-        _print_translated("تعذر فحص الفيديو", e, "check")
+        if as_json:
+            print(json.dumps({"ok": False, "error": str(e)},
+                             ensure_ascii=False))
+        else:
+            _print_translated("تعذر فحص الفيديو", e, "check")
         return 1
     if avatar_image:
         try:
@@ -1491,19 +2161,20 @@ def cmd_check(cfg, video, long_mode=False, as_json=False,
         except check_lib.CheckError as e:
             aspect = {"level": "warn", "detail": str(e)}
         result["avatar_aspect"] = aspect
-        if aspect["level"] == "warn":
+        if aspect["level"] == "warn" and not as_json:
             print("تحذير — نسبة أبعاد الأفاتار: %s"
                   % aspect["detail"])
     # بيان المصدر (جولة v0.1.37): legacy تحذير فقط، لا فشل أبدًا؛
     # فيديو جديد بلا بيان (أو بيان مشوَّه) فشل.
     manifest_status, manifest_issues = manifest_lib.verify_manifest(
         expand(video))
-    if manifest_status == "ok":
-        print("بيان المصدر: سليم (البصمة مطابقة)")
-    elif manifest_status in ("legacy", "mismatch"):
-        print("تحذير — بيان المصدر: %s" % manifest_issues[0])
-    else:
-        print("بيان المصدر: %s" % "; ".join(manifest_issues))
+    if not as_json:
+        if manifest_status == "ok":
+            print("بيان المصدر: سليم (البصمة مطابقة)")
+        elif manifest_status in ("legacy", "mismatch"):
+            print("تحذير — بيان المصدر: %s" % manifest_issues[0])
+        else:
+            print("بيان المصدر: %s" % "; ".join(manifest_issues))
     manifest_ok = manifest_status in ("ok", "legacy", "mismatch")
     # تأكيدات التغطية/الحدود (جولة v0.1.37 — مقترح tinker رقم 3):
     # تُشغَّل فقط عند وجود بيان فيه مشاهد موقَّتة، وتُلحق
@@ -1517,21 +2188,24 @@ def cmd_check(cfg, video, long_mode=False, as_json=False,
             result["checks"].extend(extra)
             result["passed"] = all(c["ok"] for c in result["checks"])
         except Exception as e:
-            print("تحذير: تعذرت تأكيدات التغطية (%s)" % e)
+            if not as_json:
+                print("تحذير: تعذرت تأكيدات التغطية (%s)" % e)
     # عيّنة سلوكية (جولة v0.1.37 — مقترح tinker رقم 6): 3 لقطات
     # + معاينة 3 ثوانٍ في runs/samples/<اسم الفيديو>/ — للمراجعة
     # البصرية السريعة بلا فتح الفيديو كاملًا. لا تؤثر في النتيجة.
-    try:
-        _samples_dir = os.path.join(
-            expand(cfg["paths"]["runs_dir"]), "samples",
-            os.path.splitext(os.path.basename(expand(video)))[0])
-        _sample = check_lib.sample_video(expand(video), _samples_dir)
-        print("عيّنة سلوكية: %s" % _samples_dir)
-        for _frame in _sample["frames"]:
-            print("  لقطة: %s" % _frame)
-        print("  معاينة 3ث: %s" % _sample["preview"])
-    except Exception as e:
-        print("تحذير: تعذرت العيّنة السلوكية (%s)" % e)
+    # في وضع --json تُتخطى كاملةً ليبقى المخرج JSON خالصًا.
+    if not as_json:
+        try:
+            _samples_dir = os.path.join(
+                expand(cfg["paths"]["runs_dir"]), "samples",
+                os.path.splitext(os.path.basename(expand(video)))[0])
+            _sample = check_lib.sample_video(expand(video), _samples_dir)
+            print("عيّنة سلوكية: %s" % _samples_dir)
+            for _frame in _sample["frames"]:
+                print("  لقطة: %s" % _frame)
+            print("  معاينة 3ث: %s" % _sample["preview"])
+        except Exception as e:
+            print("تحذير: تعذرت العيّنة السلوكية (%s)" % e)
     if as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
@@ -1540,7 +2214,11 @@ def cmd_check(cfg, video, long_mode=False, as_json=False,
         try:
             ass_result = ass_shaping_lib.audit_ass_dir(captions_dir)
         except FileNotFoundError as e:
-            print("تعذر تدقيق الكابشنات: %s" % e)
+            if as_json:
+                print(json.dumps({"ok": False, "error": str(e)},
+                                 ensure_ascii=False))
+            else:
+                print("تعذر تدقيق الكابشنات: %s" % e)
             return 1
         if as_json:
             print(json.dumps(ass_result, ensure_ascii=False, indent=2))
@@ -1749,6 +2427,23 @@ def cmd_llm_status(cfg, lang="ar"):
                              (_st.get("detail")
                               or i18n_lib.t("llm_ollama_down_default",
                                             lang))))
+    return 0
+
+
+def cmd_debug_config(profile=None, cli_overrides=None):
+    """اعرض الإعداد الفعّال ومصدر كل قيمة (قراءة فقط).
+
+    بروفايل غير موجود أو إعداد تالف ← رسالة عربية وخروج 2
+    (بلا رجوع صامت لافتراضي يخفي المشكلة).
+    """
+    try:
+        resolved = profiles_lib.resolve(
+            profile, studio_root=STUDIO_DIR,
+            cli_overrides=cli_overrides or [])
+    except profiles_lib.ProfileError as e:
+        print(str(e))
+        return 2
+    print(profiles_lib.format_diagnosis(resolved))
     return 0
 
 
@@ -2251,9 +2946,78 @@ def _default_voice(cfg):
         else "piper"
 
 
+def _resolve_voice_arg(voice, lang="ar"):
+    """حسم --voice (الموجة الأولى — W3): اسم محرك (piper/gtts/
+    supertonic-M1) أو اسم موديل Piper من سجل i18n (الاسم الكامل
+    مثل en_US-ryan-medium أو الاسم القصير مثل ryan/kareem، مع
+    لاحقة .onnx اختيارية). يرجع (engine, model_path_or_None):
+    موديل صريح يعني محرك piper ومسار الموديل؛ وبلا --voice يرجع
+    (None, None) فيستخدم المستدعي الافتراضي من الإعداد.
+    يرفع ValueError برسالة عربية واضحة عند اسم غير معروف أو
+    صوت غير ذكوري — الراوي رجل دائمًا (فـen_US-lessac-medium
+    الأنثوي مرفوض كاسم غير معروف لأنه خارج سجل الأصوات الرجالية)."""
+    if voice is None:
+        return None, None
+    name = str(voice).strip()
+    if name.endswith(".onnx"):
+        name = name[:-5]
+    if name in ("piper", "gtts", "supertonic-M1"):
+        return name, None
+    for key, entry in i18n_lib.PIPER_VOICES.items():
+        if name in (entry["model"], entry.get("voice_dir")):
+            if entry.get("gender") != "male":
+                raise ValueError(
+                    "الصوت %s ليس صوت راوٍ رجالي — الراوي رجل دائمًا"
+                    % voice)
+            return "piper", i18n_lib.voice_model_path(key)
+    known = sorted(e["model"] for e in i18n_lib.PIPER_VOICES.values()
+                   if e.get("gender") == "male")
+    raise ValueError(
+        "صوت غير معروف: %s (المسموح: piper أو gtts أو supertonic-M1 "
+        "أو موديل Piper رجالي: %s)" % (voice, ", ".join(known)))
+
+
+def _write_latin_ass_from_project(project, ass_path):
+    """اجمع كلمات مسارات مشروع headless (بتوقيتاتها المطلقة) واكتب
+    ملف ASS لاتينيًا (LTR، أسفل الصورة فقط) عبر words_to_latin_ass.
+    يرجع مسار الملف أو None عند غياب الكلمات أو فشل التوليد
+    (fail-open: يُطبع تحذير ولا يفشل الفيديو)."""
+    words = []
+    for track in (project or {}).get("tracks", []) or []:
+        for w in track.get("words") or []:
+            try:
+                words.append({"w": w["w"],
+                              "start": float(w["start"]),
+                              "end": float(w["end"])})
+            except (KeyError, TypeError, ValueError):
+                continue
+    if not words:
+        return None
+    try:
+        ass_text, _groups = latin_captions.words_to_latin_ass(words)
+    except latin_captions.LatinCaptionError as e:
+        print("تحذير: تعذّر توليد الكابشن اللاتيني (%s) — الفيديو سليم"
+              % e)
+        return None
+    try:
+        with open(ass_path, "w", encoding="utf-8") as f:
+            f.write(ass_text)
+    except OSError as e:
+        print("تحذير: تعذّرت كتابة الكابشن اللاتيني (%s) — الفيديو سليم"
+              % e)
+        return None
+    return ass_path
+
+
 def cmd_long_narration(cfg, text, text_file, out_path, gap, atempo,
-                       voice="piper"):
-    """سرد طويل مقسّم إلى WAV واحد (Piper رجل افتراضيًا؛ أو gTTS)."""
+                       voice="piper", lang="ar"):
+    """سرد طويل مقسّم إلى WAV واحد (Piper رجل افتراضيًا؛ أو gTTS).
+    lang: لغة السرد (الموجة الأولى — W3) — تُمرَّر إلى synthesize_long
+    فيُحسم موديل Piper منها عند غياب model صريح؛ وvoice قد يكون اسم
+    موديل Piper رجاليًا (يُحسم عبر _resolve_voice_arg ويغلب lang)."""
+    lang = i18n_lib.normalize_lang(lang)
+    engine, model_path = _resolve_voice_arg(voice)
+    voice = engine or "piper"
     if text_file:
         # إصلاح اختبار اختراق 2026-11-21: ملف نص قادم من ملف فصول
         # JSON كان يقرأ أي ملف على القرص — احصره في مساحة العمل.
@@ -2262,7 +3026,8 @@ def cmd_long_narration(cfg, text, text_file, out_path, gap, atempo,
         with open(text_file, encoding="utf-8") as f:
             text = f.read()
     result = long_narration.synthesize_long(
-        text, expand(out_path), gap=gap, atempo=atempo, voice=voice)
+        text, expand(out_path), gap=gap, atempo=atempo, voice=voice,
+        model=model_path, lang=lang)
     print("سرد طويل (%s): %s (%.1f ثانية، %d جملة)"
           % (voice, result["output"], result["duration"],
              len(result["chunks"])))
@@ -2370,8 +3135,11 @@ def _attach_motion_clips(ch, entry):
     return ch
 
 
-def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper"):
-    """حوّل مدخل فصل واحد (من ملف الفصول أو CLI) إلى قاموس فصل."""
+def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper",
+                          lang="ar", model=None):
+    """حوّل مدخل فصل واحد (من ملف الفصول أو CLI) إلى قاموس فصل.
+    lang/model: لغة السرد وموديل Piper الصريح (الموجة الأولى — W3)
+    للفصول النصية — تُمرَّران إلى synthesize_long كما هما."""
     if not isinstance(entry, dict):
         raise long_video.LongVideoError("مدخل فصل ليس كائنًا: %r" % (entry,))
     kind = entry.get("type")
@@ -2474,7 +3242,8 @@ def _resolve_long_chapter(cfg, entry, work_dir, atempo, index, voice="piper"):
                            "text-chapter-%d.wav" % index)
         os.makedirs(os.path.dirname(wav), exist_ok=True)
         info = long_narration.synthesize_long(text, wav, atempo=atempo,
-                                              voice=voice)
+                                              voice=voice, lang=lang,
+                                              model=model)
         return _attach_motion_clips(
             long_video.chapter_from_text(title, text, info, images,
                                          moral=moral), entry)
@@ -2516,14 +3285,27 @@ def _cli_flag_present(flag):
                for a in sys.argv[1:])
 
 
-def cmd_long_video(cfg, args):
-    """فيديو طويل أفقي 1280×720 من عدة فصول (8–12 دقيقة)."""
+def cmd_long_video(cfg, args, lang="ar"):
+    """فيديو طويل أفقي 1280×720 من عدة فصول (8–12 دقيقة).
+    lang: لغة السرد والكابشن (الموجة الأولى) — من --lang الصريح
+    في الأمر أو لغة CLI العامة؛ و--voice قد يكون اسم موديل Piper
+    رجاليًا (يُحسم عبر _resolve_voice_arg)."""
+    lang = i18n_lib.normalize_lang(
+        getattr(args, "cmd_lang", None) or lang)
+    try:
+        _lv_engine, _lv_model = _resolve_voice_arg(
+            getattr(args, "voice", None))
+    except ValueError as e:
+        print(str(e))
+        return 2
     runs_dir = expand(cfg["paths"]["runs_dir"])
     run_id, run_dir = new_run(runs_dir, "long-video")
     log = {"run": run_id, "cmd": "long-video",
-           "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "steps": {}}
+           "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "steps": {},
+           "lang": lang}
     # صوت السرد: --voice الصريح أولًا، وإلا الافتراضي من الإعداد.
-    voice = getattr(args, "voice", None) or _default_voice(cfg)
+    voice = _lv_engine or _default_voice(cfg)
+    model_path = _lv_model
     print("تشغيل الفيديو الطويل: %s" % run_id)
     # سجل تشغيل (جولة v0.1.37).
     _lv_settings = run_record.resolve_settings(
@@ -2659,7 +3441,8 @@ def cmd_long_video(cfg, args):
         for i, entry in enumerate(entries):
             t0 = time.time()
             ch = _resolve_long_chapter(cfg, entry, run_dir, args.atempo, i,
-                                       voice=voice)
+                                       voice=voice, lang=lang,
+                                       model=model_path)
             chapters.append(ch)
             print("فصل %d: %s (%.1f ثانية، %d عبارة)"
                   % (i + 1, ch["title"], ch["duration"],
@@ -2667,20 +3450,63 @@ def cmd_long_video(cfg, args):
             log["steps"]["chapter-%d" % (i + 1)] = {
                 "status": "ok", "seconds": round(time.time() - t0, 1),
                 "title": ch["title"], "duration": ch["duration"]}
+        # 1أ) تحسين الحركة (--improve-motion، الموجة الأولى — W1):
+        # بدّل صور الفصول بمقاطع مولّدة من المانيفست مع إعادة
+        # استخدام الإطارات المجمّدة عبر StageCache — بلا توليد GPU
+        # هنا (التوليد خارج هذه الدالة). المانيفست من
+        # --motion-manifest (أو ملف الفصول)، والمجلد من --motion-dir
+        # (أو مجلد المانيفست عند غيابه).
+        improved_motion = None
+        if getattr(args, "improve_motion", False):
+            _im_manifest = getattr(args, "motion_manifest", None) \
+                or spec.get("motion_manifest")
+            if not _im_manifest:
+                raise long_video.LongVideoError(
+                    "--improve-motion يحتاج --motion-manifest (مسار "
+                    "مانيفست الحركة)")
+            _im_dir = getattr(args, "motion_dir", None) \
+                or spec.get("motion_dir")
+            _im_dir = expand(_im_dir) if _im_dir else os.path.dirname(
+                os.path.abspath(expand(_im_manifest)))
+            _im_clip = (long_video.YOUTUBE_LONG_IMAGE_SECONDS
+                        if (getattr(args, "motion", None) == "youtube-long"
+                            or spec.get("motion") == "youtube-long")
+                        else None)
+            improved_motion = long_video.improve_motion(
+                {"title": title, "hook": hook, "chapters": chapters},
+                expand(_im_manifest), _im_dir,
+                cache=stage_cache_lib.StageCache(), work_dir=run_dir,
+                clip_seconds=_im_clip)
+            chapters = improved_motion["spec"]["chapters"]
+            motion = "clips"
+            print("حُسّنت الحركة: أُعيد استخدام %d مقطعًا، ووُلّد %d "
+                  "إطارًا مجمّدًا"
+                  % (len(improved_motion.get("reused") or []),
+                     len(improved_motion.get("generated") or [])))
         # 1ب) مقاطع الحركة (v0.1.44): أعلام CLI تتجاوز مفاتيح ملف
         # الفصول (motion/motion_manifest/motion_dir) عند تمريرها.
-        if _cli_flag_present("--motion"):
-            motion = getattr(args, "motion", None) or "clips"
+        if improved_motion is not None:
+            motion = "clips"
+        elif _cli_flag_present("--motion"):
+            motion = getattr(args, "motion", None) \
+                or long_video.FAST_MOTION_DEFAULT
         elif isinstance(spec.get("motion"), str):
             motion = spec["motion"]
         else:
-            motion = getattr(args, "motion", None) or "clips"
+            motion = getattr(args, "motion", None) \
+                or long_video.FAST_MOTION_DEFAULT
         motion_manifest = getattr(args, "motion_manifest", None) \
             or spec.get("motion_manifest")
         motion_dir = getattr(args, "motion_dir", None) \
             or spec.get("motion_dir")
         motion_log = {"mode": motion, "warnings": [], "chapters": []}
-        if motion in ("clips", "youtube-long"):
+        if improved_motion is not None:
+            motion_log["warnings"].extend(
+                improved_motion.get("warnings") or [])
+            motion_log["chapters"].extend(
+                list((improved_motion.get("report") or {}).get("chapters")
+                     or []))
+        elif motion in ("clips", "youtube-long"):
             if motion_manifest:
                 manifest_path = expand(motion_manifest)
                 try:
@@ -2756,10 +3582,12 @@ def cmd_long_video(cfg, args):
         os.makedirs(narr_dir, exist_ok=True)
         intro_info = long_narration.synthesize_long(
             intro_text, os.path.join(narr_dir, "intro.wav"),
-            atempo=args.atempo, voice=voice)
+            atempo=args.atempo, voice=voice, lang=lang,
+            model=model_path)
         outro_info = long_narration.synthesize_long(
             outro_text, os.path.join(narr_dir, "outro.wav"),
-            atempo=args.atempo, voice=voice)
+            atempo=args.atempo, voice=voice, lang=lang,
+            model=model_path)
         # 3) بناء مشروع headless وريندره أفقيًا
         project, meta = long_video.build_project({
             "title": title, "hook": hook,
@@ -2785,6 +3613,14 @@ def cmd_long_video(cfg, args):
         out_path = expand(args.out)
         os.makedirs(os.path.dirname(os.path.abspath(out_path)),
                     exist_ok=True)
+        # كابشن لاتيني (الموجة الأولى — W5): مع lang="en" يُكتب ملف
+        # ASS جانبي من كلمات مسارات المشروع (LTR، أسفل الصورة فقط).
+        if lang == "en":
+            _ass_path = os.path.splitext(out_path)[0] + "-captions-en.ass"
+            _written = _write_latin_ass_from_project(project, _ass_path)
+            if _written:
+                log["captions_ass"] = _written
+                print("كابشن لاتيني (LTR): %s" % _written)
         t0 = time.time()
         editor_path = expand(cfg["headless"]["editor"])
         result = headless_stage.render_project(editor_path, project_path,
@@ -2795,6 +3631,32 @@ def cmd_long_video(cfg, args):
                  result["size_bytes"] / (1024 * 1024)))
         # 4) الشعار فقط (بلا بطاقات اقتباس أبدًا في الفيديو الطويل)
         out = _finish_video(result["output"], not args.no_watermark, None)
+        # 4أ) مقروئية الكابشن (جولة v0.1.55): عبارات الفصول
+        # بإزاحتها الفعلية (content_start) هي الكابشنات
+        # المريندرة — تحذير + تقرير فقط، لا يفشل الفيديو أبدًا؛
+        # وتُسجَّل النتيجة في سجل التشغيل وبيان المصدر. أي عطل
+        # هنا (بما فيه شكل meta غير متوقع) يُطبع تحذيرًا فقط.
+        _lv_readability = None
+        try:
+            _lv_phrases = []
+            for _i, _ch in enumerate(chapters):
+                _cs = meta["chapters"][_i].get("content_start") or 0.0
+                for _p in _ch.get("phrases") or []:
+                    try:
+                        _s = _cs + float(_p.get("start") or 0)
+                        _e = _cs + float(_p.get("end") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    _lv_phrases.append({"start": _s, "end": _e,
+                                        "text": _p.get("text") or ""})
+            _lv_readability = _check_phrases_readability(_lv_phrases)
+        except Exception as e:
+            print("تحذير: تعذّر فحص مقروئية الكابشن (%s) — "
+                  "الفيديو سليم" % e)
+            _lv_readability = None
+        if _lv_readability is not None:
+            log["caption_readability"] = _lv_readability
+            _print_readability(_lv_readability)
         # 5) طوابع الفصول ووصف يوتيوب
         base, _ = os.path.splitext(out_path)
         ts_path = base + "-timestamps.txt"
@@ -2826,14 +3688,17 @@ def cmd_long_video(cfg, args):
                 {"scene": i + 1, "title": ch.get("title", ""),
                  "text": ch.get("text", "")[:200]}
                 for i, ch in enumerate(chapters)]
+            _lv_extra = {"chapters": len(chapters),
+                         "motion": motion,
+                         "timestamps": ts_path,
+                         "description": desc_path}
+            if _lv_readability is not None:
+                _lv_extra["caption_readability"] = _lv_readability
             _man = manifest_lib.build_manifest(
                 out, title=title, hook=hook, moral="",
                 source="long-video", scenes=_lv_scenes,
                 narration={"voice": voice},
-                extra={"chapters": len(chapters),
-                       "motion": motion,
-                       "timestamps": ts_path,
-                       "description": desc_path})
+                extra=_lv_extra)
             _mp = manifest_lib.write_manifest(out, _man)
             print("بيان المصدر: %s" % _mp)
         except Exception as e:
@@ -3833,6 +4698,154 @@ def cmd_social_auth(cfg, platform, token=None):
     return 0
 
 
+# ------------------------------------------- tiktok-bundle / tiktok-status
+def cmd_tiktok_bundle(cfg, video, title, caption="", moral="",
+                      next_part=False,
+                      next_part_time="بكرة 7 مساءً", ai_voice=False,
+                      out_dir=None, dry_run=False):
+    """ابنِ حزمة رفع TikTok لمهمة متصفح — بلا نشر وبلا شبكة.
+
+    مع --dry-run: يبني الكابشن والخطوات ويطبعهما بلا أي كتابة
+    ملفات وبلا فحص الفيديو. بلا --dry-run: يكتب الحزمة
+    (metadata.json + caption.txt + steps.txt) في مجلد الحزمة
+    ويرجع 0؛ وعند TikTokPublishError يطبع خطأً عربيًا ويرجع 1.
+    """
+    if dry_run:
+        try:
+            text = tiktok_lib.build_tiktok_caption(
+                title, caption or "", moral=moral, next_part=next_part,
+                next_part_time=next_part_time, ai_voice=ai_voice)
+        except tiktok_lib.TikTokPublishError as e:
+            print("فشل بناء كابشن TikTok: %s" % e)
+            return 1
+        print("== كابشن TikTok (تجريبي — بلا كتابة ملفات) ==")
+        print(text)
+        print("عدد حروف الكابشن: %d / %d"
+              % (len(text), tiktok_lib.TIKTOK_CAPTION_LIMIT))
+        print("== خطوات الرفع (تجريبي — ستُكتب في steps.txt) ==")
+        steps_fn = getattr(tiktok_lib, "_browser_task_steps", None)
+        if steps_fn is not None:
+            print(steps_fn(os.path.abspath(expand(video))))
+        else:
+            print("1) افتح %s مسجَّلًا باسم @%s."
+                  % (tiktok_lib.TIKTOK_UPLOAD_URL,
+                     tiktok_lib.TIKTOK_USERNAME_DEFAULT))
+            print("2) ارفع الملف: %s"
+                  % os.path.abspath(expand(video)))
+            print("3) الصق الكابشن أعلاه حرفيًا — بلا إضافة ولا حذف.")
+            print("4) الرؤية: عامة (Public)، ثم انشر الفيديو.")
+        return 0
+    bundle_dir = out_dir or os.path.join(
+        expand(cfg["paths"]["videos_dir"]),
+        "tiktok-bundle-%s" % time.strftime("%Y%m%d-%H%M%S"))
+    try:
+        result = tiktok_lib.write_tiktok_bundle(
+            bundle_dir, expand(video), title, caption or "",
+            moral=moral, next_part=next_part,
+            next_part_time=next_part_time, ai_voice=ai_voice)
+    except tiktok_lib.TikTokPublishError as e:
+        print("فشل بناء حزمة TikTok: %s" % e)
+        return 1
+    print("حزمة رفع TikTok جاهزة في: %s" % result["bundle_dir"])
+    print("عدد حروف الكابشن: %d / %d"
+          % (len(result["caption"]), tiktok_lib.TIKTOK_CAPTION_LIMIT))
+    print("البيانات: %s" % result["metadata_path"])
+    print("الخطوات: %s" % result["steps_path"])
+    info = result.get("video_info") or {}
+    print("فحص الفيديو: %s (%d بايت)"
+          % (info.get("video") or expand(video),
+             info.get("size") or 0))
+    duration = info.get("duration")
+    print("المدة: %s"
+          % ("%.1f ثانية" % duration if duration is not None
+             else "غير معروفة (تُفحص عند الرفع)"))
+    width, height = info.get("width"), info.get("height")
+    print("الأبعاد: %s"
+          % ("%d×%d" % (width, height) if width and height
+             else "غير معروفة (تُفحص عند الرفع)"))
+    print("الصوت: %s"
+          % ("موجود" if info.get("has_audio") else
+             "غير معروف (تُفحص عند الرفع)"
+             if info.get("has_audio") is None else "مفقود"))
+    print("الرفع عبر مهمة متصفح (بلا نشر من هنا) — الخطوات في steps.txt")
+    return 0
+
+
+def cmd_tiktok_status(cfg):
+    """اطبع حالة إعداد TikTok كأسطر عربية (قراءة فقط، بلا شبكة)."""
+    st = tiktok_lib.tiktok_status(cfg, studio_dir=STUDIO_DIR)
+    print(st["detail"])
+    print("الحساب: @%s" % st["username"])
+    print("الرابط: %s" % st["profile_url"])
+    print("طريقة الرفع: مهمة متصفح (بلا توكن API)")
+    print("ربط API: %s" % ("موجود ملف توكن (المسار غير مربوط بعد)"
+                            if st["api_linked"] else "غير مربوط"))
+    return 0
+
+
+# ------------------------------------------- tiktok-long (النسخة الطويلة)
+def cmd_tiktok_long(cfg, video_a, video_b, title, caption="",
+                    moral="", kind="full", out_dir=None,
+                    max_seconds=None, dry_run=False, part_tags=None):
+    """ادمج فيديوهين قصيرين في النسخة الطويلة اليومية لـ TikTok
+    (65–110 ثانية) + حزمة رفع لمهمة متصفح — بلا نشر وبلا شبكة.
+
+    مع --dry-run: يفحص المدخلين ويطبع مجموع المدتين بلا أي دمج
+    وبلا كتابة ملفات. بلا --dry-run: يكتب الحزمة (الفيديو المدمج
+    + metadata.json + caption.txt + steps.txt + long.json) في
+    مجلد الحزمة ويرجع 0؛ وعند TikTokLongError/TikTokPublishError
+    يطبع خطأً عربيًا ويرجع 1.
+    """
+    max_seconds = (tiktok_long_lib.LONG_MAX_SECONDS
+                   if max_seconds is None else max_seconds)
+    if dry_run:
+        try:
+            info_a = tiktok_long_lib.probe_short(expand(video_a))
+            info_b = tiktok_long_lib.probe_short(expand(video_b))
+        except tiktok_long_lib.TikTokLongError as e:
+            print("فشل فحص النسخة الطويلة: %s" % e)
+            return 1
+        total = info_a["duration"] + info_b["duration"]
+        print("المدخل الأول: %.1f ثانية (%s)"
+              % (info_a["duration"], info_a["video"]))
+        print("المدخل الثاني: %.1f ثانية (%s)"
+              % (info_b["duration"], info_b["video"]))
+        print("مجموع المدتين: %.1f ثانية (النطاق %.0f–%.0f)"
+              % (total, tiktok_long_lib.LONG_MIN_SECONDS, max_seconds))
+        if total < tiktok_long_lib.LONG_MIN_SECONDS or \
+                total > max_seconds:
+            print("المجموع خارج نطاق النسخة الطويلة — اختر زوجًا آخر")
+            return 1
+        print("الزوج صالح للنسخة الطويلة — بلا دمج في هذا الوضع")
+        return 0
+    bundle_dir = out_dir or os.path.join(
+        expand(cfg["paths"]["videos_dir"]),
+        "tiktok-long-%s" % time.strftime("%Y%m%d-%H%M%S"))
+    try:
+        result = tiktok_long_lib.write_long_bundle(
+            bundle_dir, expand(video_a), expand(video_b),
+            title, caption or "", moral=moral, kind=kind,
+            part_tags=part_tags, max_seconds=max_seconds)
+    except (tiktok_long_lib.TikTokLongError,
+            tiktok_lib.TikTokPublishError) as e:
+        print("فشل بناء النسخة الطويلة: %s" % e)
+        return 1
+    info = result["video_info"]
+    print("النسخة الطويلة جاهزة في: %s" % result["bundle_dir"])
+    print("الفيديو المدمج: %s (%.1f ثانية، %d×%d، %d بايت)"
+          % (info["video"], info["duration"],
+             info["width"], info["height"], info["size"]))
+    print("النوع: %s — العنوان: %s"
+          % (kind, tiktok_long_lib.long_title(title, kind)))
+    print("عدد حروف الكابشن: %d / %d"
+          % (len(result["caption"]), tiktok_lib.TIKTOK_CAPTION_LIMIT))
+    print("البيانات: %s" % result["metadata_path"])
+    print("تفاصيل الدمج: %s" % result["long_path"])
+    print("الخطوات: %s" % result["steps_path"])
+    print("الرفع عبر مهمة متصفح (بلا نشر من هنا) — الخطوات في steps.txt")
+    return 0
+
+
 # ---------------------------------------------------------------------- ab
 def _cmd_ab_variants(cfg, video, hook_a, hook_b, title, out_dir,
                      cost_per_video, variants, engine="fast",
@@ -4523,6 +5536,1142 @@ def cmd_logs(cfg, today=True, limit=20):
     return 0
 
 
+def cmd_expand_motion_prompts(cfg, prompts_path, out_path,
+                              expand_fn=None):
+    """وسّع موجّهات حركة قصيرة من ملف JSON إلى موجّهات مفصلة.
+
+    المدخلات: قائمة [{"id"?, "prompt"}]؛ والناتج قائمة
+    [{"id", "prompt", "expanded_prompt", "expanded", "reason"}]
+    تُكتب JSON في out_path مع ملخص عربي (كم وُسّع/كم رُجع
+    للأصل + الأسباب). fail-open على مستوى العنصر: أي موجّه
+    فشل توسيعه يُحفظ بأصله في الناتج ولا يُحذف أبدًا.
+    expand_fn حقن اختباري؛ وبلاه تُستورد
+    lib.prompt_expand.expand_motion_prompts (عقد جولة
+    v0.1.54 — W1). خروج 2 على مدخلات فاسدة (ملف مفقود /
+    JSON فاسد / عنصر بلا prompt)؛ و1 على فشل كتابة الناتج.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تحويل نصي صريح بلا إنتاج.
+    in_path = expand(prompts_path)
+    try:
+        with open(in_path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        print("ملف الموجّهات غير موجود: %s" % in_path)
+        return 2
+    except (ValueError, OSError) as e:
+        print("تعذّرت قراءة ملف الموجّهات %s: %s" % (in_path, e))
+        return 2
+    if not isinstance(raw, list):
+        print("ملف الموجّهات يجب أن يكون قائمة JSON من العناصر "
+              "(وصل نوع غير قائمة): %s" % in_path)
+        return 2
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            print("عنصر الموجّه رقم %d ليس كائن JSON — كل عنصر "
+                  "يجب أن يكون {\"id\"?, \"prompt\"}" % (index + 1))
+            return 2
+        prompt = item.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            print("عنصر الموجّه رقم %d بلا prompt صالح "
+                  "(id=%s) — كل عنصر يحتاج prompt نصًا غير فارغ"
+                  % (index + 1, item.get("id")))
+            return 2
+    if expand_fn is None:
+        try:
+            from lib import prompt_expand
+            expand_fn = prompt_expand.expand_motion_prompts
+        except ImportError:
+            print("تحذير: وحدة التوسيع lib.prompt_expand غير متاحة — "
+                  "رُجعت كل الموجّهات لأصلها")
+            expand_fn = None
+    results = None
+    if expand_fn is not None:
+        try:
+            results = expand_fn(raw)
+        except Exception:
+            print("تحذير: فشل التوسيع كاملًا — رُجعت كل الموجّهات "
+                  "لأصلها")
+            results = None
+    if not isinstance(results, list):
+        results = []
+    out_items = []
+    for index, item in enumerate(raw):
+        prompt = item["prompt"]
+        result = results[index] if index < len(results) else None
+        expanded_prompt = None
+        expanded = False
+        reason = None
+        if isinstance(result, dict):
+            reason = result.get("reason")
+            if result.get("expanded") is True:
+                candidate = result.get("expanded_prompt")
+                if isinstance(candidate, str) and candidate.strip():
+                    expanded_prompt = candidate
+                    expanded = True
+                else:
+                    reason = reason or "expanded-prompt-missing"
+            elif result.get("expanded") is False:
+                reason = reason or "not-expanded"
+        if not expanded:
+            expanded_prompt = prompt
+            reason = reason or "expansion-failed"
+        out_items.append({
+            "id": item.get("id"),
+            "prompt": prompt,
+            "expanded_prompt": expanded_prompt,
+            "expanded": expanded,
+            "reason": reason,
+        })
+    out_file = expand(out_path)
+    parent = os.path.dirname(os.path.abspath(out_file))
+    try:
+        os.makedirs(parent, exist_ok=True)
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(out_items, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print("تعذّرت كتابة الناتج في %s: %s" % (out_file, e))
+        return 1
+    total = len(out_items)
+    done = sum(1 for row in out_items if row["expanded"])
+    fell = total - done
+    print("وُسّع %d من %d موجّهات؛ ورُجع %d للأصل."
+          % (done, total, fell))
+    if fell:
+        reasons = {}
+        for row in out_items:
+            if not row["expanded"]:
+                reasons[row["reason"]] = reasons.get(row["reason"], 0) + 1
+        for reason, count in sorted(reasons.items()):
+            print("الأسباب: %s (%d)" % (reason, count))
+        for row in out_items:
+            if not row["expanded"]:
+                print("رُجع للأصل: %s — %s"
+                      % (row["id"] if row["id"] is not None else "?",
+                         row["reason"]))
+    print("كُتب الناتج في: %s" % out_file)
+    return 0
+
+
+def _read_growth_text_file(path, what):
+    """اقرأ ملفًا نصيًا لأوامر النمو؛ None مع رسالة عربية عند الفشل."""
+    try:
+        with open(expand(path), encoding="utf-8") as f:
+            return f.read()
+    except OSError as e:
+        print("تعذّرت قراءة %s %s: %s" % (what, expand(path), e))
+        return None
+
+
+def _print_json(payload):
+    """اطبع حمولة JSON خالصة (سطر واحد) — بلا أي نص قبلها."""
+    print(json.dumps(payload, ensure_ascii=False))
+
+
+def cmd_seo_check(cfg, title, description, tags, story_file=None,
+                  as_json=False):
+    """افحص عنوانًا ووصفًا ووسومًا قبل النشر (فحص SEO فقط).
+
+    خروج 1 إن كان التقرير ok=False (فحص قبل النشر)، و0 إن
+    كان ok=True، و2 على مدخل فاسد (ملف قصة مفقود/عنوان
+    فارغ/وسوم غير صالحة). --json يطبع JSON خالصًا بلا أي
+    سطر نصي قبله (درس v0.1.56).
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر فحص نصي صريح بلا إنتاج.
+    story_text = None
+    if story_file:
+        story_text = _read_growth_text_file(story_file, "ملف القصة")
+        if story_text is None:
+            return 2
+    try:
+        report = seo_check_lib.check_seo(title, description, tags,
+                                         story_text=story_text)
+    except (ValueError, TypeError) as e:
+        print("مدخل فحص SEO غير صالح: %s" % e)
+        return 2
+    if as_json:
+        _print_json(seo_check_lib.to_json_dict(report))
+    else:
+        print(seo_check_lib.format_report(report))
+    return 0 if report["ok"] else 1
+
+
+def cmd_title_lint(cfg, title=None, thumb=None, titles_file=None,
+                   as_json=False):
+    """دقّق عنوانًا ومصغرة كوحدة واحدة (أو رتّب عناوين من ملف).
+
+    استشاري (تقرير/ترتيب): خروج 0 عند النجاح مهما كانت
+    المشكلات، و2 على مدخل فاسد فقط (لا عنوان ولا ملف، أو
+    ملف مفقود/فارغ، أو عنوان فارغ).
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر فحص نصي صريح بلا إنتاج.
+    if titles_file is not None and title is not None:
+        print("مرّر --title أو --titles-file (أحدهما فقط)")
+        return 2
+    if titles_file is not None:
+        text = _read_growth_text_file(titles_file, "ملف العناوين")
+        if text is None:
+            return 2
+        titles = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if not titles:
+            print("ملف العناوين فارغ — اكتب عنوانًا في كل سطر")
+            return 2
+        try:
+            reports = title_lint_lib.rank_titles(titles, thumb)
+        except (ValueError, TypeError) as e:
+            print("مدخل تدقيق العناوين غير صالح: %s" % e)
+            return 2
+        if as_json:
+            _print_json(reports)
+        else:
+            for i, report in enumerate(reports):
+                if i:
+                    print()
+                print("العنوان %d (الأفضل أولًا):" % (i + 1))
+                print(title_lint_lib.format_report(report))
+        return 0
+    if title is None:
+        print("مرّر --title أو --titles-file")
+        return 2
+    try:
+        report = title_lint_lib.lint_title(title, thumb)
+    except (ValueError, TypeError) as e:
+        print("مدخل تدقيق العنوان غير صالح: %s" % e)
+        return 2
+    if as_json:
+        _print_json(report)
+    else:
+        print(title_lint_lib.format_report(report))
+    return 0
+
+
+def cmd_hook_score(cfg, hook=None, hook_file=None, story_file=None,
+                   as_json=False):
+    """قيّم هوكًا (أو هوكات من ملف) ورتّبها — أفضل اثنين مميزان.
+
+    استشاري: خروج 0 عند النجاح مهما كانت الدرجات، و2 على
+    مدخل فاسد فقط (لا هوك ولا ملف، أو ملف مفقود/فارغ، أو
+    هوك فارغ).
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تقييم نصي صريح بلا إنتاج.
+    if hook is not None and hook_file is not None:
+        print("مرّر --hook أو --hook-file (أحدهما فقط)")
+        return 2
+    if hook_file is not None:
+        text = _read_growth_text_file(hook_file, "ملف الهوكات")
+        if text is None:
+            return 2
+        hooks = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    elif hook is not None:
+        hooks = [hook]
+    else:
+        print("مرّر --hook أو --hook-file — لا هوك ولا ملف")
+        return 2
+    if not hooks:
+        print("لا هوكات — ملف الهوكات فارغ أو الهوك فارغ")
+        return 2
+    story_text = None
+    if story_file:
+        story_text = _read_growth_text_file(story_file, "ملف القصة")
+        if story_text is None:
+            return 2
+    try:
+        panels = hook_panel_lib.score_hooks(hooks,
+                                            story_text=story_text)
+    except Exception as e:
+        print("مدخل تقييم الهوك غير صالح: %s" % e)
+        return 2
+    if as_json:
+        _print_json(panels)
+    else:
+        print(hook_panel_lib.format_panel(panels))
+    return 0
+
+
+def cmd_viral_rank(cfg, videos_file, top=5, as_json=False):
+    """رتّب فيديوهات بمضاعف كل قناة على وسيطها الخاص.
+
+    استشاري: خروج 0 عند النجاح، و2 على ملف مفقود/JSON
+    فاسد/قائمة غير صالحة.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر ترتيب نصي صريح بلا إنتاج.
+    path = expand(videos_file)
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        print("ملف الفيديوهات غير موجود: %s" % path)
+        return 2
+    except (ValueError, OSError) as e:
+        print("تعذّرت قراءة ملف الفيديوهات %s: %s" % (path, e))
+        return 2
+    try:
+        result = viral_rank_lib.rank_outliers(raw, top_n=top)
+    except (ValueError, TypeError) as e:
+        print("مدخل ترتيب الشواذ غير صالح: %s" % e)
+        return 2
+    if as_json:
+        _print_json(result)
+    else:
+        print(viral_rank_lib.format_report(result))
+    return 0
+
+
+def cmd_retention_read(cfg, csv_file, duration=None, transcript_file=None,
+                       as_json=False):
+    """اقرأ تصدير احتفاظ Studio (CSV) وشخّص أكبر تسرب.
+
+    استشاري: خروج 0 عند النجاح، و2 على ملف مفقود/CSV فاسد/
+    مدة غير صالحة.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر قراءة نصية صريحة بلا إنتاج.
+    transcript_text = None
+    if transcript_file:
+        transcript_text = _read_growth_text_file(
+            transcript_file, "ملف النص المكتوب")
+        if transcript_text is None:
+            return 2
+    try:
+        result = retention_read_lib.read_retention(
+            expand(csv_file), duration=duration,
+            transcript_text=transcript_text)
+    except (ValueError, TypeError) as e:
+        print("مدخل قراءة الاحتفاظ غير صالح: %s" % e)
+        return 2
+    if as_json:
+        _print_json(result)
+    else:
+        print(retention_read_lib.format_report(result))
+    return 0
+
+
+def cmd_channel_audit(cfg, titles_file, hooks_file=None,
+                      thumb_texts_file=None, dates_file=None,
+                      retention_csv=None, duration=None, title=None,
+                      description=None, tags=None, as_json=False):
+    """دقّق القناة وينتهِ في إصلاح واحد (قائمة yt-audit).
+
+    استشاري: خروج 0 عند النجاح مهما كان الإصلاح، و2 على مدخل
+    فاسد فقط (ملف عناوين مفقود/فارغ، تواريخ غير صالحة، CSV
+    فاسد، بيانات نشر ناقصة).
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تقرير صريح بلا إنتاج.
+    text = _read_growth_text_file(titles_file, "ملف العناوين")
+    if text is None:
+        return 2
+    titles = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not titles:
+        print("ملف العناوين فارغ — اكتب عنوانًا في كل سطر")
+        return 2
+    hooks = None
+    if hooks_file:
+        htext = _read_growth_text_file(hooks_file, "ملف الهوكات")
+        if htext is None:
+            return 2
+        hooks = [ln.strip() for ln in htext.splitlines() if ln.strip()]
+    thumb_texts = None
+    if thumb_texts_file:
+        ttext = _read_growth_text_file(thumb_texts_file,
+                                       "ملف نصوص المصغرات")
+        if ttext is None:
+            return 2
+        # سطر لكل عنوان؛ سطر فارغ يعني بلا نص مصغرة لذلك العنوان.
+        thumb_texts = [ln.strip() or None for ln in ttext.splitlines()]
+    dates = None
+    if dates_file:
+        dtext = _read_growth_text_file(dates_file, "ملف تواريخ الرفع")
+        if dtext is None:
+            return 2
+        dates = [ln.strip() for ln in dtext.splitlines() if ln.strip()]
+    latest_meta = None
+    if title is not None or description is not None or tags is not None:
+        if title is None or description is None or tags is None:
+            print("بيانات النشر الأخيرة تحتاج --title و--description "
+                  "و--tags معًا")
+            return 2
+        latest_meta = {"title": title, "description": description,
+                       "tags": tags}
+    try:
+        result = channel_audit_lib.audit_channel(
+            titles, hooks=hooks, thumb_texts=thumb_texts,
+            upload_dates=dates,
+            retention_csv=expand(retention_csv) if retention_csv else None,
+            retention_duration=duration, latest_meta=latest_meta)
+    except (ValueError, TypeError) as e:
+        print("مدخل تدقيق القناة غير صالح: %s" % e)
+        return 2
+    if as_json:
+        _print_json(channel_audit_lib.to_json_dict(result))
+    else:
+        print(channel_audit_lib.format_report(result))
+    return 0
+
+
+# ------------------------------------------- trend-scout (جولة v0.1.58)
+def cmd_trend_scout(cfg, videos_file, top_n=5, as_json=False):
+    """كشّاف ترندات أسبوعي: رتّب فيديوهات عامة واقترح إدخالات طابور.
+
+    استشاري: خروج 0 عند النجاح، و2 على مدخل فاسد (ملف مفقود
+    أو JSON فاسد أو فيديو بلا قناة/عنوان). --json يطبع JSON
+    خالصًا بلا أي سطر نصي قبله (درس v0.1.56 — و`to_json`
+    هنا يرجع سلسلة جاهزة فتُطبع كما هي بلا ترميز مزدوج).
+    الاقتراحات لا تكتب في الطابور أبدًا — المشغّل ينسخها
+    بنفسه.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر بحث نصي صريح بلا إنتاج.
+    text = _read_growth_text_file(videos_file, "ملف الفيديوهات")
+    if text is None:
+        return 2
+    try:
+        result = trend_scout_lib.scout_trends(text, top_n=top_n)
+    except (ValueError, TypeError) as e:
+        print("مدخل كشّاف الترند غير صالح: %s" % e)
+        return 2
+    if as_json:
+        print(trend_scout_lib.to_json(result), end="")
+    else:
+        print(trend_scout_lib.format_report(result))
+    return 0
+
+
+# ------------------------------------------- scene-shorts (جولة v0.1.58)
+def cmd_scene_shorts(cfg, video, scenes_file, out_dir=None, phrases=None,
+                     full_hook="", as_json=False):
+    """قصّ فيديو طويل إلى أجزاء مشهدية عمودية 40–60 ثانية.
+
+    مشاهد كاملة فقط؛ والجزء غير المكتمل يُسجَّل في التقرير
+    ولا يُحذف بصمت. خروج 0 إن قُصّ جزء مكتمل واحد على الأقل،
+    و1 إن لم يُقصّ أي جزء مكتمل، و2 على مدخل فاسد (فيديو
+    مفقود أو ملف مشاهد/عبارات فاسد). --json يطبع JSON خالصًا.
+    """
+    video = expand(video)
+    scenes_text = _read_growth_text_file(scenes_file, "ملف المشاهد")
+    if scenes_text is None:
+        return 2
+    try:
+        scenes = json.loads(scenes_text)
+    except ValueError as e:
+        print("ملف المشاهد JSON فاسد: %s" % e)
+        return 2
+    phrases_list = None
+    if phrases:
+        try:
+            phrases_list = long_video.parse_ass(expand(phrases))
+        except (OSError, long_video.LongVideoError) as e:
+            print("تعذّرت قراءة ملف العبارات: %s" % e)
+            return 2
+    if out_dir:
+        out = expand(out_dir)
+    else:
+        out = os.path.join(
+            expand(cfg["paths"]["videos_dir"]),
+            "scene-shorts-%s" % time.strftime("%Y%m%d-%H%M%S"))
+    try:
+        info = check_lib.probe(video)
+        results = scene_shorts_lib.cut_scene_shorts(
+            video, scenes, out, phrases=phrases_list)
+    except scene_shorts_lib.SceneShortsError as e:
+        print("تعذّر تقطيع المشاهد: %s" % e)
+        return 2
+    except (check_lib.CheckError, OSError, ValueError, KeyError,
+            TypeError) as e:
+        print("مدخل تقطيع المشاهد غير صالح: %s" % e)
+        return 2
+    if as_json:
+        _print_json({"source": video, "duration": info["duration"],
+                     "parts": results})
+    else:
+        print(scene_shorts_lib.format_comparison_report(
+            results, video, info["duration"], full_hook=full_hook))
+    return 0 if any(r.get("output") for r in results) else 1
+
+
+# ------------------------------------------- tiktok-check (جولة v0.1.58)
+def cmd_tiktok_check(cfg, title, caption, hook=None, moral="",
+                     story_file=None, queue_file=None, needed=7,
+                     trend_keywords=None, as_json=False):
+    """افحص شورتًا قبل نشره على TikTok (فحص فقط).
+
+    تغليف رقيق فوق `lib.tiktok_check.cmd_tiktok_check` بنفس
+    رموز الخروج: 1 إن كان التقرير غير سليم (فحص قبل النشر)،
+    و0 إن كان سليمًا، و2 على مدخل فاسد. --json خالص.
+    """
+    keywords = None
+    if trend_keywords:
+        if isinstance(trend_keywords, str):
+            keywords = [k.strip() for k in trend_keywords.split(",")
+                        if k.strip()]
+        else:
+            keywords = list(trend_keywords)
+    return tiktok_check_lib.cmd_tiktok_check(
+        cfg, title, caption, hook=hook, moral=moral,
+        story_file=story_file, queue_file=queue_file, needed=needed,
+        trend_keywords=keywords, as_json=as_json)
+
+
+# ------------------------------------------- script-check (جولة v0.1.58)
+def cmd_script_check(cfg, script_file, as_json=False, timed_phrases=None,
+                     narration_audio=None, narration_wpm=None,
+                     narration_duration=None):
+    """بوابة سكريبت نصية قبل الإنتاج (مرحلة السكريبت).
+
+    تغليف فوق `lib.script_check.cmd_script_check`: خروج 0
+    سليم، و1 تقرير غير سليم، و2 مدخل فاسد. --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر فحص نصي صريح بلا إنتاج.
+    args = argparse.Namespace(
+        script=script_file, json=as_json, timed_phrases=timed_phrases,
+        narration_audio=narration_audio, narration_wpm=narration_wpm,
+        narration_duration=narration_duration)
+    return script_check_lib.cmd_script_check(args)
+
+
+# ------------------------------------------- topic-brief (جولة v0.1.58)
+def cmd_topic_brief(cfg, theme=None, input_file=None, candidates_file=None,
+                    queue_file=None, as_json=False):
+    """موجز بحث لموضوع قبل الكتابة (مرحلة البحث).
+
+    إما ملف JSON واحد (--input) بصيغة {theme, candidates,
+    existing_titles}، أو --theme مع --candidates-file (قائمة
+    JSON بصيغة مرشحي trend-scout) و--queue-file (نص الطابور —
+    قراءة فقط لعناوينه الحالية). خروج 0 عند النجاح، و2 على
+    مدخل فاسد. --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر بحث نصي صريح بلا إنتاج.
+    candidates = []
+    existing = []
+    if input_file is not None:
+        text = _read_growth_text_file(input_file, "ملف مدخل الموجز")
+        if text is None:
+            return 2
+        try:
+            payload = json.loads(text)
+        except ValueError as e:
+            print("ملف مدخل الموجز JSON فاسد: %s" % e)
+            return 2
+        if not isinstance(payload, dict):
+            print("ملف مدخل الموجز يجب أن يحوي قاموسًا واحدًا")
+            return 2
+        theme = payload.get("theme")
+        candidates = payload.get("candidates", [])
+        existing = payload.get("existing_titles", [])
+    else:
+        if candidates_file:
+            ctext = _read_growth_text_file(candidates_file,
+                                           "ملف المرشحين")
+            if ctext is None:
+                return 2
+            try:
+                candidates = json.loads(ctext)
+            except ValueError as e:
+                print("ملف المرشحين JSON فاسد: %s" % e)
+                return 2
+        if queue_file:
+            qtext = _read_growth_text_file(queue_file, "ملف الطابور")
+            if qtext is None:
+                return 2
+            try:
+                existing = topic_brief_lib.titles_from_queue_text(qtext)
+            except topic_brief_lib.BriefError as e:
+                print("تعذّرت قراءة عناوين الطابور: %s" % e)
+                return 2
+    try:
+        brief = topic_brief_lib.build_brief(theme, candidates, existing)
+    except (topic_brief_lib.BriefError, ValueError, TypeError) as e:
+        print("مدخل موجز البحث غير صالح: %s" % e)
+        return 2
+    if as_json:
+        _print_json(brief)
+    else:
+        print(brief["brief_text"])
+    return 0
+
+
+# ------------------------------------------- hook-title (جولة v0.1.58)
+def cmd_hook_title(cfg, video, title, out=None, as_json=False, force=False):
+    """عنوان هوك كبير مكتوب أول 3 ثوانٍ — على شورت جاهز.
+
+    --json يعرض مواصفة العنوان فقط (بلا حرق) بأبعاد الفيديو
+    إن زُوّد، وإلا 720×1280. بلا --json يحرق العنوان في
+    الفيديو (إعادة ترميز على نمط shorts_cut). خروج 0 عند
+    النجاح، و1 عند فشل الحرق، و2 على مدخل فاسد (فيديو مفقود
+    أو عنوان فارغ). العنوان في النطاق الأوسط فقط — أبدًا في
+    الثلث العلوي أو منطقة الكابشنات (قرار 10:09 — التغيير
+    الوحيد في ثوابت الصيغة بهذه الجولة).
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر خطوة مستقلة على فيديو جاهز.
+    if not title or not title.strip():
+        print("نص الهوك فارغ — عنوان الهوك من نص السكريبت نفسه، "
+              "بلا اختراع نص")
+        return 2
+    if as_json:
+        width, height = 720, 1280
+        if video:
+            video = expand(video)
+            if not os.path.isfile(video):
+                print("ملف الفيديو غير موجود: %s" % video)
+                return 2
+            try:
+                info = check_lib.probe(video)
+                width, height = info["width"], info["height"]
+            except check_lib.CheckError as e:
+                print("تعذّر فحص الفيديو: %s" % e)
+                return 2
+        try:
+            spec = hook_title_lib.hook_title_spec(title, width, height)
+        except hook_title_lib.HookTitleError as e:
+            print("مواصفة عنوان الهوك غير صالحة: %s" % e)
+            return 2
+        _print_json(spec)
+        return 0
+    if not video:
+        print("مرّر --video (فيديو الشورت الجاهز)")
+        return 2
+    video = expand(video)
+    if not os.path.isfile(video):
+        print("ملف الفيديو غير موجود: %s" % video)
+        return 2
+    if out:
+        out_path = expand(out)
+    else:
+        base, ext = os.path.splitext(os.path.abspath(video))
+        out_path = base + "-hook-title" + (ext or ".mp4")
+    try:
+        hook_title_lib.apply_hook_title(video, title, out_path,
+                                        force=force)
+    except hook_title_lib.HookTitleError as e:
+        print("تعذّر حرق عنوان الهوك: %s" % e)
+        return 1
+    print("حُرق عنوان الهوك «%s» في أول 3 ثوانٍ: %s"
+          % (title.strip(), out_path))
+    return 0
+
+
+# ------------------------------------------- SRE (جولة v0.1.60)
+def _load_json_file(path, what):
+    """اقرأ ملف JSON وأعد محتواه؛ None مع رسالة عربية عند الفشل."""
+    text = _read_growth_text_file(path, what)
+    if text is None:
+        return None
+    try:
+        return json.loads(text)
+    except ValueError as e:
+        print("%s JSON فاسد: %s" % (what, e))
+        return None
+
+
+def _write_mapping_json(mapping, path, what):
+    """اكتب mapping في ملف JSON؛ True عند النجاح."""
+    try:
+        with open(expand(path), "w", encoding="utf-8") as f:
+            json.dump(mapping, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+    except OSError as e:
+        print("تعذّرت كتابة %s %s: %s" % (what, expand(path), e))
+        return False
+    return True
+
+
+def cmd_reliability_report(cfg, runs_file, window_days=30, as_json=False):
+    """تقرير موثوقية من سجلات تشغيل (قراءة/تشخيص فقط).
+
+    تغليف رقيق فوق `lib.reliability_report.build_reliability_report`:
+    خروج 0 عند النجاح، و2 على مدخل فاسد (ملف غائب أو JSON تالف
+    أو ليس قائمة أو نافذة غير صالحة). --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تقرير من ملف صريح.
+    if not isinstance(window_days, int) or isinstance(window_days, bool) \
+            or window_days <= 0:
+        print("نافذة التقرير --window-days يجب أن تكون عددًا صحيحًا موجبًا")
+        return 2
+    runs = _load_json_file(runs_file, "ملف سجلات التشغيل")
+    if runs is None:
+        return 2
+    if not isinstance(runs, list):
+        print("ملف سجلات التشغيل يجب أن يحوي قائمة سجلات")
+        return 2
+    try:
+        report = reliability_report_lib.build_reliability_report(
+            runs, window_days=window_days)
+    except (ValueError, TypeError) as e:
+        print("مدخل تقرير الموثوقية غير صالح: %s" % e)
+        return 2
+    if as_json:
+        _print_json(report)
+        return 0
+    print("تقرير الموثوقية (%s يومًا): %d تشغيلًا، %d فاشلًا "
+          "(معدل فشل %.1f%%)"
+          % (window_days, report["total_runs"], report["failed"],
+             report["failure_rate"] * 100))
+    for kind, stats in sorted(report["by_kind"].items()):
+        if stats["total"]:
+            print("  %s: %d تشغيلًا، معدل فشل %.1f%%"
+                  % (kind, stats["total"],
+                     stats["failure_rate"] * 100))
+    return 0
+
+
+def cmd_failure_classify(cfg, text=None, file=None, as_json=False):
+    """صنّف نص فشل إلى بيئة/كود/خارجي/غير معروف (قراءة فقط).
+
+    تغليف رقيق فوق `lib.failure_classify.classify_failure`:
+    واحد من --text أو --file إلزامي (وإلا خروج 2)، وخروج 0
+    عند النجاح، و2 على مدخل فاسد. --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تصنيف نص صريح.
+    if bool(text) == bool(file):
+        print("مرّر --text أو --file (أحدهما فقط)")
+        return 2
+    if file is not None:
+        text = _read_growth_text_file(file, "ملف نص الفشل")
+        if text is None:
+            return 2
+    result = failure_classify_lib.classify_failure(text)
+    if as_json:
+        _print_json(result)
+        return 0
+    print("تصنيف الفشل: %s (ثقة %s)"
+          % (result["class"], result["confidence"]))
+    if result["signals"]:
+        print("  الإشارات: %s" % ", ".join(result["signals"]))
+    print("  الخطوة التالية: %s" % result["suggestion"])
+    return 0
+
+
+def cmd_incident_probe(cfg, context_file, mask=False, mapping_out=None,
+                       as_json=False):
+    """حقّق في حادثة من سياق JSON جاهز (قراءة فقط).
+
+    تغليف رقيق فوق `lib.incident_probe.probe_incident`: خروج 0
+    عند النجاح، و2 على مدخل فاسد (ملف غائب أو JSON تالف أو ليس
+    قاموسًا). مع --mask تُخفى الاقتباسات ونص الفشل في المخرجات
+    عبر `lib.id_mask`، والـmapping يُكتب في --mapping-out فقط
+    إن طُلب — ولا يُطبع أبدًا في stdout. --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تحقيق من ملف صريح.
+    context = _load_json_file(context_file, "ملف سياق الحادثة")
+    if context is None:
+        return 2
+    if not isinstance(context, dict):
+        print("ملف سياق الحادثة يجب أن يحوي قاموسًا واحدًا")
+        return 2
+    try:
+        report = incident_probe_lib.probe_incident(context)
+    except (ValueError, TypeError) as e:
+        print("مدخل تحقيق الحادثة غير صالح: %s" % e)
+        return 2
+    if mask:
+        report, mapping = id_mask_lib.mask_record(report)
+        if mapping_out is not None:
+            if not _write_mapping_json(mapping, mapping_out,
+                                       "ملف الـmapping"):
+                return 2
+    if as_json:
+        _print_json(report)
+        return 0
+    cause = report["likely_root_cause"]
+    print("تحقيق الحادثة: %s" % report["title"])
+    print("  السبب الجذري المحتمل: %s — %s (ثقة %s)"
+          % (cause["class"], cause["summary"], cause["confidence"]))
+    for hyp in report["hypotheses"]:
+        print("  فرضية %s: %s"
+              % (hyp["hypothesis"], hyp["status"]))
+    for step in report["next_steps"]:
+        print("  - %s" % step)
+    return 0
+
+
+def cmd_id_mask(cfg, text=None, file=None, mapping_out=None,
+                redact=False, unmask=False, mapping_file=None,
+                as_json=False):
+    """أخفِ معرّفات في نص أو أعد إظهارها (قراءة فقط على المدخل).
+
+    افتراضيًا يطبع {"masked": ...}؛ ومع --redact يطبع
+    {"redacted": ...} بلا mapping (حجب نهائي للأسرار)؛ ومع
+    --unmask --mapping P يطبع {"unmasked": ...}. الـmapping
+    يُكتب في --mapping-out فقط إن طُلب — ولا يُطبع أبدًا في
+    stdout. خروج 0 عند النجاح، و2 على مدخل فاسد (لا نص ولا
+    ملف، أو كلاهما، أو mapping غائب/فاسد، أو --unmask بلا
+    --mapping). --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تحويل نص صريح.
+    if unmask:
+        if mapping_file is None:
+            print("--unmask يحتاج --mapping (ملف الـmapping)")
+            return 2
+        mapping = _load_json_file(mapping_file, "ملف الـmapping")
+        if mapping is None:
+            return 2
+        if not isinstance(mapping, dict):
+            print("ملف الـmapping يجب أن يحوي قاموسًا واحدًا")
+            return 2
+    if bool(text) == bool(file):
+        print("مرّر --text أو --file (أحدهما فقط)")
+        return 2
+    if file is not None:
+        text = _read_growth_text_file(file, "ملف النص")
+        if text is None:
+            return 2
+    if unmask:
+        result = id_mask_lib.unmask_text(text, mapping)
+        if as_json:
+            _print_json({"unmasked": result})
+        else:
+            print(result)
+        return 0
+    if redact:
+        result = id_mask_lib.redact_secrets(text)
+        if as_json:
+            _print_json({"redacted": result})
+        else:
+            print(result)
+        return 0
+    masked, mapping = id_mask_lib.mask_text(text)
+    if mapping_out is not None:
+        if not _write_mapping_json(mapping, mapping_out, "ملف الـmapping"):
+            return 2
+    if as_json:
+        _print_json({"masked": masked})
+    else:
+        print(masked)
+    return 0
+
+
+def cmd_runbook_check(cfg, runbook=None, runbook_file=None, root=".",
+                      as_json=False):
+    """افحص دفتر تشغيل (قراءة فقط — بلا أي إصلاح).
+
+    تغليف رقيق فوق `lib.runbook_check`: --runbook اسم دفتر
+    مدمج (env-restore أو publish-failure) أو --runbook-file
+    مسار ملف (أحدهما فقط). خروج 0 إن نجح الكل أو تُخطي فقط،
+    و1 إن فشلت أي خطوة، و2 على مدخل فاسد. --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر فحص دفتر صريح.
+    if bool(runbook) == bool(runbook_file):
+        print("مرّر --runbook أو --runbook-file (أحدهما فقط)")
+        return 2
+    if runbook is not None:
+        if not runbook.replace("-", "").replace("_", "").isalnum():
+            print("اسم الدفتر غير صالح: %s" % runbook)
+            return 2
+        studio_dir = os.path.dirname(os.path.abspath(__file__))
+        runbooks_dir = os.path.join(studio_dir, "lib", "runbooks")
+        # ملفات الدفاتر المدمجة بشرطة سفلية (env_restore.json)
+        # بينما معرّفاتها بشرطة عادية (env-restore) — جرّب الاسمين.
+        runbook_file = None
+        for candidate in (runbook + ".json",
+                          runbook.replace("-", "_") + ".json"):
+            path = os.path.join(runbooks_dir, candidate)
+            if os.path.isfile(path):
+                runbook_file = path
+                break
+        if runbook_file is None:
+            print("الدفتر المدمج غير موجود: %s" % runbook)
+            return 2
+    try:
+        data = runbook_check_lib.load_runbook(expand(runbook_file))
+    except runbook_check_lib.RunbookError as e:
+        print("تعذّر تحميل الدفتر: %s" % e)
+        return 2
+    try:
+        result = runbook_check_lib.check_runbook(data, root=root or ".")
+    except runbook_check_lib.RunbookError as e:
+        print("الدفتر غير صالح: %s" % e)
+        return 2
+    if as_json:
+        _print_json(result)
+    else:
+        summary = result["summary"]
+        print("فحص الدفتر «%s»: %d ناجحة، %d فاشلة، %d متخطاة"
+              % (result["title"], summary["passed"], summary["failed"],
+                 summary["skipped"]))
+        for step in result["steps"]:
+            print("  [%s] %s — %s"
+                  % (step["status"], step["title"], step["detail"]))
+    return 0 if result["summary"]["ok"] else 1
+
+
+def cmd_failure_drill(cfg, drill=None, all_drills=False, workdir=None,
+                      keep=False, as_json=False):
+    """درّب على عطل اصطناعي وتحقّق من أن الكشف يعمل (قراءة فقط
+    خارج مجلد عمل مؤقت — لا يمسّ أي ملف حقيقي).
+
+    تغليف رقيق فوق `lib.failure_drill`: افتراضيًا --all، أو
+    --drill ID لعطل واحد. خروج 0 إن نجح الكل في الكشف، و1 إن
+    فشل أي drill في الكشف، و2 على drill مجهول أو مدخل فاسد.
+    --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تدريب اصطناعي صريح.
+    if drill is not None and all_drills:
+        print("مرّر --drill أو --all (أحدهما فقط)")
+        return 2
+    if workdir is not None:
+        workdir = expand(workdir)
+        try:
+            os.makedirs(workdir, exist_ok=True)
+        except OSError as e:
+            print("تعذّر إنشاء مجلد العمل: %s" % e)
+            return 2
+    try:
+        if drill is not None:
+            result = failure_drill_lib.run_drill(drill, workdir=workdir,
+                                                 keep=keep)
+            ok = result["status"] == "pass"
+        else:
+            result = failure_drill_lib.run_all_drills(workdir=workdir,
+                                                      keep=keep)
+            ok = result["summary"]["ok"]
+    except failure_drill_lib.DrillError as e:
+        print("تعذّر التدريب: %s" % e)
+        return 2
+    if as_json:
+        _print_json(result)
+    else:
+        if drill is not None:
+            print("تدريب «%s»: %s — %s"
+                  % (result["title"], result["status"],
+                     result["detail"]))
+        else:
+            summary = result["summary"]
+            print("تدريبات الأعطال: %d ناجحة من %d"
+                  % (summary["passed"], summary["total"]))
+            for item in result["drills"]:
+                print("  [%s] %s — %s"
+                      % (item["status"], item["title"], item["detail"]))
+    return 0 if ok else 1
+
+
+# ------------------------------------------- keyword-analyze (جولة v0.1.61)
+def cmd_keyword_analyze(cfg, keyword=None, metrics_json=None,
+                        keywords_json=None, as_json=False):
+    """حلّل كلمة مفتاحية (أو دفعية) وقدّر صعوبة استهدافها.
+
+    تغليف رقيق فوق `lib.keyword_analyze`: كلمة واحدة
+    (--keyword مع --metrics-json اختياري)، أو دفعية
+    (--keywords-json). خروج 0 عند النجاح، و2 على مدخل فاسد
+    (ملف مفقود/JSON فاسد/كلمة فارغة). --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تحليل بيانات صريحة.
+    if keywords_json is not None:
+        if keyword is not None or metrics_json is not None:
+            print("مرّر --keywords-json أو --keyword (أحدهما فقط)")
+            return 2
+        text = _read_growth_text_file(keywords_json, "ملف الكلمات")
+        if text is None:
+            return 2
+        try:
+            result = keyword_analyze_lib.analyze_keywords(text)
+        except (ValueError, TypeError) as e:
+            print("مدخل محلّل الكلمات غير صالح: %s" % e)
+            return 2
+    else:
+        if not keyword:
+            print("مرّر --keyword أو --keywords-json")
+            return 2
+        metrics = None
+        if metrics_json is not None:
+            payload = _load_json_file(metrics_json, "ملف مقاييس الكلمة")
+            if payload is None:
+                return 2
+            if not isinstance(payload, dict):
+                print("ملف مقاييس الكلمة يجب أن يحوي قاموسًا واحدًا")
+                return 2
+            inner = payload.get("metrics")
+            metrics = inner if isinstance(inner, dict) else payload
+        try:
+            result = keyword_analyze_lib.analyze_keyword(keyword, metrics)
+        except (ValueError, TypeError) as e:
+            print("مدخل محلّل الكلمات غير صالح: %s" % e)
+            return 2
+    if as_json:
+        print(keyword_analyze_lib.to_json(result), end="")
+    else:
+        print(keyword_analyze_lib.format_report(result))
+    return 0
+
+
+# ------------------------------------------- content-optimize (جولة v0.1.61)
+def cmd_content_optimize(cfg, title, keyword, body_file, description="",
+                         phrases_json=None, as_json=False):
+    """قيّم محتوى ضد كلمة مفتاحية (درجة 0–100، النطاق الصحي 55–75).
+
+    تغليف رقيق فوق `lib.content_optimizer`: العنوان والكلمة
+    ونص ملف (--body-file) ووصف اختياري وعبارات موصى بها
+    اختيارية (--phrases-json). خروج 0 عند النجاح، و2 على مدخل
+    فاسد. --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تقييم نص صريح.
+    body = _read_growth_text_file(body_file, "ملف نص المحتوى")
+    if body is None:
+        return 2
+    phrases = None
+    if phrases_json is not None:
+        phrases = _load_json_file(phrases_json, "ملف العبارات الموصى بها")
+        if phrases is None:
+            return 2
+        if not isinstance(phrases, list):
+            print("ملف العبارات الموصى بها يجب أن يحوي قائمة")
+            return 2
+    try:
+        result = content_optimizer_lib.optimize_content(
+            title, description, body, keyword,
+            recommended_phrases=phrases)
+    except (ValueError, TypeError) as e:
+        print("مدخل محسِّن المحتوى غير صالح: %s" % e)
+        return 2
+    if as_json:
+        print(content_optimizer_lib.to_json(result), end="")
+    else:
+        print(content_optimizer_lib.format_report(result))
+    return 0
+
+
+# ------------------------------------------- keyword-generate (جولة v0.1.61)
+def cmd_keyword_generate(cfg, seed, corpus_json=None, limit=20,
+                         as_json=False):
+    """ولّد كلمات مفتاحية ذات صلة من بذرة (بلا أحجام مخترعة).
+
+    تغليف رقيق فوق `lib.keyword_generate`: البذرة إلزامية،
+    وcorpus اختياري (--corpus-json)، و--limit (1–100،
+    الافتراضي 20). خروج 0 عند النجاح، و2 على مدخل فاسد.
+    --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر توليد من بذرة صريحة.
+    corpus = None
+    if corpus_json is not None:
+        text = _read_growth_text_file(corpus_json, "ملف corpus الكلمات")
+        if text is None:
+            return 2
+        corpus = text
+    try:
+        result = keyword_generate_lib.generate_keywords(
+            seed, corpus=corpus, limit=limit)
+    except (ValueError, TypeError) as e:
+        print("مدخل مولّد الكلمات غير صالح: %s" % e)
+        return 2
+    if as_json:
+        print(keyword_generate_lib.to_json(result), end="")
+    else:
+        print(keyword_generate_lib.format_report(result))
+    return 0
+
+
+# ------------------------------------------- micro-niche (جولة v0.1.61)
+def cmd_micro_niche(cfg, niches_json, library_json=None, as_json=False):
+    """ابحث عن تخصصات دقيقة قليلة المنافسة (فرصة/مزدحم/بلا طلب).
+
+    تغليف رقيق فوق `lib.micro_niche`: ملف تخصصات
+    (--niches-json) ومكتبة قصصنا اختيارية (--library-json
+    أو مضمّنة في الملف نفسه). خروج 0 عند النجاح، و2 على
+    مدخل فاسد. --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر بحث في بيانات صريحة.
+    text = _read_growth_text_file(niches_json, "ملف التخصصات")
+    if text is None:
+        return 2
+    library = None
+    if library_json is not None:
+        library = _load_json_file(library_json, "ملف مكتبة القصص")
+        if library is None:
+            return 2
+        if not isinstance(library, list):
+            print("ملف مكتبة القصص يجب أن يحوي قائمة")
+            return 2
+    try:
+        result = micro_niche_lib.find_micro_niches(text, library=library)
+    except (ValueError, TypeError) as e:
+        print("مدخل باحث التخصصات غير صالح: %s" % e)
+        return 2
+    if as_json:
+        print(micro_niche_lib.to_json(result), end="")
+    else:
+        print(micro_niche_lib.format_report(result))
+    return 0
+
+
+# ------------------------------------------- page-analyze (جولة v0.1.61)
+def cmd_page_analyze(cfg, page_json, as_json=False):
+    """حلّل صفحة/فيديو (عنوان + وصف + وسوم) واقترح تحسينات.
+
+    تغليف رقيق فوق `lib.page_analyze`: ملف صفحة واحد
+    (--page-json). خروج 0 عند النجاح، و2 على مدخل فاسد.
+    --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر تحليل صفحة صريحة.
+    text = _read_growth_text_file(page_json, "ملف الصفحة")
+    if text is None:
+        return 2
+    try:
+        result = page_analyze_lib.analyze_page(text)
+    except (ValueError, TypeError) as e:
+        print("مدخل محلّل الصفحة غير صالح: %s" % e)
+        return 2
+    if as_json:
+        print(page_analyze_lib.to_json(result), end="")
+    else:
+        print(page_analyze_lib.format_report(result))
+    return 0
+
+
+# ------------------------------------------- fresh-keywords (جولة v0.1.61)
+def cmd_fresh_keywords(cfg, trends_json, days=7, today=None, as_json=False):
+    """رتّب كلمات رائجة اليوم من بيانات ترند (بلا أرقام مخترعة).
+
+    تغليف رقيق فوق `lib.fresh_keywords`: ملف ترندات
+    (--trends-json) ونافذة حداثة (--days، الافتراضي 7)
+    وتاريخ مرجعي اختياري (--today بصيغة YYYY-MM-DD).
+    خروج 0 عند النجاح، و2 على مدخل فاسد. --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر ترتيب بيانات صريحة.
+    text = _read_growth_text_file(trends_json, "ملف الترندات")
+    if text is None:
+        return 2
+    try:
+        result = fresh_keywords_lib.fresh_keywords(
+            text, days=days, today=today)
+    except (ValueError, TypeError) as e:
+        print("مدخل الكلمات الطازجة غير صالح: %s" % e)
+        return 2
+    if as_json:
+        print(fresh_keywords_lib.to_json(result), end="")
+    else:
+        print(fresh_keywords_lib.format_report(result))
+    return 0
+
+
+# ------------------------------------------- topical-authority (جولة v0.1.61)
+def cmd_topical_authority(cfg, library_json, topics_json=None,
+                          as_json=False):
+    """قس سلطة مكتبة القصص الموضوعية وحدّد فجوات التغطية.
+
+    تغليف رقيق فوق `lib.topical_authority`: ملف مكتبة
+    (--library-json) وخريطة مواضيع اختيارية (--topics-json).
+    خروج 0 عند النجاح، و2 على مدخل فاسد. --json خالص.
+    """
+    del cfg  # الإعداد غير مستخدم: الأمر قياس مكتبة صريحة.
+    text = _read_growth_text_file(library_json, "ملف مكتبة القصص")
+    if text is None:
+        return 2
+    topic_map = None
+    if topics_json is not None:
+        topic_map = _load_json_file(topics_json, "ملف خريطة المواضيع")
+        if topic_map is None:
+            return 2
+        if not isinstance(topic_map, dict):
+            print("ملف خريطة المواضيع يجب أن يحوي قاموسًا واحدًا")
+            return 2
+    try:
+        result = topical_authority_lib.topical_authority(
+            text, topic_map=topic_map)
+    except (ValueError, TypeError) as e:
+        print("مدخل السلطة الموضوعية غير صالح: %s" % e)
+        return 2
+    if as_json:
+        print(topical_authority_lib.to_json(result), end="")
+    else:
+        print(topical_authority_lib.format_report(result))
+    return 0
+
+
 # الأوامر التجارية (جولة v0.1.43): كل ما ينتج/ينشر/يبيع — تُغلق
 # بعد انتهاء فترة التجربة (30 يومًا من أول تشغيل) بلا ترخيص
 # مدفوع. الأوامر غير المذكورة هنا (قراءة/تشخيص/صيانة/إعداد)
@@ -4534,7 +6683,7 @@ def cmd_logs(cfg, today=True, limit=20):
 # (ليست بوابة تجارية). doctor/license/--help بلا بوابة بطبيعتها.
 STAR_GATED_COMMANDS = frozenset((
     "run", "produce", "assemble", "publish", "batch", "daily",
-    "long-video", "client-run",
+    "long-video", "client-run", "quick",
 ))
 
 
@@ -4545,7 +6694,7 @@ COMMERCIAL_COMMANDS = frozenset((
     "quote-cards", "scene-plan", "ideas", "fix-audio", "grade",
     "trim", "fx", "karaoke-ass", "srt-ass", "whisper-ass",
     "manifest", "avatar-job", "ab", "ab-results", "shorts-cut",
-    "reframe", "preview", "request",
+    "reframe", "preview", "request", "quick",
 ))
 
 
@@ -4601,6 +6750,13 @@ def main():
     sub.add_parser("llm-status",
                    help="حالة مزودي الذكاء: السلسلة + التهدئة + "
                         "عدادات اليوم (قراءة فقط)")
+    p = sub.add_parser("debug-config",
+                       help="الإعداد الفعّال ومصدر كل قيمة (قراءة فقط)")
+    p.add_argument("--profile", default=None,
+                   help="اسم البروفايل: render أو publish أو review")
+    p.add_argument("--set", action="append", default=[],
+                   metavar="KEY=VALUE",
+                   help="تجاوز من سطر الأوامر (مثال: --set effort=high)")
     sub.add_parser("protect",
                    help="فحص حماية المشروع: سلامة + صلاحيات + أسرار + "
                         "نسخة احتياطية (قراءة فقط)")
@@ -4773,6 +6929,10 @@ def main():
                         "cinematic/soft")
     p.add_argument("--no-watermark", action="store_true",
                    help="تخطَّ شعار الصفحة (الشعار تلقائي افتراضيًا)")
+    p.add_argument("--no-title", action="store_true",
+                   help="لا تحرق عنوان الهوك في Concat — للقصص التي "
+                        "عنوانها هو الهوك نفسه، فيُحرق لاحقًا مرة "
+                        "واحدة بـhook-title بدل تضاعفه (جولة v0.1.62)")
     p.add_argument("--cards-dir",
                    help="مجلد بطاقات الاقتباس (ibra/hikma/mawiza) "
                         "لإلحاقها ختامية 3×3 ثوانٍ")
@@ -4824,6 +6984,11 @@ def main():
                    help="موديل faster-whisper (small افتراضيًا)")
     p.add_argument("--max-chars", type=int, default=28,
                    help="أقصى حروف في السطر (28 افتراضيًا)")
+    p.add_argument("--lang", choices=["ar", "en"], default=None,
+                   dest="cmd_lang",
+                   help="لغة الكابشن: ar (العربية، الافتراضي — مسار "
+                        "الكاريوكي) أو en (الإنجليزية — مسار لاتيني "
+                        "LTR). " + EN_VOICE_LICENSE_NOTE)
     p = sub.add_parser("trim",
                          help="قص مقطع بلا إعادة ترميز (تنظيف Veo قبل "
                               "التجميع)")
@@ -4894,6 +7059,373 @@ def main():
     p.add_argument("--resume",
                    help="استئناف تشغيل منقطع بمعرّفه (run-...) من آخر "
                         "نقطة تفتيش — يُتخطى ما اكتمل ويُعاد ما تبقى فقط")
+    p.add_argument("--lang", choices=["ar", "en"], default=None,
+                   dest="cmd_lang",
+                   help="لغة القصة: ar (العربية، الافتراضي) أو en "
+                        "(الإنجليزية). " + EN_VOICE_LICENSE_NOTE)
+    p.add_argument("--voice", default=None,
+                   help="صوت الراوي: piper (الرجل) أو gtts أو "
+                        "supertonic-M1 — أو اسم موديل Piper رجالي من "
+                        "السجل (مثال en_US-ryan-medium للإنجليزية)؛ "
+                        "وأي اسم غير معروف أو غير ذكوري يُرفض")
+    p = sub.add_parser("quick",
+                       help="أمر واحد: عنوان قصة ← فيديو قصير كامل "
+                            "(بلا أسئلة — بلا نشر تلقائي)")
+    p.add_argument("title", help="عنوان القصة (مثال: \"النجار الأمين\")")
+    p.add_argument("--out", help="مسار الفيديو الناتج (افتراضي: videos_dir)")
+    p.add_argument("--lang", choices=["ar", "en"], default=None,
+                   dest="cmd_lang",
+                   help="لغة القصة: ar (العربية، الافتراضي) أو en "
+                        "(الإنجليزية). " + EN_VOICE_LICENSE_NOTE)
+    p.add_argument("--voice", default=None,
+                   help="صوت الراوي: piper (الرجل) أو gtts أو "
+                        "supertonic-M1 — أو اسم موديل Piper رجالي من "
+                        "السجل (مثال en_US-ryan-medium للإنجليزية)؛ "
+                        "وأي اسم غير معروف أو غير ذكوري يُرفض")
+    p.add_argument("--allow-fallback", action="store_true",
+                   help="اسمح بقصة مدمجة من القوالب عند فشل LLM "
+                        "(بدونه: يتوقف quick عند الفشل)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="اطبع الخطة فقط دون إنتاج")
+    p.add_argument("--publish", action="store_true",
+                   help="انشر الفيديو بعد إنتاجه (بدونه: بلا نشر — "
+                        "انشر لاحقًا بأمر publish الصريح)")
+    p = sub.add_parser("expand-motion-prompts",
+                       help="وسّع موجّهات حركة قصيرة من JSON إلى "
+                            "موجّهات مفصلة (أمر صريح — بلا إنتاج)")
+    p.add_argument("--prompts", required=True,
+                   help="ملف JSON بقائمة موجّهات "
+                        "([{\"id\"?, \"prompt\"}])")
+    p.add_argument("--out", required=True,
+                   help="ملف JSON الناتج بقائمة الموجّهات الموسّعة")
+    p = sub.add_parser("seo-check",
+                       help="فحص SEO قبل النشر: عنوان + وصف + وسوم "
+                            "(خروج 1 عند ملاحظات)")
+    p.add_argument("--title", required=True,
+                   help="عنوان الفيديو")
+    p.add_argument("--description", required=True,
+                   help="وصف الفيديو (أول سطرين هما المقتطف الذي "
+                        "يراه الباحث)")
+    p.add_argument("--tags", required=True,
+                   help="وسوم مفصولة بفواصل "
+                        "(مثال: \"قصص وعبر،قصص واقعية\")")
+    p.add_argument("--story-file",
+                   help="ملف نص القصة (اختياري — لاشتقاق "
+                        "الاستعلامات وفحص صلة الوسوم)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع التقرير JSON خالصًا")
+    p = sub.add_parser("title-lint",
+                       help="دقّق عنوانًا ومصغرة كوحدة واحدة (أو رتّب "
+                            "عناوين من ملف)")
+    p.add_argument("--title",
+                   help="عنوان واحد لتدقيقه")
+    p.add_argument("--thumb",
+                   help="نص المصغرة (اختياري — لا يكرّر العنوان)")
+    p.add_argument("--titles-file",
+                   help="ملف عناوين (سطر لكل عنوان) لترتيبها "
+                        "بالأقل مشكلات")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع التقرير JSON خالصًا")
+    p = sub.add_parser("hook-score",
+                       help="قيّم هوكًا (أو هوكات من ملف) ورتّبها — "
+                            "أفضل اثنين مميزان")
+    p.add_argument("--hook",
+                   help="هوك واحد لتقييمه")
+    p.add_argument("--hook-file",
+                   help="ملف هوكات (سطر لكل هوك) لتقييمها وترتيبها")
+    p.add_argument("--story-file",
+                   help="ملف نص القصة (اختياري — لقياس العائد داخل "
+                        "المقطع)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع اللوحة JSON خالصًا")
+    p = sub.add_parser("viral-rank",
+                       help="رتّب فيديوهات بمضاعف كل قناة على وسيطها "
+                            "الخاص")
+    p.add_argument("--videos-file", required=True,
+                   help="ملف JSON بقائمة "
+                        "[{channel, title, views, url?, duration?}]")
+    p.add_argument("--top", type=int, default=5,
+                   help="عدد الأوائل المطلوب (الافتراضي 5)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("retention-read",
+                       help="اقرأ تصدير احتفاظ Studio (CSV) وشخّص "
+                            "أكبر تسرب")
+    p.add_argument("--csv", required=True,
+                   help="ملف CSV لتصدير الاحتفاظ من YouTube Studio")
+    p.add_argument("--duration", type=float, default=None,
+                   help="مدة الفيديو بالثواني (اختياري — تُستنتج من "
+                        "آخر نقطة)")
+    p.add_argument("--transcript",
+                   help="ملف نص مكتوب (SRT أو ASS) لطباعة ما كان "
+                        "يُقال عند المنحدرات")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("channel-audit",
+                       help="دقّق القناة وينتهِ في إصلاح واحد (آخر 10 "
+                            "عناوين + هوكات + إيقاع + احتفاظ)")
+    p.add_argument("--titles-file", required=True,
+                   help="ملف فيه آخر 10 عناوين (عنوان في كل سطر، "
+                        "الأحدث أولًا)")
+    p.add_argument("--hooks-file",
+                   help="ملف فيه الأسطر الأولى لأحدث الفيديوهات "
+                        "(سطر لكل فيديو)")
+    p.add_argument("--thumb-texts-file",
+                   help="ملف فيه نصوص المصغرات (سطر لكل عنوان؛ سطر "
+                        "فارغ يعني بلا نص)")
+    p.add_argument("--dates-file",
+                   help="ملف فيه تواريخ الرفع YYYY-MM-DD (تاريخ في "
+                        "كل سطر)")
+    p.add_argument("--retention-csv",
+                   help="ملف CSV لتصدير الاحتفاظ من YouTube Studio")
+    p.add_argument("--duration", type=float, default=None,
+                   help="مدة فيديو الاحتفاظ بالثواني (اختياري)")
+    p.add_argument("--title",
+                   help="عنوان أحدث فيديو لفحص SEO (مع --description "
+                        "و--tags)")
+    p.add_argument("--description",
+                   help="وصف أحدث فيديو لفحص SEO")
+    p.add_argument("--tags",
+                   help="وسوم أحدث فيديو لفحص SEO (مفصولة بفواصل)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("trend-scout",
+                       help="كشّاف ترندات أسبوعي: رتّب فيديوهات عامة "
+                            "واقترح إدخالات طابور (بلا كتابة فيه)")
+    p.add_argument("--videos-file", required=True,
+                   help="ملف JSON بقائمة فيديوهات عامة "
+                        "[{channel, title, views?, likes?, saves?, "
+                        "shares?, url?, duration?}]")
+    p.add_argument("--top-n", type=int, default=5,
+                   help="عدد اقتراحات الطابور المطلوبة (الافتراضي 5)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("scene-shorts",
+                       help="قصّ فيديو طويل إلى أجزاء مشهدية عمودية "
+                            "40–60 ثانية (مشاهد كاملة فقط)")
+    p.add_argument("--video", required=True,
+                   help="ملف الفيديو الطويل")
+    p.add_argument("--scenes-file", required=True,
+                   help="ملف JSON بحدود المشاهد "
+                        "[{start, end, title?}] بالثواني")
+    p.add_argument("--out",
+                   help="مجلد الخرج (افتراضي: مجلد فيديو بتاريخ اليوم)")
+    p.add_argument("--phrases",
+                   help="ملف ASS بعبارات الفيديو الطويل (اختياري — "
+                        "لهوك كل جزء وكابشناته)")
+    p.add_argument("--full-hook",
+                   help="هوك الفيديو الكامل (اختياري — للتقرير)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("tiktok-check",
+                       help="افحص شورتًا قبل نشره على TikTok: هوك 3 "
+                            "ثوانٍ + كابشن + ترند + خطة أسبوع (خروج 1 "
+                            "عند ملاحظات)")
+    p.add_argument("--title", required=True,
+                   help="عنوان الفيديو")
+    p.add_argument("--caption", required=True,
+                   help="كابشن النشر")
+    p.add_argument("--hook",
+                   help="نص الهوك (اختياري — غيابه فشل فحص الهوك)")
+    p.add_argument("--moral",
+                   help="العبرة (اختياري — تُستنتج من الكابشن إن غابت)")
+    p.add_argument("--story-file",
+                   help="ملف نص القصة (اختياري)")
+    p.add_argument("--queue-file",
+                   help="ملف الطابور (اختياري — لفحص خطة الأسبوع)")
+    p.add_argument("--needed", type=int, default=7,
+                   help="عدد فيديوهات الأسبوع المطلوب (الافتراضي 7)")
+    p.add_argument("--trend-keywords",
+                   help="كلمات ترند مفصولة بفواصل (اختياري)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع التقرير JSON خالصًا")
+    p = sub.add_parser("script-check",
+                       help="بوابة سكريبت نصية قبل الإنتاج: هوك + عبرة "
+                            "+ سؤال ختامي + مشاهد 5–7 (خروج 1 عند "
+                            "ملاحظات)")
+    p.add_argument("script",
+                   help="ملف سكريبت JSON")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع التقرير JSON خالصًا")
+    p.add_argument("--timed-phrases",
+                   help="ملف JSON بعبارات موقوتة لتقدير المدة")
+    p.add_argument("--narration-audio",
+                   help="ملف صوت سرد (wav) لتقدير المدة")
+    p.add_argument("--narration-wpm", type=float,
+                   help="معدل سرد (كلمة/دقيقة) يمرره المشغّل")
+    p.add_argument("--narration-duration", type=float,
+                   help="مدة سرد مقاسة بالثواني يمررها المشغّل")
+    p = sub.add_parser("topic-brief",
+                       help="موجز بحث لموضوع قبل الكتابة: أنماط رابحة "
+                            "+ هوكات ناجحة + زوايا غير مغطاة")
+    p.add_argument("--input",
+                   help="ملف JSON واحد {theme, candidates, "
+                        "existing_titles}")
+    p.add_argument("--theme",
+                   help="نص الموضوع")
+    p.add_argument("--candidates-file",
+                   help="ملف JSON بقائمة مرشحي ترند (صيغة "
+                        "trend-scout)")
+    p.add_argument("--queue-file",
+                   help="ملف الطابور (قراءة فقط — لعناوينه الحالية)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع الموجز JSON خالصًا")
+    p = sub.add_parser("hook-title",
+                       help="عنوان هوك كبير مكتوب أول 3 ثوانٍ على شورت "
+                            "جاهز (النطاق الأوسط فقط — قرار 10:09)")
+    p.add_argument("--video",
+                   help="ملف فيديو الشورت الجاهز")
+    p.add_argument("--title", required=True,
+                   help="نص الهوك من السكريبت نفسه")
+    p.add_argument("--out",
+                   help="ملف الخرج (افتراضي: نفس الاسم + -hook-title)")
+    p.add_argument("--json", action="store_true",
+                   help="اعرض مواصفة العنوان فقط (بلا حرق)")
+    p.add_argument("--force", action="store_true",
+                   help="طبّق عنوان الهوك رغم وجود عنوان محروق أصلًا "
+                        "في الفيديو")
+    p = sub.add_parser("reliability-report",
+                       help="تقرير موثوقية من سجلات تشغيل JSON "
+                            "(قراءة/تشخيص فقط)")
+    p.add_argument("--runs-json", required=True,
+                   help="ملف JSON بقائمة سجلات تشغيل")
+    p.add_argument("--window-days", type=int, default=30,
+                   help="طول النافذة بالأيام (الافتراضي 30)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع التقرير JSON خالصًا")
+    p = sub.add_parser("failure-classify",
+                       help="صنّف نص فشل إلى بيئة/كود/خارجي/غير معروف")
+    p.add_argument("--text",
+                   help="نص الفشل مباشرة (أو --file)")
+    p.add_argument("--file",
+                   help="ملف فيه نص الفشل (أو --text)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع التصنيف JSON خالصًا")
+    p = sub.add_parser("incident-probe",
+                       help="حقّق في حادثة من سياق JSON جاهز "
+                            "(سبب جذري محتمل + فرضيات + أدلة)")
+    p.add_argument("--context-json", required=True,
+                   help="ملف JSON بسياق الحادثة")
+    p.add_argument("--mask", action="store_true",
+                   help="أخفِ الاقتباسات ونص الفشل في المخرجات")
+    p.add_argument("--mapping-out",
+                   help="ملف يُكتب فيه mapping الإخفاء (لا يُطبع أبدًا)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع التقرير JSON خالصًا")
+    p = sub.add_parser("id-mask",
+                       help="أخفِ معرّفات في نص (بريد/هاتف/أرقام طويلة) "
+                            "أو أعد إظهارها، أو احجب الأسرار نهائيًا")
+    p.add_argument("--text",
+                   help="النص مباشرة (أو --file)")
+    p.add_argument("--file",
+                   help="ملف فيه النص (أو --text)")
+    p.add_argument("--mapping-out",
+                   help="ملف يُكتب فيه mapping الإخفاء (لا يُطبع أبدًا)")
+    p.add_argument("--redact", action="store_true",
+                   help="احجب الأسرار نهائيًا (بلا mapping ولا استرجاع)")
+    p.add_argument("--unmask", action="store_true",
+                   help="أعد إظهار نص مخفي (يحتاج --mapping)")
+    p.add_argument("--mapping",
+                   help="ملف الـmapping (مع --unmask)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("runbook-check",
+                       help="افحص دفتر تشغيل (قراءة فقط — بلا أي إصلاح)")
+    p.add_argument("--runbook",
+                   help="اسم دفتر مدمج: env-restore أو publish-failure")
+    p.add_argument("--runbook-file",
+                   help="ملف دفتر JSON (بدل الاسم المدمج)")
+    p.add_argument("--root", default=".",
+                   help="الجذر الذي يستبدل {root} في المسارات "
+                        "(الافتراضي: المجلد الحالي)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("failure-drill",
+                       help="درّب على عطل اصطناعي وتحقّق من أن الكشف "
+                            "يعمل (افتراضيًا كل الأعطال)")
+    p.add_argument("--drill",
+                   help="معرّف عطل واحد (أو --all)")
+    p.add_argument("--all", action="store_true",
+                   help="شغّل كل الأعطال المدمجة (الافتراضي)")
+    p.add_argument("--workdir",
+                   help="مجلد عمل التدريب (افتراضي: مؤقت يُنظَّف)")
+    p.add_argument("--keep", action="store_true",
+                   help="احتفظ بمجلد العمل المؤقت بعد التدريب")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("keyword-analyze",
+                       help="حلّل كلمة مفتاحية: صعوبة ومنافسة ودرجات SERP")
+    p.add_argument("--keyword",
+                   help="كلمة واحدة (أو --keywords-json للدفعية)")
+    p.add_argument("--metrics-json",
+                   help="ملف JSON بمقاييس الكلمة: volume وcompetition "
+                        "وgrowth_pct وserp")
+    p.add_argument("--keywords-json",
+                   help="ملف JSON بقائمة كلمات {keyword, metrics?} "
+                        "للتحليل الدفعي")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("content-optimize",
+                       help="قيّم محتوى ضد كلمة مفتاحية (درجة 0–100، "
+                            "والنطاق الصحي 55–75)")
+    p.add_argument("--title", required=True,
+                   help="عنوان المحتوى")
+    p.add_argument("--keyword", required=True,
+                   help="الكلمة المفتاحية المستهدفة")
+    p.add_argument("--body-file", required=True,
+                   help="ملف فيه نص المحتوى")
+    p.add_argument("--description", default="",
+                   help="وصف المحتوى (اختياري)")
+    p.add_argument("--phrases-json",
+                   help="ملف JSON بعبارات موصى بها {phrase, used_by_top}")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("keyword-generate",
+                       help="ولّد كلمات مفتاحية ذات صلة من بذرة")
+    p.add_argument("--seed", required=True,
+                   help="بذرة التوليد (موضوع القصة)")
+    p.add_argument("--corpus-json",
+                   help="ملف JSON بكلمات ذات صلة {keyword, volume?}")
+    p.add_argument("--limit", type=int, default=20,
+                   help="عدد النتائج المطلوبة (1–100، الافتراضي 20)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("micro-niche",
+                       help="ابحث عن تخصصات دقيقة قليلة المنافسة")
+    p.add_argument("--niches-json", required=True,
+                   help="ملف JSON بتخصصات {name, keywords} (أو قاموس "
+                        "فيه niches ومكتبة library)")
+    p.add_argument("--library-json",
+                   help="ملف JSON بمكتبة قصصنا {title, topic?} (اختياري)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("page-analyze",
+                       help="حلّل صفحة/فيديو (عنوان + وصف + وسوم) "
+                            "واقترح تحسينات")
+    p.add_argument("--page-json", required=True,
+                   help="ملف JSON بالصفحة {title, description, tags, "
+                        "url?, duration?, keyword?}")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("fresh-keywords",
+                       help="رتّب كلمات رائجة اليوم من بيانات ترند")
+    p.add_argument("--trends-json", required=True,
+                   help="ملف JSON بترندات {keyword, growth_pct?, "
+                        "volume?, date, source?}")
+    p.add_argument("--days", type=int, default=7,
+                   help="نافذة الحداثة بالأيام (الافتراضي 7)")
+    p.add_argument("--today",
+                   help="تاريخ مرجعي بصيغة YYYY-MM-DD (افتراضيًا اليوم)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
+    p = sub.add_parser("topical-authority",
+                       help="قس سلطة مكتبة القصص الموضوعية وحدّد فجواتها")
+    p.add_argument("--library-json", required=True,
+                   help="ملف JSON بمكتبة قصصنا {title, topic?}")
+    p.add_argument("--topics-json",
+                   help="ملف JSON بخريطة مواضيع مخصصة (اختياري)")
+    p.add_argument("--json", action="store_true",
+                   help="اطبع النتيجة JSON خالصًا")
     p = sub.add_parser("request", help="اطلب فيديو بنص عادي — قصة أو موضوع")
     p.add_argument("text", nargs="?",
                    help="نص القصة أو الموضوع (أو استخدم --text-file)")
@@ -4948,19 +7480,30 @@ def main():
                    help="ملف طابور بديل (الافتراضي من config.yaml) — "
                         "مع --auto-week")
     p.add_argument("--voice", default=None,
-                   choices=["piper", "gtts", "supertonic-M1"],
                    help="صوت السرد: piper (الراوي الرجل) أو gtts أو "
-                        "supertonic-M1 (صوت ثانٍ اختياري) — الافتراضي "
-                        "من الإعداد (narration.voice)")
-    p.add_argument("--motion", default="clips",
+                        "supertonic-M1 (صوت ثانٍ اختياري) — أو اسم موديل "
+                        "Piper رجالي من السجل (مثال en_US-ryan-medium "
+                        "للإنجليزية)؛ والافتراضي من الإعداد "
+                        "(narration.voice)؛ وأي اسم غير معروف أو غير "
+                        "ذكوري يُرفض")
+    p.add_argument("--lang", choices=["ar", "en"], default=None,
+                   dest="cmd_lang",
+                   help="لغة السرد والكابشن: ar (العربية، الافتراضي) أو "
+                        "en (الإنجليزية). " + EN_VOICE_LICENSE_NOTE)
+    p.add_argument("--motion", default=long_video.FAST_MOTION_DEFAULT,
                    choices=["clips", "still", "kenburns", "youtube-long"],
-                   help="وضع الحركة: clips (الافتراضي) = مقاطع حركة "
-                        "مولّدة من المانيفست (--motion-manifest) مع رجوع "
-                        "لصورة ثابتة بلا Ken Burns عند غياب المقاطع؛ "
-                        "youtube-long = مثل clips لكن الصور الاحتياطية "
-                        "2.5 ثانية بدل 5 (إيقاع قصص يوتيوب الطويلة)؛ "
-                        "still = صور ثابتة بلا أي حركة؛ kenburns = "
-                        "السلوك القديم (Ken Burns) — اختياري صريح فقط")
+                   help="وضع الحركة: kenburns (الافتراضي — المسار "
+                        "السريع بلا GPU) = صور ثابتة بحركة Ken Burns "
+                        "خفيفة؛ clips = مقاطع حركة مولّدة من المانيفست "
+                        "(--motion-manifest) مع رجوع لصورة ثابتة بلا "
+                        "Ken Burns عند غياب المقاطع؛ youtube-long = مثل "
+                        "clips لكن الصور الاحتياطية 2.5 ثانية بدل 5 "
+                        "(إيقاع قصص يوتيوب الطويلة)؛ still = صور ثابتة "
+                        "بلا أي حركة")
+    p.add_argument("--improve-motion", action="store_true",
+                   help="حسّن الحركة: بدّل صور الفصول بمقاطع مولّدة من "
+                        "مانيفست الحركة (--motion-manifest) مع إعادة "
+                        "استخدام الإطارات المجمّدة (بلا توليد GPU هنا)")
     p.add_argument("--motion-manifest",
                    help="مسار مانيفست الحركة JSON أو CSV (مع --motion "
                         "clips)")
@@ -4981,10 +7524,16 @@ def main():
     p.add_argument("--atempo", type=float, default=1.0,
                    help="سرعة السرد (1.0 افتراضيًا؛ 1.25 لإيقاع Kwai)")
     p.add_argument("--voice", default=None,
-                   choices=["piper", "gtts", "supertonic-M1"],
                    help="صوت السرد: piper (الراوي الرجل) أو gtts أو "
-                        "supertonic-M1 (صوت ثانٍ اختياري) — الافتراضي "
-                        "من الإعداد (narration.voice)")
+                        "supertonic-M1 (صوت ثانٍ اختياري) — أو اسم موديل "
+                        "Piper رجالي من السجل (مثال en_US-ryan-medium "
+                        "للإنجليزية)؛ والافتراضي من الإعداد "
+                        "(narration.voice)؛ وأي اسم غير معروف أو غير "
+                        "ذكوري يُرفض")
+    p.add_argument("--lang", choices=["ar", "en"], default=None,
+                   dest="cmd_lang",
+                   help="لغة السرد: ar (العربية، الافتراضي) أو en "
+                        "(الإنجليزية). " + EN_VOICE_LICENSE_NOTE)
     p = sub.add_parser("quote-cards",
                        help="توليد بطاقات الاقتباس الثلاث 720×1280")
     p.add_argument("--ibra", required=True, help="نص العبرة")
@@ -5230,6 +7779,56 @@ def main():
                        help="خطوات ربط Instagram يدويًا + حفظ التوكن")
     p.add_argument("--token", default=None,
                    help="توكن Instagram (يُحفظ بصلاحية 600 ولا يُعرض)")
+    p = sub.add_parser("tiktok-bundle",
+                       help="بناء حزمة رفع TikTok لمهمة متصفح "
+                            "(كابشن + خطوات — بلا نشر)")
+    p.add_argument("--video", required=True, help="ملف الفيديو mp4")
+    p.add_argument("--title", required=True, help="عنوان الفيديو")
+    p.add_argument("--caption", default=None,
+                   help="نص القصة للكابشن (افتراضي: العنوان فقط)")
+    p.add_argument("--moral", default="",
+                   help="العبرة تُلحق بالكابشن بعد «العبرة:»")
+    p.add_argument("--next-part", action="store_true",
+                   help="ألحق الدعوة اللطيفة للجزء التالي")
+    p.add_argument("--next-part-time", default="بكرة 7 مساءً",
+                   help="موعد الجزء التالي في الدعوة "
+                        "(افتراضي: بكرة 7 مساءً)")
+    p.add_argument("--ai-voice", action="store_true",
+                   help="ألحق سطر إفصاح «صوت مولّد بالذكاء الاصطناعي»")
+    p.add_argument("--out-dir", default=None,
+                   help="مجلد الحزمة (افتراضي: videos/tiktok-bundle-<وقت>)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="اطبع الكابشن والخطوات بلا أي كتابة ملفات")
+    p = sub.add_parser("tiktok-long",
+                       help="دمج فيديوهين في النسخة الطويلة اليومية "
+                            "لـ TikTok (65–110 ث) + حزمة رفع")
+    p.add_argument("--video-a", required=True,
+                   help="الفيديو الأول (mp4 عمودي 40–60 ث)")
+    p.add_argument("--video-b", required=True,
+                   help="الفيديو الثاني (mp4 عمودي 40–60 ث)")
+    p.add_argument("--title", required=True,
+                   help="عنوان القصة (لـ«القصة كاملة») أو وصف الزوج "
+                        "(مع --kind two)")
+    p.add_argument("--caption", default=None,
+                   help="نص القصة للكابشن (افتراضي: العنوان فقط)")
+    p.add_argument("--moral", default="",
+                   help="العبرة تُلحق بالكابشن بعد «العبرة:»")
+    p.add_argument("--part-tags", default=None,
+                   help="وسوم الأجزاء المدمجة مفصولة بمسافات "
+                        "(مثال: \"#الجزء_الأول #الجزء_الثاني\") — "
+                        "تُلحق سطرًا قبل الوسوم الأربعة")
+    p.add_argument("--kind", choices=["full", "two"], default="full",
+                   help="full: «القصة كاملة» لجزأي قصة واحدة؛ "
+                        "two: «قصتان مؤثرتان» لقصتين منفردتين")
+    p.add_argument("--out-dir", default=None,
+                   help="مجلد الحزمة (افتراضي: videos/tiktok-long-<وقت>)")
+    p.add_argument("--max-seconds", type=float, default=None,
+                   help="الحد الأقصى لمدة الناتج (افتراضي: 110 ث)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="افحص المدخلين واطبع مجموع المدتين بلا دمج")
+    p = sub.add_parser("tiktok-status",
+                       help="حالة إعداد TikTok: الحساب وطريقة الرفع "
+                            "وربط API (قراءة فقط)")
     p = sub.add_parser("ab", help="اختبار A/B: هوكان ومصغرتان "
                                   "لفيديو واحد")
     p.add_argument("--video",
@@ -5382,6 +7981,9 @@ def main():
     # ثم مفتاح lang في config.yaml، ثم العربي دائمًا.
     lang = i18n_lib.detect_lang(getattr(args, "lang", None),
                                 env=os.environ, config=cfg)
+    # لغة الأمر الصريحة (--lang في الأمر نفسه) تغلب لغة CLI العامة.
+    eff_lang = i18n_lib.normalize_lang(
+        getattr(args, "cmd_lang", None) or lang)
     # خيار --size (في run/assemble): يبدّل مقاس الفيديو لهذا التشغيل
     # فقط دون تعديل config.yaml (الافتراضي 720×1280 عمودي).
     size_arg = getattr(args, "size", None)
@@ -5418,8 +8020,11 @@ def main():
         print(i18n_lib.t("main_bad_value", lang, e))
         return 2
     # doctor يقرأ الحالة الخام بلا إصلاح (وظيفته الإبلاغ لا الإصلاح).
+    # أوامر القراءة فقط (version) لا تطلق أي استرداد إطلاقًا
+    # (إصلاح بطء بدء التشغيل 2026-11-26: version كان يستغرق 323ث).
     if args.cmd != "doctor":
-        _ensure_environment()  # إصلاح ذاتي: أعد الأدوات/الخدمة إن غابتا
+        _ensure_environment(
+            read_only=(args.cmd in _READONLY_COMMANDS))
 
     # بوابة الترخيص (جولة v0.1.43): الاستخدام التجاري بعد 30 يومًا
     # من أول تشغيل يحتاج ترخيصًا مدفوعًا (1000 جنيه أفراد / 5000
@@ -5437,7 +8042,7 @@ def main():
                 print(msg)
                 return 1
 
-    # بوابة النجمة (جولة v0.1.48): الأوامر الثمانية في
+    # بوابة النجمة (جولة v0.1.48؛ وأُضيف quick في v0.1.53): الأوامر التسعة في
     # STAR_GATED_COMMANDS فقط — تُتخطى مع --dry-run، وتسري
     # بغض النظر عن --noncommercial (ليست بوابة تجارية).
     # عند الرفض تطبع check_star_gate الرسالة العربية وتخرج 1.
@@ -5462,6 +8067,8 @@ def main():
                           llm_flag=args.llm, lang=lang)
     if args.cmd == "llm-status":
         return cmd_llm_status(cfg, lang=lang)
+    if args.cmd == "debug-config":
+        return cmd_debug_config(args.profile, args.set)
     if args.cmd == "protect":
         return cmd_protect(cfg)
     if args.cmd == "manifest":
@@ -5499,7 +8106,8 @@ def main():
         return cmd_status(cfg, lang=lang)
     if args.cmd == "script":
         run_dir = None
-        result, _ = cmd_script(cfg, args.story, args.allow_fallback, run_dir)
+        result, _ = cmd_script(cfg, args.story, args.allow_fallback,
+                               run_dir, lang=lang)
         return 0 if result else 1
     if args.cmd == "produce":
         runs_dir = expand(cfg["paths"]["runs_dir"])
@@ -5584,7 +8192,8 @@ def main():
                              sfx_events=sfx_events,
                              overlays=args.overlay,
                              assets_dir=expand(args.assets_dir)
-                             if args.assets_dir else None)
+                             if args.assets_dir else None,
+                             no_title=args.no_title)
         except concat_mcp.ConcatError as e:
             _print_translated("فشل التجميع", e, "assemble")
             return 1
@@ -5624,9 +8233,12 @@ def main():
     if args.cmd == "karaoke-ass":
         try:
             cmd_karaoke_ass(cfg, expand(args.audio), expand(args.out),
-                            args.model, args.max_chars)
+                            args.model, args.max_chars, lang=eff_lang)
         except capite_captions.CapiteError as e:
             print("فشل توليد الكاريوكي: %s" % e)
+            return 1
+        except latin_captions.LatinCaptionError as e:
+            print("فشل توليد الكابشن اللاتيني: %s" % e)
             return 1
         except whisper_captions.WhisperError as e:
             print("فشل النسخ: %s" % e)
@@ -5745,7 +8357,134 @@ def main():
                        args.allow_fallback, args.dry_run, args.backend,
                        not args.no_watermark,
                        expand(args.cards_dir) if args.cards_dir else None,
-                       args.grade, lang=lang, resume=args.resume)
+                       args.grade, lang=eff_lang, resume=args.resume,
+                       voice=args.voice)
+    if args.cmd == "quick":
+        return cmd_quick(cfg, args.title, lang=eff_lang,
+                         voice=args.voice,
+                         out_path=expand(args.out) if args.out else None,
+                         dry_run=args.dry_run,
+                         allow_fallback=args.allow_fallback,
+                         publish=args.publish)
+    if args.cmd == "expand-motion-prompts":
+        return cmd_expand_motion_prompts(cfg, args.prompts, args.out)
+    if args.cmd == "seo-check":
+        return cmd_seo_check(cfg, args.title, args.description,
+                             args.tags, story_file=args.story_file,
+                             as_json=args.json)
+    if args.cmd == "title-lint":
+        return cmd_title_lint(cfg, title=args.title, thumb=args.thumb,
+                              titles_file=args.titles_file,
+                              as_json=args.json)
+    if args.cmd == "hook-score":
+        return cmd_hook_score(cfg, hook=args.hook,
+                              hook_file=args.hook_file,
+                              story_file=args.story_file,
+                              as_json=args.json)
+    if args.cmd == "viral-rank":
+        return cmd_viral_rank(cfg, args.videos_file, top=args.top,
+                              as_json=args.json)
+    if args.cmd == "retention-read":
+        return cmd_retention_read(cfg, args.csv, duration=args.duration,
+                                  transcript_file=args.transcript,
+                                  as_json=args.json)
+    if args.cmd == "channel-audit":
+        return cmd_channel_audit(cfg, args.titles_file,
+                                 hooks_file=args.hooks_file,
+                                 thumb_texts_file=args.thumb_texts_file,
+                                 dates_file=args.dates_file,
+                                 retention_csv=args.retention_csv,
+                                 duration=args.duration,
+                                 title=args.title,
+                                 description=args.description,
+                                 tags=args.tags,
+                                 as_json=args.json)
+    if args.cmd == "trend-scout":
+        return cmd_trend_scout(cfg, args.videos_file, top_n=args.top_n,
+                               as_json=args.json)
+    if args.cmd == "scene-shorts":
+        return cmd_scene_shorts(cfg, args.video, args.scenes_file,
+                                out_dir=args.out, phrases=args.phrases,
+                                full_hook=args.full_hook or "",
+                                as_json=args.json)
+    if args.cmd == "tiktok-check":
+        return cmd_tiktok_check(cfg, args.title, args.caption,
+                                hook=args.hook, moral=args.moral or "",
+                                story_file=args.story_file,
+                                queue_file=args.queue_file,
+                                needed=args.needed,
+                                trend_keywords=args.trend_keywords,
+                                as_json=args.json)
+    if args.cmd == "script-check":
+        return cmd_script_check(cfg, args.script, as_json=args.json,
+                                timed_phrases=args.timed_phrases,
+                                narration_audio=args.narration_audio,
+                                narration_wpm=args.narration_wpm,
+                                narration_duration=args.narration_duration)
+    if args.cmd == "topic-brief":
+        return cmd_topic_brief(cfg, theme=args.theme, input_file=args.input,
+                               candidates_file=args.candidates_file,
+                               queue_file=args.queue_file,
+                               as_json=args.json)
+    if args.cmd == "hook-title":
+        return cmd_hook_title(cfg, args.video, args.title, out=args.out,
+                              as_json=args.json, force=args.force)
+    if args.cmd == "reliability-report":
+        return cmd_reliability_report(cfg, args.runs_json,
+                                      window_days=args.window_days,
+                                      as_json=args.json)
+    if args.cmd == "failure-classify":
+        return cmd_failure_classify(cfg, text=args.text, file=args.file,
+                                    as_json=args.json)
+    if args.cmd == "incident-probe":
+        return cmd_incident_probe(cfg, args.context_json, mask=args.mask,
+                                  mapping_out=args.mapping_out,
+                                  as_json=args.json)
+    if args.cmd == "id-mask":
+        return cmd_id_mask(cfg, text=args.text, file=args.file,
+                           mapping_out=args.mapping_out,
+                           redact=args.redact, unmask=args.unmask,
+                           mapping_file=args.mapping, as_json=args.json)
+    if args.cmd == "runbook-check":
+        return cmd_runbook_check(cfg, runbook=args.runbook,
+                                 runbook_file=args.runbook_file,
+                                 root=args.root, as_json=args.json)
+    if args.cmd == "failure-drill":
+        return cmd_failure_drill(cfg, drill=args.drill,
+                                 all_drills=args.all,
+                                 workdir=args.workdir, keep=args.keep,
+                                 as_json=args.json)
+    if args.cmd == "keyword-analyze":
+        return cmd_keyword_analyze(cfg, keyword=args.keyword,
+                                   metrics_json=args.metrics_json,
+                                   keywords_json=args.keywords_json,
+                                   as_json=args.json)
+    if args.cmd == "content-optimize":
+        return cmd_content_optimize(cfg, title=args.title,
+                                    keyword=args.keyword,
+                                    body_file=args.body_file,
+                                    description=args.description,
+                                    phrases_json=args.phrases_json,
+                                    as_json=args.json)
+    if args.cmd == "keyword-generate":
+        return cmd_keyword_generate(cfg, seed=args.seed,
+                                    corpus_json=args.corpus_json,
+                                    limit=args.limit, as_json=args.json)
+    if args.cmd == "micro-niche":
+        return cmd_micro_niche(cfg, niches_json=args.niches_json,
+                               library_json=args.library_json,
+                               as_json=args.json)
+    if args.cmd == "page-analyze":
+        return cmd_page_analyze(cfg, page_json=args.page_json,
+                                as_json=args.json)
+    if args.cmd == "fresh-keywords":
+        return cmd_fresh_keywords(cfg, trends_json=args.trends_json,
+                                  days=args.days, today=args.today,
+                                  as_json=args.json)
+    if args.cmd == "topical-authority":
+        return cmd_topical_authority(cfg, library_json=args.library_json,
+                                     topics_json=args.topics_json,
+                                     as_json=args.json)
     if args.cmd == "version":
         return cmd_version()
     if args.cmd == "license":
@@ -5826,7 +8565,7 @@ def main():
         return cmd_youtube_reauth(cfg, args.client_secrets, args.token)
     if args.cmd == "long-video":
         try:
-            return cmd_long_video(cfg, args)
+            return cmd_long_video(cfg, args, lang=lang)
         except long_video.LongVideoError as e:
             print("فشل الفيديو الطويل: %s" % e)
             return 1
@@ -5874,13 +8613,17 @@ def main():
         try:
             cmd_long_narration(cfg, args.text, args.text_file,
                                args.out, args.gap, args.atempo,
-                               voice=args.voice or _default_voice(cfg))
+                               voice=args.voice or _default_voice(cfg),
+                               lang=eff_lang)
         except long_narration.LongNarrationError as e:
             print("فشل السرد الطويل: %s" % e)
             return 1
         except OSError as e:
             print("فشل قراءة ملف النص: %s" % e)
             return 1
+        except ValueError as e:
+            print(str(e))
+            return 2
         return 0
     if args.cmd == "quote-cards":
         try:
@@ -5958,6 +8701,20 @@ def main():
         return cmd_social_auth(cfg, "tiktok", token=args.token)
     if args.cmd == "instagram-auth":
         return cmd_social_auth(cfg, "instagram", token=args.token)
+    if args.cmd == "tiktok-bundle":
+        return cmd_tiktok_bundle(
+            cfg, args.video, args.title, caption=args.caption,
+            moral=args.moral, next_part=args.next_part,
+            next_part_time=args.next_part_time, ai_voice=args.ai_voice,
+            out_dir=args.out_dir, dry_run=args.dry_run)
+    if args.cmd == "tiktok-status":
+        return cmd_tiktok_status(cfg)
+    if args.cmd == "tiktok-long":
+        return cmd_tiktok_long(
+            cfg, args.video_a, args.video_b, args.title,
+            caption=args.caption, moral=args.moral, kind=args.kind,
+            out_dir=args.out_dir, max_seconds=args.max_seconds,
+            dry_run=args.dry_run, part_tags=args.part_tags)
     if args.cmd == "ab":
         if args.eval_set:
             return cmd_ab_eval_set(cfg, variants=args.variants,

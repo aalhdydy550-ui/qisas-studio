@@ -91,6 +91,11 @@ Vertical 720×1280 video ready to publish
   hook, story, moral, source, scenes, word-timed phrases, sha256 fingerprint.
 - A secret-leak guard (`lib/secret_guard.py`) scans the tree before any
   upload; secrets live in 600-permission files covered by `.gitignore`.
+- Caption readability (`lib/caption_readability.py`): every caption phrase
+  is measured in chars/sec against the ASS generated at render time
+  (short and long paths); phrases faster than 17 chars/sec are reported
+  with their text and speed in `check` and in the manifest — warning
+  only, never a publish failure.
 - Self-healing: the system reinstalls its own tools and service file after
   any machine restart, with no manual step.
 
@@ -130,6 +135,15 @@ python3 studio.py run --story anza --project anza-part1 \
 python3 studio.py publish --video ~/workspace/videos/demo-*.mp4 \
     --title "He sold his cow and shared the seeds | Short story" --dry-run
 ```
+
+TikTok is a third publish destination (account `@qisaswaebareg`). The studio
+builds an upload bundle — `python3 studio.py tiktok-bundle --video ... --title ...`
+(`metadata.json` + `caption.txt` + `steps.txt`) — and a browser task performs
+the upload from the steps; see `README-AR.md`. A CLI uploader (autotok) was
+evaluated 2026-11-26 and is NOT usable on this VM: its signing browser
+(Chromium) cannot reach the internet through the VM egress proxy, so the
+browser-task path stays primary. Full evaluation:
+`~/workspace/studio-work/tiktok-publish/AUTOTOK-EVAL-AR.md`.
 
 New here? Follow **[docs/getting-started.md](docs/getting-started.md)**
 (also in English: [docs/getting-started-en.md](docs/getting-started-en.md)) —
@@ -255,7 +269,7 @@ own install is exempt as licensor.
 ### Star gate (v0.1.48)
 
 Before the production commands (`run`, `produce`, `assemble`, `publish`,
-`batch`, `daily`, `long-video`, `client-run`) the studio checks once that
+`batch`, `daily`, `long-video`, `client-run`, `quick`) the studio checks once that
 you starred this repository on GitHub — via the public GitHub API, no
 token, and the positive result is cached locally (`~/.qisas-studio/star.json`)
 so it is asked only once. `doctor`, `license`, `--help`, and `--dry-run`
@@ -303,26 +317,80 @@ venv once: `python3 -m venv .venv-supertonic &&
 .venv-supertonic/bin/pip install supertonic` (the model downloads once
 to `~/.cache/supertonic3`).
 
+### One-command quick video (v0.1.53)
+
+`python3 studio.py quick "عنوان القصة"` — one command, no questions:
+the title becomes a short story in the studio's format (one-sentence
+shocking hook + moral + puzzling closing question) via the LLM chain,
+or a built-in template story with `--allow-fallback` when the LLM is
+unavailable; male Piper narrator; phrase-synced captions below the
+picture only; still images with light Ken Burns motion through
+`build_fast_draft` — no GPU wait. Generated motion is an explicit
+upgrade: re-run with `--motion clips` (or `--improve-motion`) when GPU
+quota is available; the fast draft prints «الفيديو السريع جاهز الآن؛
+الحركة المولّدة تحتاج حصة GPU ووقتًا — أعد التشغيل بـ`--motion clips`
+لاحقًا». No publishing by default — publish later with `publish`, or
+pass `--publish` explicitly. `quick` is a production command: it passes
+the star gate and the commercial-license gate like `run`.
+
+### English stories (v0.1.53)
+
+`--lang en` on `quick`, `run`, `script`, `long-video`,
+`long-narration`, and `karaoke-ass` switches the whole path to
+English: an original English story prompt (`lib/prompts/story_system_en.md`
+— five beats: hook → one moral choice → turn/recompense → one-line
+earned moral → closing question, with English names/places/currency),
+the male Piper voice `en_US-ryan-medium`, and a separate LTR caption
+track (`lib/latin_captions.py`, Noto Sans Bold, OFL — `Mr.`, `Dr.`,
+`$20,000`, `U.S.`, `don't` never split). Arabic stays the default
+everywhere; English is explicit opt-in only. **License restriction:
+`en_US-ryan-medium` is CC BY-NC-SA 4.0 — personal/experimental use
+only, never for paid client videos** (see `docs/voices.md`); a
+commercially licensed English voice (e.g. Kokoro) is a later wave.
+`tests/test_formula_guard.py` fails the suite if any change breaks the
+ready-made format (male narrator; captions below the picture only;
+hook + moral + closing question; no music in `assemble`; English
+explicit only).
+
 ### Real motion in long videos
 
-`long-video` now moves its scenes with real generated motion clips
-instead of Ken Burns: `--motion clips` (the default) takes motion clips
-from a manifest (`--motion-manifest manifest.json|csv`,
-`--motion-dir dir/` with the generated mp4s) — take `a` first, then the
-opening of take `b` (takes are independent, both from the same first
-frame); a missing `b` freezes the last frame of `a`. Any chapter without
-a clip falls back to a still image with no Ken Burns at all, with a clear
-warning in the log and run record. `--motion still` uses still images
-only; `--motion kenburns` keeps the old slow zoom/pan — explicit opt-in
-only, never the default. `--motion youtube-long` is like `clips` for
-resolved motion clips, but its still-image fallback cuts every 2.5s
-instead of 5s (the fast-cut rhythm measured in long YouTube story
-videos — see `~/workspace/flow-eval/youtube-motion/REPORT-AR.md`) and
-never uses Ken Burns. Since 0.1.46 the time left over after the motion
-clips in a chapter is also split into alternating stills at the mode's
-pace (2.5s in youtube-long, 5s in clips) instead of one long frozen
-image. The chapters file accepts `motion`,
-`motion_manifest`, `motion_dir`, and per-chapter `motion_clips`.
+`long-video` moves its scenes with still images and light Ken Burns
+by default since v0.1.53 (the fast path — no GPU wait): `--motion
+kenburns` is the default. `--motion clips` is now an explicit opt-in
+that takes real generated motion clips from a manifest
+(`--motion-manifest manifest.json|csv`, `--motion-dir dir/` with the
+generated mp4s) — take `a` first, then the opening of take `b` (takes
+are independent, both from the same first frame); a missing `b`
+freezes the last frame of `a`. Any chapter without a clip falls back
+to a still image with no Ken Burns at all, with a clear warning in the
+log and run record. `--motion still` uses still images only.
+`--motion youtube-long` is like `clips` for resolved motion clips,
+but its still-image fallback cuts every 2.5s instead of 5s (the
+fast-cut rhythm measured in long YouTube story videos — see
+`~/workspace/flow-eval/youtube-motion/REPORT-AR.md`) and never uses
+Ken Burns. Since 0.1.46 the time left over after the motion clips in
+a chapter is also split into alternating stills at the mode's pace
+(2.5s in youtube-long, 5s in clips) instead of one long frozen image.
+The chapters file accepts `motion`, `motion_manifest`, `motion_dir`,
+and per-chapter `motion_clips`.
+
+### Motion prompt expansion (v0.1.54)
+
+`python3 studio.py expand-motion-prompts --prompts prompts.json --out expanded.json`
+— an LLM the studio already owns expands each short motion prompt with
+camera, movement, lighting, and mood detail before it goes to Wan/LTX
+(the «Enhance my prompt» pattern, re-implemented locally from scratch —
+the TAAFT tool itself is never used). Explicit opt-in only; any failure
+(quota, network, empty or over-long reply, dropped keywords) falls back
+to the original prompt with an Arabic reason — never an error. The
+expanded prompt is capped at 600 characters, keeps the original's
+keywords (≥60%), and never changes the story. Quota is checked first
+via `lib/llm_state.py` (`can_call`) so a capped model is never called.
+See `docs/motion.md` for the «last-frame extension» rule: every motion
+clip starts from the previous clip's last frame (`resolve_next_first_frame`
+produces the seed; `check_first_frame_chain` audits a manifest) — note
+the real manifest does not apply the rule yet (59 warnings on chapters
+1–6), and fixing that needs a new Wan generation round, not a code change.
 
 ### Optional assets (v0.1.50; music removed in 0.1.51)
 
@@ -368,8 +436,14 @@ does not change the license: personal use stays free.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) — latest: **0.1.46 (2026-11-24)**:
-frozen-image gap fix — the time left over after motion clips in a
-chapter is split into alternating stills at the mode's pace (2.5s in
-youtube-long, 5s in clips) instead of one long frozen image. Full test
-suite **1903/1903**, `doctor` 28/28.
+See [CHANGELOG.md](CHANGELOG.md) — latest: **0.1.62 (2026-11-26)**:
+Fix round: `assemble --no-title` skips the hook-title burn on
+Concat videos (the manifest records no burned title, so a later
+`hook-title` is allowed); the hook guard's refusal now names the
+CLI flag `--force` instead of Python's `force=True`; and MLT text
+geometry is fixed for real — `halign` is ignored entirely by MLT
+7.22 and height alone never centers, so hook lines, captions and
+the default hook are now centered by PIL-measured geometry (hook
+box height 58 → 150, fixing the clipping). 17 new tests,
+including 5 rendered (pixel-measured) geometry tests. Full test
+suite **3406/3406**, `doctor` 28/28.

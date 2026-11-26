@@ -1,0 +1,83 @@
+# Copyright 2026 aalhdydy550-ui (https://github.com/aalhdydy550-ui)
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE.
+# Commercial use requires a separate licence — see LICENSE-COMMERCIAL-TEMPLATE.md.
+#
+# بروفايلات إعداد studio المسماة — طبقة «مشروع» في سلسلة الأولوية:
+#   افتراضي ← نظام ← مستخدم ← مشروع (هذا الملف) ← بروفايل ← تجاوزات CLI
+# تُقرأ بـ tomllib من المكتبة القياسية (lib/profiles.py).
+# ممنوع هنا إطلاقًا: أي سرّ أو مفتاح أو توكن — الأسرار عبر متغيرات
+# البيئة فقط، وأي مفتاح باسم سرّ يرفض lib/profiles.py الملف كله.
+#
+# الحقول (انظر docs/security-design.md للمواصفة الكاملة):
+#   sandbox   = "read-only" | "workspace-write" (الوصول الكامل مرفوض)
+#   approval  = "untrusted" | "on-request" | "never"
+#               (‏never مقصور على CI معزول — لا يُستخدم في الإنتاج)
+#   network   = "closed" | "publish-only"
+#   network_domains = نطاقات النشر المعلنة فقط (فارغة = بلا شبكة)
+#   effort    = "low" | "medium" | "high"
+#   allow_publish / allow_delete = سماح صريح (الافتراضي: لا)
+#   max_steps / timeout_seconds = حدود التشغيل الواحد
+#   [mcp.<server>] default_tools_approval_mode = "prompt" | "allow" | "deny"
+#   والأدوات المدمرة (destructive_tools) على prompt دائمًا مهما كان
+#   الوضع الافتراضي — يفرضها lib/profiles.py لا هذا الملف وحده.
+
+[settings]
+# قاعدة المشروع: مثل الافتراضي لكن بمهلة تشغيل أطول تناسب الريندر.
+timeout_seconds = 900
+
+[profiles.render]
+description = "ريندر آمن: كتابة داخل مساحة العمل فقط، وبلا نشر."
+sandbox = "workspace-write"
+approval = "on-request"
+network = "closed"
+effort = "medium"
+allow_publish = false
+allow_delete = false
+max_steps = 30
+network_domains = []
+
+[profiles.render.mcp.concat]
+default_tools_approval_mode = "prompt"
+destructive_tools = ["publish", "delete", "overwrite"]
+enabled_tools = []
+disabled_tools = []
+
+[profiles.publish]
+description = "نشر: مثل الريندر لكن يسمح بالنشر عبر نطاقات النشر المعلنة فقط."
+sandbox = "workspace-write"
+approval = "on-request"
+network = "publish-only"
+effort = "medium"
+allow_publish = true
+allow_delete = false
+max_steps = 30
+# نطاقات النشر المعلنة فقط — أي نطاق آخر مغلق (انظر security-design.md §3).
+network_domains = [
+  "graph.facebook.com",
+  "graph-video.facebook.com",
+  "www.googleapis.com",
+  "uploads.youtube.com",
+]
+
+[profiles.publish.mcp.concat]
+default_tools_approval_mode = "prompt"
+destructive_tools = ["publish", "delete", "overwrite"]
+enabled_tools = []
+disabled_tools = []
+
+[profiles.review]
+description = "مراجعة: قراءة فقط وجهد عالٍ — بلا كتابة وبلا نشر وبلا شبكة."
+sandbox = "read-only"
+approval = "untrusted"
+network = "closed"
+effort = "high"
+allow_publish = false
+allow_delete = false
+max_steps = 10
+network_domains = []
+
+[profiles.review.mcp.concat]
+default_tools_approval_mode = "prompt"
+destructive_tools = ["publish", "delete", "overwrite"]
+enabled_tools = []
+disabled_tools = []
