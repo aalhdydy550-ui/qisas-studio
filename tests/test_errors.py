@@ -316,5 +316,70 @@ class TestClipOutput(unittest.TestCase):
 
 
 
+class TestErrorCodes(unittest.TestCase):
+    """رموز الأخطاء الثابتة وروابط runbook — جولة تطبيق الأنماط (W5b)."""
+
+    def test_every_category_has_a_stable_code(self):
+        for category in errors.CATEGORIES:
+            code = errors.error_code(category)
+            self.assertRegex(
+                code, r"^STUDIO-[A-Z]+-\d{3}$",
+                "رمز غير صالح للفئة %s: %s" % (category, code))
+
+    def test_codes_are_unique(self):
+        codes = [errors.error_code(c) for c in errors.CATEGORIES]
+        self.assertEqual(len(codes), len(set(codes)),
+                         "رمزان مكرران: %r" % (codes,))
+
+    def test_every_category_has_a_runbook_link(self):
+        for category in errors.CATEGORIES:
+            link = errors.runbook_link(category)
+            self.assertTrue(
+                link.startswith("docs/ERRORS-RUNBOOK.md#studio-"),
+                "رابط runbook غير صالح للفئة %s: %s" % (category, link))
+            self.assertIn(errors.error_code(category).lower(),
+                          link)
+
+    def test_unknown_category_falls_back_to_unknown_code(self):
+        self.assertEqual(errors.error_code("nope"),
+                         "STUDIO-UNKNOWN-001")
+        self.assertEqual(errors.error_code(None), "STUDIO-UNKNOWN-001")
+
+    def test_explain_error_carries_code_and_runbook(self):
+        result = errors.explain_error("ffmpeg: command not found")
+        self.assertEqual(result["code"], "STUDIO-FFMPEG-001")
+        self.assertEqual(result["runbook"],
+                         "docs/ERRORS-RUNBOOK.md#studio-ffmpeg-001")
+
+    def test_explain_error_unknown_carries_unknown_code(self):
+        result = errors.explain_error(
+            "Something completely unexpected happened at 0xDEADBEEF")
+        self.assertEqual(result["code"], "STUDIO-UNKNOWN-001")
+        self.assertEqual(result["runbook"],
+                         "docs/ERRORS-RUNBOOK.md#studio-unknown-001")
+
+    def test_format_error_prints_code_and_runbook(self):
+        text = errors.format_error(
+            errors.explain_error("quotaExceeded"))
+        self.assertIn("STUDIO-YOUTUBE-002", text)
+        self.assertIn("docs/ERRORS-RUNBOOK.md#studio-youtube-002", text)
+
+    def test_runbook_has_a_section_for_every_code(self):
+        studio_dir = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(studio_dir, "docs", "ERRORS-RUNBOOK.md")
+        self.assertTrue(os.path.isfile(path), "ملف runbook غائب: %s" % path)
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        for category in errors.CATEGORIES:
+            code = errors.error_code(category)
+            # عنوان القسم يحمل الرمز حرفيًا (ومرساته المشتقة مطابقة
+            # لرابط runbook_link).
+            self.assertIn("## %s" % code, content,
+                          "لا قسم في runbook للرمز %s" % code)
+            anchor = errors.runbook_anchor(code)
+            self.assertEqual(anchor, "#" + code.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

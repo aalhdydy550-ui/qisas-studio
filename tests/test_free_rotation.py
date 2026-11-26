@@ -434,5 +434,95 @@ class TestFreeRotationChain(unittest.TestCase):
                           "gemini-3-flash-preview"))
 
 
+class TestRunAttemptsRetryPolicy(unittest.TestCase):
+    """جولة الأنماط W1: _run_attempts على سياسة retry_policy
+    الموحّدة — أخطاء منطقية بلا إعادة، و429 تُعاد، وRetry-After
+    طويل لا يُنام."""
+
+    def _providers(self):
+        return [{"kind": "omniroute", "model": "m1"},
+                {"kind": "gemini",
+                 "model": "gemini-3-flash-preview"}]
+
+    def test_auth_error_never_retried(self):
+        calls = []
+
+        def fake_cli(model, *args, **kwargs):
+            calls.append(model)
+            raise OmniRouteError("HTTP 401 Unauthorized")
+
+        with mock.patch.object(client_lib, "chat_cli",
+                               side_effect=fake_cli), \
+             mock.patch.object(client_lib, "chat_gemini",
+                               return_value="رد Gemini"):
+            text, via, model = client_lib.chat_chain(
+                "مرحبا", self._providers(), system="نظام",
+                retries=2, retry_delay=0)
+        # 401 لا تُعاد أبدًا رغم retries=2 — استدعاء واحد فقط.
+        self.assertEqual(calls, ["m1"])
+        self.assertEqual(text, "رد Gemini")
+
+    def test_403_error_never_retried(self):
+        calls = []
+
+        def fake_cli(model, *args, **kwargs):
+            calls.append(model)
+            raise OmniRouteError("HTTP 403 Forbidden")
+
+        with mock.patch.object(client_lib, "chat_cli",
+                               side_effect=fake_cli), \
+             mock.patch.object(client_lib, "chat_gemini",
+                               return_value="رد Gemini"):
+            client_lib.chat_chain("مرحبا", self._providers(),
+                                  system="نظام", retries=2,
+                                  retry_delay=0)
+        self.assertEqual(calls, ["m1"])
+
+    def test_429_retried_then_success(self):
+        calls = []
+
+        def fake_cli(model, *args, **kwargs):
+            calls.append(model)
+            if len(calls) == 1:
+                raise OmniRouteError("HTTP 429 Too Many Requests")
+            return "رد بعد 429"
+
+        with mock.patch.object(client_lib, "chat_cli",
+                               side_effect=fake_cli):
+            text, via, model = client_lib.chat_chain(
+                "مرحبا", self._providers(), system="نظام",
+                retries=1, retry_delay=0)
+        self.assertEqual(calls, ["m1", "m1"])
+        self.assertEqual(text, "رد بعد 429")
+
+    def test_long_retry_after_not_slept(self):
+        # Retry-After ‏300 ثانية: لا نوم داخل الكرون — يُسجَّل
+        # الفشل ويُنتقل للمزود التالي فورًا.
+        calls = []
+        sleeps = []
+
+        def fake_cli(model, *args, **kwargs):
+            calls.append(model)
+            err = OmniRouteError("HTTP 429")
+            err.retry_after = 300.0
+            raise err
+
+        def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        with mock.patch.object(client_lib, "chat_cli",
+                               side_effect=fake_cli), \
+             mock.patch.object(client_lib, "chat_gemini",
+                               return_value="رد Gemini"), \
+             mock.patch.object(client_lib.time, "sleep",
+                               side_effect=fake_sleep):
+            text, via, model = client_lib.chat_chain(
+                "مرحبا", self._providers(), system="نظام",
+                retries=2, retry_delay=5)
+        self.assertEqual(calls, ["m1"])
+        self.assertEqual(sleeps, [])
+        self.assertEqual(text, "رد Gemini")
+
+
 if __name__ == "__main__":
     unittest.main()

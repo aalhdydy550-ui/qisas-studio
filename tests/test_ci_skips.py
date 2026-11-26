@@ -162,6 +162,12 @@ class TestCiSkips(unittest.TestCase):
         self._assert_skipped(
             "tests.test_i18n.TestCmdWiring.test_status_arabic_default")
 
+    def test_live_smoke_skips_without_flag_or_keys(self):
+        """انحدار جولة الأنماط (W3): اختبار الدخان الحي يتخطى
+        نظيفًا في CI — بلا STUDIO_LIVE_SMOKE=1 وبلا مفاتيح،
+        بلا FAIL/ERROR وبلا أي مكالمة شبكية."""
+        self._assert_skipped("tests.test_api_smoke_live")
+
 
 class TestCiWorkflow(unittest.TestCase):
     def test_ci_installs_ffmpeg(self):
@@ -186,6 +192,21 @@ class TestCiWorkflow(unittest.TestCase):
         self.assertIn("actions/setup-python@v6", content)
         self.assertNotIn("actions/checkout@v4", content)
         self.assertNotIn("actions/setup-python@v5", content)
+
+    def test_ci_generates_and_uploads_smoke_report(self):
+        """انحدار جولة الأنماط (W3): سير العمل يولّد تقرير
+        دخان APIs بعد Run tests ويرفعه أرتيفكت — بخطوتي
+        `if: always()` حتى عند فشل الاختبارات، والتوليد
+        لا يُسقط التشغيل أبدًا."""
+        path = os.path.join(STUDIO_DIR, ".github", "workflows",
+                            "ci.yml")
+        with open(path, encoding="utf-8") as fh:
+            content = fh.read()
+        self.assertIn("lib.smoke_report", content)
+        self.assertIn("actions/upload-artifact@v4", content)
+        self.assertIn("smoke-report.html", content)
+        self.assertIn("smoke-report-junit.xml", content)
+        self.assertIn("if: always()", content)
 
     def test_setup_scripts_live_in_repo_and_parse(self):
         """انحدار جولة v0.1.41: سكربتا الإعداد داخل شجرة

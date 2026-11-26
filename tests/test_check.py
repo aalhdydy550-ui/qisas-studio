@@ -22,6 +22,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib import check as check_lib
+from lib import caption_check
 
 GOLD_BOX = "drawbox=x=600:y=20:w=100:h=100:color=0xE0AF5C:t=fill"
 DRAWTEXT_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -536,6 +537,91 @@ class TestQaSafeAreaVideo(unittest.TestCase):
         c = _check_by_name(result, check_lib.QA_NAME)
         self.assertFalse(c["ok"], c)
         self.assertIn("علوية", c["detail"])
+
+
+class TestResultTemplate(unittest.TestCase):
+    """قالب «معرّف + خطورة + رسالة إصلاح» (جولة الأنماط W8).
+
+    بلا ffmpeg: يختبر التغليف مباشرة عبر _check_result
+    وformat_report وcheck_caption — لا منطق QA هنا.
+    """
+
+    EXPECTED_CHECK_NAMES = (
+        "المدة", "الصمت عند الفواصل", "الصوت", "المقاس",
+        "شعار الصفحة", check_lib.QA_NAME)
+
+    def test_all_six_checks_have_unique_ids(self):
+        self.assertEqual(set(check_lib._CHECK_META),
+                         set(self.EXPECTED_CHECK_NAMES))
+        ids = [meta[0] for meta in check_lib._CHECK_META.values()]
+        self.assertEqual(len(ids), len(set(ids)))
+        for fid in ids:
+            self.assertTrue(fid.startswith("CHK-"), fid)
+
+    def test_check_result_failed_is_high_with_fix(self):
+        for name in self.EXPECTED_CHECK_NAMES:
+            res = check_lib._check_result(name, False, "تفصيل")
+            self.assertEqual(res["name"], name)
+            self.assertFalse(res["ok"])
+            self.assertEqual(res["detail"], "تفصيل")
+            self.assertTrue(res["id"].startswith("CHK-"), res)
+            self.assertEqual(res["severity"], "high")
+            self.assertTrue(res["fix"], res)
+
+    def test_check_result_passed_is_info(self):
+        for name in self.EXPECTED_CHECK_NAMES:
+            res = check_lib._check_result(name, True, "تفصيل")
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["severity"], "info")
+            self.assertTrue(res["fix"], res)
+
+    def test_format_report_shows_fix_for_failures_only(self):
+        failed = check_lib._check_result("المقاس", False,
+                                         "المقاس 640x360")
+        passed = check_lib._check_result("الصوت", True, "سليم")
+        result = {"path": "/tmp/v.mp4", "long": False, "duration": 45.0,
+                  "width": 640, "height": 360,
+                  "checks": [failed, passed], "passed": False}
+        text = check_lib.format_report(result)
+        self.assertIn("[FAIL] المقاس", text)
+        self.assertIn("الإصلاح:", text)
+        self.assertIn("720×1280", text)
+        self.assertIn("[PASS] الصوت", text)
+        # سطر الإصلاح يظهر مرة واحدة — للفاشل فقط.
+        self.assertEqual(text.count("الإصلاح:"), 1)
+
+    def test_caption_issue_carries_template(self):
+        gate = ("عنوان القصة\nلو عايز الجزء الثاني اعمل متابعة "
+                "واكتب في التعليقات: الجزء الثاني")
+        res = caption_check.check_caption(gate)
+        self.assertFalse(res["ok"])
+        issue = res["issues"][0]
+        self.assertEqual(issue["category"], "next_part")
+        self.assertEqual(issue["id"], "CAP-NEXT-001")
+        self.assertEqual(issue["severity"], "high")
+        self.assertIn("الدعوة اللطيفة", issue["fix"])
+        # الحقول القديمة باقية دون تغيير.
+        self.assertIn("sentence", issue)
+        self.assertIn("reason", issue)
+        self.assertIn("in_hook", issue)
+        self.assertFalse(issue["in_hook"])
+
+    def test_caption_issue_in_hook_fix_is_rewrite(self):
+        gate = ("لو عايز الجزء الثاني اعمل متابعة واكتب في "
+                "التعليقات: الجزء الثاني")
+        res = caption_check.check_caption(gate)
+        issue = res["issues"][0]
+        self.assertTrue(issue["in_hook"])
+        self.assertIn("أعد كتابة الكابشن كاملًا", issue["fix"])
+
+    def test_caption_story_issue_template(self):
+        res = caption_check.check_caption(
+            "عنوان القصة\nابعت قصتك في التعليقات عشان نحكيها")
+        issue = res["issues"][0]
+        self.assertEqual(issue["category"], "story")
+        self.assertEqual(issue["id"], "CAP-STORY-001")
+        self.assertEqual(issue["severity"], "high")
+        self.assertIn("رسائل الصفحة", issue["fix"])
 
 
 if __name__ == "__main__":

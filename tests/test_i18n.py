@@ -262,6 +262,30 @@ class TestPiperVoices(unittest.TestCase):
         name_ar, _ = i18n.resolve_voice_model({}, "ar")
         self.assertEqual(name_ar, "ar_JO-kareem-medium")
 
+    def test_english_voice_license_is_noncommercial(self):
+        # بطاقة en_US-ryan-medium: CC BY-NC-SA 4.0 — غير تجاري.
+        self.assertEqual(i18n.PIPER_VOICES["en"]["license"],
+                         "CC BY-NC-SA 4.0")
+        self.assertEqual(i18n.voice_license("en"), "CC BY-NC-SA 4.0")
+        self.assertIs(i18n.voice_commercial_use("en"), False)
+        self.assertEqual(i18n.PIPER_VOICES["en"]["dataset"],
+                         "Ryan Speech")
+
+    def test_arabic_voice_license_unverified(self):
+        # بطاقة kareem تحيل إلى المصدر بلا ترخيص مستقل — لا
+        # تُختلق قيمة: None تعني «غير موثَّق بعد».
+        self.assertIsNone(i18n.voice_license("ar"))
+        self.assertIsNone(i18n.voice_commercial_use("ar"))
+        self.assertIsNone(i18n.voice_license("xx"))
+
+    def test_resolve_voice_model_unknown_lang_falls_back_to_arabic(self):
+        name, path = i18n.resolve_voice_model(None, "xx")
+        self.assertEqual(name, "ar_JO-kareem-medium")
+        self.assertTrue(path.endswith("ar_JO-kareem-medium.onnx"))
+        name_en, path_en = i18n.resolve_voice_model(None, "en")
+        self.assertEqual(name_en, "en_US-ryan-medium")
+        self.assertTrue(path_en.endswith("en_US-ryan-medium.onnx"))
+
 
 class TestEnglishTemplates(unittest.TestCase):
     def test_same_three_template_names_both_languages(self):

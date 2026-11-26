@@ -13,6 +13,8 @@ import shutil
 import sys
 import tempfile
 import unittest
+import wave
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -40,6 +42,53 @@ class TestSplitSentences(unittest.TestCase):
         self.assertEqual(long_narration.split_sentences(""), [])
         self.assertEqual(long_narration.split_sentences("   "), [])
 
+    def test_english_punctuation(self):
+        text = ("He found a wallet. He returned it! "
+                "Did anyone believe him? Yes, they did.")
+        got = long_narration.split_sentences(text)
+        self.assertEqual(len(got), 4)
+        self.assertTrue(got[0].endswith("."))
+        self.assertTrue(got[1].endswith("!"))
+        self.assertTrue(got[2].endswith("?"))
+
+    def test_english_abbreviations_do_not_split(self):
+        text = "Mr. Smith met Dr. Jones yesterday. He stayed home."
+        got = long_narration.split_sentences(text)
+        self.assertEqual(len(got), 2)
+        self.assertTrue(got[0].endswith("yesterday."))
+        self.assertIn("Mr. Smith", got[0])
+        self.assertIn("Dr. Jones", got[0])
+
+    def test_english_abbrev_eg_ie(self):
+        text = ("He likes fruits, e.g. apples, and vegetables, "
+                "i.e. carrots. He eats well.")
+        got = long_narration.split_sentences(text)
+        self.assertEqual(len(got), 2)
+
+    def test_english_acronym_mid_sentence(self):
+        text = "He lives in the U.S. now. He works there."
+        got = long_narration.split_sentences(text)
+        self.assertEqual(len(got), 2)
+        self.assertTrue(got[0].endswith("now."))
+
+    def test_english_quote_after_period(self):
+        text = 'He whispered "Stop." Then he left.'
+        got = long_narration.split_sentences(text)
+        self.assertEqual(len(got), 2)
+        self.assertTrue(got[0].endswith('."'))
+
+    def test_english_numbers_not_split(self):
+        text = "He won $20,000. He kept 3.5 dollars."
+        got = long_narration.split_sentences(text)
+        self.assertEqual(len(got), 2)
+        self.assertIn("$20,000", got[0])
+        self.assertIn("3.5", got[1])
+
+    def test_english_ellipsis(self):
+        got = long_narration.split_sentences("Wait... Then he left.")
+        self.assertEqual(len(got), 2)
+        self.assertTrue(got[0].endswith("..."))
+
 
 class TestSplitChunks(unittest.TestCase):
     def test_short_text_is_one_chunk(self):
@@ -63,6 +112,26 @@ class TestSplitChunks(unittest.TestCase):
         text = "أول جملة قصيرة. ثاني جملة أطول قليلًا من الأولى. ثالثة."
         got = long_narration.split_chunks(text)
         self.assertEqual(" ".join(got).split(), text.split())
+
+    def test_long_english_sentence_splits_at_commas(self):
+        long_s = ", ".join(["word"] * 80) + "."
+        got = long_narration.split_chunks(long_s, max_chars=100)
+        self.assertGreater(len(got), 1)
+        for c in got:
+            self.assertLessEqual(len(c), 100)
+
+    def test_english_chunks_keep_all_words(self):
+        text = ("A poor man found a wallet. He returned it to its "
+                "owner. Everyone was surprised.")
+        got = long_narration.split_chunks(text)
+        self.assertEqual(" ".join(got).split(), text.split())
+
+    def test_english_decimal_survives_chunking(self):
+        text = "He won $20,000 in one night. He kept it."
+        got = long_narration.split_chunks(text, max_chars=30)
+        self.assertIn("$20,000", " ".join(got))
+        for c in got:
+            self.assertLessEqual(len(c), 30)
 
 
 class TestSynthesizeLong(unittest.TestCase):
@@ -109,6 +178,127 @@ class TestSynthesizeLong(unittest.TestCase):
         with self.assertRaises(long_narration.LongNarrationError):
             long_narration.synthesize_long(
                 "نص قصير.", "/tmp/nope.wav", atempo=3.0)
+
+
+def _fake_synthesize_chunk(record, chunk_seconds=0.5):
+    """بديل synthesize_chunk: يسجّل الموديل واللغة ويكتب WAV
+    صامتًا صالحًا — بلا Piper حي وبلا ffmpeg."""
+    def _fake(text, out_wav, piper_bin=None, model=None, timeout=120,
+              voice="piper", lang="ar"):
+        record.append({"text": text, "model": model, "voice": voice,
+                       "lang": lang})
+        with wave.open(out_wav, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(22050)
+            w.writeframes(b"\x00\x00" * int(22050 * chunk_seconds))
+        return out_wav
+    return _fake
+
+
+def _fake_concat(wav_paths, out_wav, gap=0.35):
+    """بديل concatenate_with_gaps: ينسخ أول مقطع ويرجع مدة ثابتة."""
+    shutil.copy2(wav_paths[0], out_wav)
+    return 1.0
+
+
+class TestSynthesizeLongLang(unittest.TestCase):
+    """اختيار الموديل من lang — بلا توليد صوتي ثقيل."""
+
+    def _run_mocked(self, text, **kwargs):
+        record = []
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "out.wav")
+            with mock.patch.object(
+                    long_narration, "synthesize_chunk",
+                    _fake_synthesize_chunk(record)), \
+                mock.patch.object(
+                    long_narration, "concatenate_with_gaps",
+                    _fake_concat), \
+                mock.patch.object(
+                    long_narration, "probe_duration",
+                    lambda p: 0.5):
+                result = long_narration.synthesize_long(
+                    text, out, **kwargs)
+            return record, result
+
+    def test_lang_en_selects_ryan_model(self):
+        record, result = self._run_mocked(
+            "Hello world. This is a test.", lang="en")
+        self.assertEqual(len(record), 2)
+        for call in record:
+            self.assertTrue(
+                call["model"].endswith("en_US-ryan-medium.onnx"),
+                call["model"])
+            self.assertEqual(call["lang"], "en")
+        self.assertEqual(len(result["chunks"]), 2)
+
+    def test_default_is_arabic_kareem(self):
+        record, _ = self._run_mocked("قصة قصيرة. جملة ثانية.")
+        self.assertEqual(len(record), 2)
+        for call in record:
+            self.assertTrue(
+                call["model"].endswith("ar_JO-kareem-medium.onnx"),
+                call["model"])
+            self.assertEqual(call["lang"], "ar")
+
+    def test_unknown_lang_falls_back_to_arabic(self):
+        record, _ = self._run_mocked("Hello world.", lang="xx")
+        self.assertEqual(len(record), 1)
+        self.assertTrue(
+            record[0]["model"].endswith("ar_JO-kareem-medium.onnx"),
+            record[0]["model"])
+
+    def test_explicit_model_overrides_lang(self):
+        record, _ = self._run_mocked(
+            "Hello world.", lang="en", model="/tmp/custom-voice.onnx")
+        self.assertEqual(record[0]["model"], "/tmp/custom-voice.onnx")
+
+    def test_synthesize_chunk_resolves_model_from_lang(self):
+        # حسم الموديل على مستوى المقطع: اعترض subprocess.run
+        # وسجّل أمر Piper — بلا تشغيل Piper حيًا.
+        calls = []
+
+        def _fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            out = cmd[cmd.index("--output_file") + 1]
+            with wave.open(out, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(22050)
+                w.writeframes(b"\x00\x00" * 100)
+            proc = mock.Mock()
+            proc.returncode = 0
+            proc.stderr = ""
+            proc.stdout = ""
+            return proc
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "c.wav")
+            with mock.patch.object(long_narration.subprocess, "run",
+                                   _fake_run):
+                got = long_narration.synthesize_chunk(
+                    "Hello world.", out, piper_bin=sys.executable,
+                    lang="en")
+            self.assertEqual(got, out)
+            self.assertEqual(len(calls), 1)
+            model_arg = calls[0][calls[0].index("--model") + 1]
+            self.assertTrue(
+                model_arg.endswith("en_US-ryan-medium.onnx"), model_arg)
+
+    @unittest.skipUnless(
+        _PIPER_OK and os.path.isfile(os.path.expanduser(
+            "~/workspace/tts-models/en_US-ryan-medium.onnx")),
+        "Piper أو موديل ryan الإنجليزي غائب")
+    def test_live_english_sentence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "en.wav")
+            result = long_narration.synthesize_long(
+                "Hello, this is a test of the English narrator.",
+                out, gap=0.0, lang="en")
+            self.assertTrue(os.path.isfile(out))
+            self.assertEqual(len(result["chunks"]), 1)
+            self.assertGreater(result["duration"], 0)
 
 
 if __name__ == "__main__":
