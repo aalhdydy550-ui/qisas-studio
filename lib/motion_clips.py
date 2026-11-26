@@ -353,6 +353,118 @@ def extract_last_frame(video_path, out_path):
     return out_path
 
 
+def resolve_next_first_frame(prev_clip_id, manifest, motion_dir,
+                             out_path=None, duration_needed=None):
+    """استخرج الإطار الذي يبدأ منه المقطع التالي: آخر إطار يُعرض من
+    المقطع السابق (قاعدة التمديد بالإطار الأخير).
+
+    يخطط المقطع السابق عبر plan_clip_segments ثم يستخرج آخر إطار
+    من آخر مقطع فيه (التوليد b إن عُرض، وإلا a؛ ومقطع freeze
+    مصدره a أصلًا) — فهذا الإطار هو first_frame الذي يجب أن يبدأ
+    منه توليد المقطع التالي: يُمرَّر كمدخل image-to-video لتوليد
+    Wan خارج هذه الشجرة، ثم يُسجَّل في المانيفست. هذه الدالة
+    تنتج البذرة فقط — لا تولّد المقاطع ولا تغيّر التخطيط القائم.
+
+    duration_needed: مدة المقطع السابق؛ الافتراضي مدته المسجلة
+    في المانيفست (duration_needed_s) أو مدة التوليد.
+    out_path الافتراضي: <motion_dir>/<prev_clip_id>-last-frame.jpg.
+    يرجع مسار الصورة المستخرجة. يرفع MotionError إن غاب المقطع
+    أو ملف توليده الأول أو فشل الاستخراج.
+    """
+    clips = (manifest or {}).get("clips") or {}
+    if prev_clip_id not in clips:
+        raise MotionError(
+            "المقطع %s غير موجود في مانيفست الحركة" % prev_clip_id)
+    need = duration_needed
+    if need is None:
+        need = clips[prev_clip_id].get("duration_needed_s")
+    if need is None:
+        need = (manifest or {}).get("generation_seconds") \
+            or DEFAULT_GENERATION_SECONDS
+    planned = plan_clip_segments(prev_clip_id, need, manifest,
+                                 motion_dir)
+    segments = planned.get("segments") or []
+    if not segments:
+        raise MotionError(
+            "المقطع %s بلا مقاطع مخططة" % prev_clip_id)
+    src = segments[-1].get("src")
+    if not src:
+        raise MotionError(
+            "المقطع %s بلا مصدر لآخر مقطع" % prev_clip_id)
+    if out_path is None:
+        out_path = os.path.join(
+            motion_dir, "%s-last-frame.jpg" % prev_clip_id)
+    return extract_last_frame(src, out_path)
+
+
+def check_first_frame_chain(manifest, clip_ids):
+    """افحص سلسلة first_frame لمقاطع تُعرض متتابعة (ترتيب clip_ids
+    هو ترتيب العرض) مقابل قاعدة التمديد بالإطار الأخير.
+
+    القاعدة تقتضي أن يبدأ كل مقطع من آخر إطار للمقطع السابق —
+    وفي المانيفست يعني ذلك:
+    - كل توليد يصرّح بـ first_frame غير فارغ (وإلا فالسلسلة
+      غير موثقة)؛
+    - توليدا المقطع الواحد (a/b) يتشاركان first_frame نفسه
+      (يبدآن من الإطار الأول نفسه — القفزة الموثقة)؛
+    - مقطعان متتابعان لا يتشاركان first_frame نفسه (وإلا فالتالي
+      يعيد البدء من نفس الصورة الثابتة بدل آخر إطار لسابقه).
+
+    يرجع قائمة تحذيرات (عربية) — فارغة إن كانت السلسلة نظيفة.
+    فحص بيانات فقط: لا يقرأ ملفات ولا يرفع استثناءً؛ والمقطع
+    غير الموجود في المانيفست تحذير. لا يغيّر سلوك التخطيط —
+    أداة تدقيق لجولة التوليد، لا فحص يُفرض عند العرض (انظر
+    docs/motion.md).
+    """
+    warnings = []
+    clips = (manifest or {}).get("clips") or {}
+    generations = (manifest or {}).get("generations") or {}
+    prev_clip_id = None
+    prev_first = None
+    for clip_id in (clip_ids or []):
+        clip_id = str(clip_id)
+        info = clips.get(clip_id)
+        if info is None:
+            warnings.append(
+                "المقطع %s غير موجود في المانيفست — لا يمكن فحص "
+                "سلسلة first_frame له" % clip_id)
+            prev_clip_id = None
+            prev_first = None
+            continue
+        firsts = []
+        for gen_id in (info.get("generations") or []):
+            gen = generations.get(gen_id) or {}
+            first = (gen.get("first_frame") or "").strip() \
+                if isinstance(gen, dict) else ""
+            firsts.append(first)
+        if not firsts:
+            warnings.append(
+                "المقطع %s بلا توليدات في المانيفست" % clip_id)
+            prev_clip_id = None
+            prev_first = None
+            continue
+        if any(not f for f in firsts):
+            warnings.append(
+                "المقطع %s: توليد بلا first_frame مصرّح — سلسلة "
+                "التمديد بالإطار الأخير غير موثقة له" % clip_id)
+        distinct = sorted({f for f in firsts if f})
+        if len(distinct) > 1:
+            warnings.append(
+                "المقطع %s: توليداته تبدأ من إطارات أولى مختلفة "
+                "(%s) — يجب أن تتشارك first_frame نفسه"
+                % (clip_id, "، ".join(distinct)))
+        current = distinct[0] if len(distinct) == 1 else None
+        if (current is not None and prev_first is not None
+                and current == prev_first):
+            warnings.append(
+                "المقطع %s يبدأ من نفس الإطار الأول للمقطع السابق "
+                "%s (%s) — لم يُطبَّق التمديد بالإطار الأخير"
+                % (clip_id, prev_clip_id, current))
+        prev_clip_id = clip_id
+        prev_first = current
+    return warnings
+
+
 def _still_segments(images, duration, clip_seconds=IMAGE_CLIP_SECONDS):
     """وزّع صور الفصل على المدة (clip_seconds للصورة، الأخيرة تُمدَّد).
 

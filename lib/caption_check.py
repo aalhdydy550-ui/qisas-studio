@@ -19,6 +19,34 @@
 """
 import re
 
+# قالب نتائج الفحص (جولة الأنماط W8 — نمط semsec §4(3)):
+# كل مشكلة تحمل معرّفًا ثابتًا وخطورة ورسالة إصلاح.
+# الفئة ← (المعرّف، الخطورة)؛ ورسالة الإصلاح تعتمد على
+# موضع الجملة: في الهوك (أول سطر) لا إصلاح تلقائي — إعادة
+# كتابة كاملة؛ وخارجه يُستبدل بالبديل المعتمد.
+_CAPTION_ISSUE_META = {
+    "next_part": ("CAP-NEXT-001", "high"),
+    "story": ("CAP-STORY-001", "high"),
+}
+
+_FIX_IN_HOOK = ("الجملة المحظورة في الهوك (أول سطر) — أعد كتابة "
+                "الكابشن كاملًا؛ لا إصلاح تلقائي للهوك.")
+_FIX_NEXT_PART = ("استبدل الجملة بالدعوة اللطيفة المعتمدة: «الجزء "
+                  "الثاني بكرة 7 مساءً — اعمل متابعة عشان يوصلك "
+                  "أول ما ينزل» (أو بوقت الجزء المعلن).")
+_FIX_STORY = ("استبدل الجملة بسطر طلب القصة المعتمد: «عندك قصة "
+              "حصلتلك؟ ابعتها في رسائل الصفحة وهنحكيها باسمك أو "
+              "بدون اسم.»")
+
+
+def _issue_fix(category, in_hook):
+    """رسالة إصلاح مشكلة كابشن حسب فئتها وموضعها."""
+    if in_hook:
+        return _FIX_IN_HOOK
+    if category == "story":
+        return _FIX_STORY
+    return _FIX_NEXT_PART
+
 APPROVED_STORY_LINE = ("عندك قصة حصلتلك؟ ابعتها في رسائل الصفحة "
                        "وهنحكيها باسمك أو بدون اسم.")
 DEFAULT_NEXT_PART_TIME = "بكرة 7 مساءً"
@@ -100,8 +128,11 @@ def sentence_issue(sentence):
 def find_issues(caption):
     """كل الجمل المحظورة في الكابشن مع سبب كل منها.
 
-    يرجع قائمة {"sentence", "reason", "category", "in_hook"} —
-    in_hook صحيحة إن كانت الجملة في أول سطر غير فارغ (الهوك).
+    يرجع قائمة {"sentence", "reason", "category", "in_hook",
+    "id", "severity", "fix"} — in_hook صحيحة إن كانت الجملة
+    في أول سطر غير فارغ (الهوك)؛ و"id" معرّف ثابت للفئة،
+    و"severity" خطورتها، و"fix" رسالة إصلاح تقول ما الخطأ
+    وكيف يُصلَح (الحقول الأربعة الأولى دون تغيير).
     """
     lines = [ln for ln in (caption or "").splitlines() if ln.strip()]
     hook_line = lines[0] if lines else ""
@@ -111,10 +142,15 @@ def find_issues(caption):
             found = sentence_issue(sentence)
             if found:
                 category, reason = found
+                in_hook = line.strip() == hook_line.strip()
+                fid, severity = _CAPTION_ISSUE_META[category]
                 issues.append({"sentence": sentence,
                                "reason": reason,
                                "category": category,
-                               "in_hook": line.strip() == hook_line.strip()})
+                               "in_hook": in_hook,
+                               "id": fid,
+                               "severity": severity,
+                               "fix": _issue_fix(category, in_hook)})
     return issues
 
 

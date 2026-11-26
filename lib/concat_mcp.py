@@ -63,7 +63,10 @@ class ConcatError(Exception):
     pass
 
 
-# الأدوات الـ12 التي يستدعيها assemble() فعليًا، بترتيب الاستدعاء.
+# الأدوات الـ12 التي يستدعيها assemble() فعليًا، بترتيب الاستدعاء —
+# وtitle_add + clip_update (حركة العنوان) يُتخطَّيان حين title=None
+# (خيار بلا عنوان، جولة v0.1.62: العنوان هو الهوك نفسه فيُحرق
+# لاحقًا بـhook-title بدل تضاعفه هنا).
 EXPECTED_TOOLS = [
     "project_create", "timeline_read", "media_import",
     "clips_add_sequence", "track_add", "clip_add", "title_add",
@@ -235,8 +238,14 @@ TITLE_MOTION = {
 
 
 def assemble(concat_bin, projects_root, project_name, assets_dir, manifest,
-             title, out_path, video, log_path):
-    """يبني مشروع Concat ويصدّره. يرجع مسار ملف الفيديو عند النجاح."""
+             title=None, out_path=None, video=None, log_path=None):
+    """يبني مشروع Concat ويصدّره. يرجع مسار ملف الفيديو عند النجاح.
+
+    title=None (جولة v0.1.62): لا يُحرق أي عنوان ولا تُطبَّق حركة
+    العنوان — للقصص التي عنوانها هو الهوك نفسه، فيُحرق لاحقًا مرة
+    واحدة بـhook-title بدل تضاعفه. بعنوان معطًى السلوك كما قبل
+    تمامًا (title_add مرة واحدة ثم حركة العنوان).
+    """
     _ensure_mcp()
     return anyio.run(_assemble_async, concat_bin, projects_root,
                      project_name, assets_dir, manifest, title, out_path,
@@ -310,21 +319,22 @@ async def _assemble_async(concat_bin, projects_root, project_name, assets_dir,
                                       "trackId": audio_track, "start": 0})
         m.result(r, "clip_add")
 
-        style = dict(TITLE_STYLE)
-        r = await m.call("title_add", {
-            "path": proj_dir, "start": 0, "duration": 4,
-            # قاعدة دائمة 2026-11-22: العنوان أسفل الشاشة فوق
-            # الكابشنات (HOOK_OFFSET_Y) — لا نص أعلى أبدًا.
-            # "above" طبقات لا موضع: الكلمة فوق الفيديو لا تحته.
-            "above": True, "offsetY": HOOK_OFFSET_Y,
-            "style": dict(style, content=title)})
-        title_clip = m.result(r, "title_add").get("createdId")
-        # حركة العنوان المُتحقق منها (TITLE_MOTION) — دخول وخروج ونبض.
-        if title_clip:
-            r = await m.call("clip_update", {
-                "path": proj_dir, "clipId": title_clip,
-                "patch": {"motion": TITLE_MOTION}})
-            m.result(r, "clip_update")
+        if title is not None:
+            style = dict(TITLE_STYLE)
+            r = await m.call("title_add", {
+                "path": proj_dir, "start": 0, "duration": 4,
+                # قاعدة دائمة 2026-11-22: العنوان أسفل الشاشة فوق
+                # الكابشنات (HOOK_OFFSET_Y) — لا نص أعلى أبدًا.
+                # "above" طبقات لا موضع: الكلمة فوق الفيديو لا تحته.
+                "above": True, "offsetY": HOOK_OFFSET_Y,
+                "style": dict(style, content=title)})
+            title_clip = m.result(r, "title_add").get("createdId")
+            # حركة العنوان المُتحقق منها (TITLE_MOTION) — دخول وخروج ونبض.
+            if title_clip:
+                r = await m.call("clip_update", {
+                    "path": proj_dir, "clipId": title_clip,
+                    "patch": {"motion": TITLE_MOTION}})
+                m.result(r, "clip_update")
 
         caps = [{"start": p["start"], "end": p["end"], "text": p["text"]}
                 for p in phrases]

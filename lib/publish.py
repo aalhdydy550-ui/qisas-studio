@@ -208,6 +208,14 @@ def post_facebook(page_id, video, caption, schedule=None):
     يرجع {"post_id": ..., "state": ..., "scheduled_post_id": ...}.
     يرفع PublishError عند أي فشل أو حالة غير منشورة/مجدولة.
     """
+    # فحص مبكر لتوكن فيسبوك (جولة الأنماط W1): تحذير فقط —
+    # الفشل هنا لا يمنع محاولة النشر نفسها، فيُبلَّغ عنها
+    # بخطئها الخاص إن حدثت.
+    try:
+        from lib import social_publish as _social_publish
+        _social_publish.facebook_token_preflight()
+    except Exception as _pre_e:
+        print("تحذير: فحص توكن فيسبوك المبكر فشل (%s)" % _pre_e)
     argv = facebook_argv(page_id, video, caption, schedule)
     proc = _run(argv, "النشر على فيسبوك")
     out = (proc.stdout or "").strip()

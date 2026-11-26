@@ -45,6 +45,56 @@ CAPTION_FONTSIZE = 44
 # الصورة بلا loader لـJPEG/PNG أصلًا (اتحقق 2026-11-21).
 IMAGE_SERVICE = "qimage"
 
+# هندسة التوسيط (جولة v0.1.62 — عيبا MLT من إنتاج v2 الحي):
+# مرشح dynamictext في MLT 7.22 يتجاهل halign تمامًا (اتحقق
+# بالريندر: halign ‏0/1/2 تعطي الإخراج نفسه بايتيًا — نص
+# ملتصق بالحافة اليسرى x≈26 — عربيًا وإنجليزيًا)، ويتجاهل
+# valign كذلك (صندوقا ارتفاع 150 و170 يعطيان إخراجًا متماثلًا
+# بايتيًا؛ والنص مثبَّت أعلى الصندوق بإزاحة ثابتة). والتوسيط
+# الوحيد الذي يعمل هو التوسيط بالهندسة: قياس عرض النص المرئي
+# بـPIL بالخط نفسه الذي يستخدمه المرشح ثم وضع الصندوق
+# متمركزًا حوله. وصندوق ارتفاعه = حجم الخط يقصّ النص
+# (58 يقصّ سطر «مليون مرة» إلى شريط علوي فقط n=130 بكسلًا
+# ساطعًا مقابل n=1005 كاملة) — الارتفاع 150 (كمرشح الهوك
+# الافتراضي في الملف نفسه) يمنع القصّ، و170 لا يضيف شيئًا
+# (إخراج متماثل بايتيًا مع 150) فلا يُستخدم.
+# قياس PIL يبالغ قليلًا في العرض دائمًا (~2–6%: «مليون مرة»
+# ‏214 بـPIL مقابل 201 مرسومة) فهو هامش أمان مدمج: ما قال
+# PIL إنه يتسع على سطر واحد يتسع فعلًا عند pango.
+TEXT_FONT_FILE = ("/usr/share/fonts/truetype/noto/"
+                  "NotoNaskhArabic-Bold.ttf")
+TEXT_PAD = 20
+HOOK_TITLE_BOX_HEIGHT = 150
+
+
+def _measure_text_width(text, fontsize,
+                        font_file=TEXT_FONT_FILE):
+    """عرض النص المرئي بالبكسل بخط المرشح نفسه (Noto Naskh
+    Arabic ‏Bold — نفس family/weight في _text_filter)، أو
+    None عند تعذّر القياس (ملف خط مفقود / خطأ PIL) — فيرجع
+    المتصل للهندسة القديمة (fail-open، لا يكسر الإنتاج أبدًا)."""
+    try:
+        from PIL import ImageFont
+        font = ImageFont.truetype(font_file, int(fontsize))
+        return float(font.getlength(text or ""))
+    except Exception:
+        return None
+
+
+def _centered_geometry(text, fontsize, width, pad=TEXT_PAD):
+    """هندسة (x, box_width) متمركزة أفقيًا للنص: الصندوق بعرض
+    النص + حاشيتين (pad كما في _text_filter)، متمركز في
+    الإطار. إن ضاق النص عن العرض (أو تعذّر قياسه) ترجع
+    الهندسة القديمة (0, width) — العبارات الأوسع من العرض
+    الآمن حتى وهي متمركزة مشكلة طول محتوى لا عيب هندسة."""
+    text_w = _measure_text_width(text, fontsize)
+    if text_w is None:
+        return 0, int(width)
+    box_w = int(round(text_w)) + 2 * pad
+    if box_w > int(width):
+        return 0, int(width)
+    return (int(width) - box_w) // 2, box_w
+
 
 def format_timecode(seconds):
     """ثوانٍ عشرية → زمن MLT مثل 00:00:04.500."""
@@ -154,12 +204,17 @@ def prepare_fill_images(manifest, assets_dir, out_dir, width, height):
     return out_paths
 
 
-def build_mlt(manifest, title, assets_dir, video_cfg, images_dir=None):
+def build_mlt(manifest, title, assets_dir, video_cfg, images_dir=None,
+              as_hook_title=False):
     """ابنِ نص XML لمشروع MLT من بيان studio (دالة نقية).
 
     images_dir (اختياري): مجلد فيه نسخ الصور بمقاس الإطار
     (من prepare_fill_images) — تُستخدم مساراته بدل
     assets_dir/images، فيملأ الإطار بلا أشرطة سوداء.
+    as_hook_title: عند التفعيل يُحرق العنوان مرة واحدة بهندسة
+    `hook_title_spec` (النطاق الأوسط، 0–3ث، مرشح dynamictext
+    لكل سطر) بدل عنوان الأسفل 4ث — حرق واحد بلا تضاعف؛
+    والافتراضي (False) بلا أي تغيير (عنوان أسفل واحد 0–4ث).
     """
     clip_seconds = float(manifest.get(
         "image_clip_seconds",
@@ -244,15 +299,50 @@ def build_mlt(manifest, title, assets_dir, video_cfg, images_dir=None):
     # صندوقه بعرض الإطار كاملًا (أقل سطورًا) وحافته السفلى فوق
     # صندوق العبارات بفجوة ~40px.
     if title:
-        _text_filter(tractor, "filter-hook", title,
-                     format_timecode(0),
-                     format_timecode(HOOK_DURATION_SECONDS - 1.0 / fps),
-                     HOOK_FONTSIZE, height - 420, 150, width, 0)
+        if as_hook_title:
+            # حرق واحد بهندسة عنوان الهوك (إصلاح التضاعف —
+            # 2026-11-26): سطر لكل سطر من المواصفة، في النطاق
+            # الأوسط، 0–3ث — بلا عنوان أسفل إضافي.
+            from lib import hook_title as hook_title_lib
+            try:
+                spec = hook_title_lib.hook_title_spec(
+                    title, width, height)
+            except hook_title_lib.HookTitleError as e:
+                raise MltError(str(e))
+            for i, (line, y) in enumerate(zip(spec["lines"],
+                                              spec["line_y"])):
+                # عيب (أ) 2026-11-26: ارتفاع الصندوق = حجم الخط
+                # (58) يقصّ النص؛ وhalign يُتجاهل في MLT 7.22
+                # فيلتصق السطر باليسار — فالارتفاع 150 والتوسيط
+                # بالهندسة معًا (انظر _centered_geometry).
+                hx, hw = _centered_geometry(line, spec["fontsize"],
+                                            width)
+                _text_filter(
+                    tractor, "filter-hook%d" % i, line,
+                    format_timecode(spec["start"]),
+                    format_timecode(spec["end"] - 1.0 / fps),
+                    spec["fontsize"], y, HOOK_TITLE_BOX_HEIGHT, hw, hx)
+        else:
+            # الهوك الافتراضي: مرشح واحد بالعنوان كاملًا — هو
+            # أيضًا ملتصق باليسار (هامشا عنوان «قصتك ممكن
+            # تتشاف مليون مرة» 26 يسارًا مقابل 63 يمينًا في
+            # ريندر داكن) فيُمركز بالهندسة حين يتسع على سطر
+            # واحد، ويرجع للهندسة القديمة حين يلتف (طول محتوى).
+            hx, hw = _centered_geometry(title, HOOK_FONTSIZE, width)
+            _text_filter(tractor, "filter-hook", title,
+                         format_timecode(0),
+                         format_timecode(HOOK_DURATION_SECONDS - 1.0 / fps),
+                         HOOK_FONTSIZE, height - 420, 150, hw, hx)
     for i, p in enumerate(manifest.get("phrases", [])):
+        # عيب (ب) 2026-11-26: العبارات تتجاهل halign فتلتصق
+        # باليسار (x≈22 < هامش 36) — توسيط بالهندسة، والرجوع
+        # للهندسة القديمة حين يتعذّر القياس أو يضيق النص.
+        px, pw = _centered_geometry(p["text"], CAPTION_FONTSIZE,
+                                     width)
         _text_filter(tractor, "filter-phrase%d" % i, p["text"],
                      format_timecode(float(p["start"])),
                      format_timecode(float(p["end"]) - 1.0 / fps),
-                     CAPTION_FONTSIZE, height - 230, 170, width)
+                     CAPTION_FONTSIZE, height - 230, 170, pw, px)
     # قائمة main_bin أخيرًا: نقطة دخول melt إلى التراكتور.
     main_bin = ET.SubElement(root, "playlist", {"id": "main_bin"})
     ET.SubElement(main_bin, "entry", {

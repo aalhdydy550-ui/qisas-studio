@@ -42,8 +42,20 @@ Ryan male / Lessac female / Alan male؛ و`en_US-lessac-medium`
 2026-11-23 (`~/workspace/tts-models/en_US-ryan-medium.onnx`
 63,221,984 بايت + json؛ وPiper ركّب منه جملة إنجليزية
 3.44 ثانية). التوصيل الفعلي للسرد الإنجليزي في
-`lib/long_narration.py` خارج هذه الحزمة — بقي خيارًا
-موثقًا هنا يُفحص وجود ملفه فقط.
+`lib/long_narration.py` (الجولة v0.1.53 — `lang="en"`).
+
+ترخيص الصوت الإنجليزي (مقروء من بطاقته — انظر
+`docs/voices.md`): en_US-ryan-medium هو **CC BY-NC-SA 4.0
+(غير تجاري)** — مدرَّب على مجموعة Ryan Speech ومُصقَّل من
+lessac medium؛ للاستخدام الشخصي/التجريبي فقط، ولا يُشحن
+صوته للعملاء التجاريين أبدًا. (جلب بطاقة النموذج الرسمية
+مباشرةً من rhasspy/piper-voices رُدّ بـHTTP 429 في
+2026-11-26؛ فالترخيص موثَّق من البطاقة المعاد استضافتها
+حرفيًا — Trelis، وتشهد: «Re-hosted from
+rhasspy/piper-voices» — ومن تقرير مستقل قرأ كل بطاقة،
+انظر `docs/voices.md`.) ترخيص kareem العربي غير موثَّق
+بعد — بطاقته تحيل إلى المصدر وسلالته Lessac (تسجيلات غير
+تجارية) — فيُعامل كغير تجاري حتى تُقرأ بطاقته حرفيًا.
 """
 import os
 import re
@@ -80,14 +92,31 @@ PIPER_VOICES = {
            "lang_dir": "ar",
            "voice_dir": "kareem",
            "quality": "medium",
-           "language_name": "Arabic"},
+           "language_name": "Arabic",
+           # الترخيص غير موثَّق بعد: بطاقة kareem تحيل إلى
+           # المصدر («See source») وسلالته Lessac (تسجيلات
+           # للاستخدام غير التجاري) — يُعامل كغير تجاري حتى
+           # تُقرأ بطاقته حرفيًا؛ انظر docs/voices.md.
+           "license": None,
+           "license_url": None,
+           "commercial_use": None,
+           "dataset": None},
     "en": {"model": "en_US-ryan-medium",
            "gender": "male",
            "locale": "en_US",
            "lang_dir": "en",
            "voice_dir": "ryan",
            "quality": "medium",
-           "language_name": "English (US)"},
+           "language_name": "English (US)",
+           # بطاقة النموذج (MODEL_CARD) في rhasspy/piper-voices:
+           # «License: CC BY-NC-SA 4.0» — مدرَّب على مجموعة
+           # Ryan Speech ومُصقَّل من lessac medium. غير تجاري:
+           # للاستخدام الشخصي/التجريبي فقط — انظر docs/voices.md.
+           "license": "CC BY-NC-SA 4.0",
+           "license_url": ("https://creativecommons.org/licenses/"
+                           "by-nc-sa/4.0/"),
+           "commercial_use": False,
+           "dataset": "Ryan Speech"},
 }
 PIPER_MODELS_DIR = os.path.expanduser("~/workspace/tts-models")
 
@@ -118,6 +147,19 @@ def voice_model_path(lang="ar", models_dir=None):
 def voice_available(lang="ar", models_dir=None):
     """هل ملف موديل Piper للغة موجود على القرص؟"""
     return os.path.isfile(voice_model_path(lang, models_dir))
+
+
+def voice_license(lang="ar"):
+    """ترخيص صوت الراوي بلغة معطاة (مثال "CC BY-NC-SA 4.0")،
+    أو None إن لم يُوثَّق بعد (kareem العربي حتى الآن)."""
+    return PIPER_VOICES[normalize_lang(lang)].get("license")
+
+
+def voice_commercial_use(lang="ar"):
+    """هل يجوز استخدام صوت الراوي تجاريًا؟ True/False، أو None
+    إن لم يُحسم بعد (kareem العربي حتى الآن — يُعامل كغير
+    تجاري حتى يُحسم)."""
+    return PIPER_VOICES[normalize_lang(lang)].get("commercial_use")
 
 
 def resolve_voice_model(cfg=None, lang="ar"):

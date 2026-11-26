@@ -49,11 +49,14 @@ import json
 import math
 import os
 import re
+import shutil
+import subprocess
 import time
 import urllib.error
 import urllib.request
 
 from lib import errors as errors_lib
+from lib import retry_policy as retry_lib
 
 import json
 import math
@@ -83,6 +86,244 @@ MIN_TOKEN_LENGTH = 10
 THUMBNAIL_SIZE = (720, 1280)
 THUMBNAIL_EXTS = (".jpg", ".jpeg", ".png")
 PLATFORM_NAMES = {"tiktok": "تيك توك", "instagram": "إنستغرام"}
+
+# صلاحية التوكنات (حسب توثيق المنصتين): توكن TikTok قصير
+# (24 ساعة)، وتوكن Instagram طويل العمر (60 يومًا). تُستخدم
+# في check_token_freshness فقط — تحذير مبكر لا منع (التوكن
+# قد يُجدَّد من جهة المنصة).
+TIKTOK_TOKEN_MAX_DAYS = 1
+INSTAGRAM_TOKEN_MAX_DAYS = 60
+
+# سياسة إعادة محاولة النشر الافتراضية (جولة الأنماط W1):
+# 3 محاولات إجمالًا، وفاصل أولي ثانيتان، وميزانية 120 ثانية.
+# Retry-After فوق 30 ثانية لا يُنام — يرفع RetryAfterTooLong
+# فيعيد الكرون الجدولة لاحقًا.
+PUBLISH_RETRY_POLICY = retry_lib.RetryPolicy(
+    max_attempts=3, base_delay=2.0,
+    total_budget_seconds=120.0)
+
+FACEBOOK_BIN_CANDIDATES = ("facebook-cli",
+                           "/opt/hatch/bin/facebook-cli")
+
+
+def _classify_social_error(exc):
+    """صنّف SocialPublishError إلى (kind, retry_after) أو None.
+
+    يقرأ الحالة من خاصية status_code (يضعها _http_json
+    ودوال الرفع) أو من نص «HTTP NNN» كاحتياط، وخاصية
+    transport لأخطاء الاتصال. غير SocialPublishError ← None.
+    """
+    if not isinstance(exc, SocialPublishError):
+        return None
+    if getattr(exc, "transport", False):
+        return ("transport", None)
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        match = re.search(r"HTTP (\d{3})", str(exc))
+        if match:
+            status = int(match.group(1))
+    if status is None:
+        return ("logical", None)
+    return (retry_lib.classify_status(status),
+            getattr(exc, "retry_after", None))
+
+
+def _with_retry(fn, policy=None, sleep=time.sleep):
+    """نفّذ fn() مع إعادة محاولة حسب سياسة النشر الموحّدة.
+
+    يعيد المحاولة على 429/5xx/النقل فقط؛ والمنطقي (400/401/
+    403) يرفع فورًا بلا إعادة. sleep قابل للحقن في الاختبارات.
+    """
+    return retry_lib.call_with_retry(
+        fn, policy=policy or PUBLISH_RETRY_POLICY, sleep=sleep,
+        classify=_classify_social_error)
+
+
+def _http_json_with_retry(method, url, body=None, token=None,
+                          headers=None, timeout=300, context=None,
+                          policy=None):
+    """_http_json مع إعادة محاولة منضبطة (429/5xx/نقل فقط)."""
+    return _with_retry(
+        lambda: _http_json(method, url, body=body, token=token,
+                           headers=headers, timeout=timeout,
+                           context=context),
+        policy=policy)
+
+
+class ReadOnlyClient:
+    """عميل قراءة فقط (نمط PRAW ‏read_only — جولة الأنماط W1).
+
+    GET مسموح (فحص الحالة/الرؤى)؛ وأي كتابة (POST/PUT) تفشل
+    بصوت عالٍ فورًا بدل النشر العرضي من سكربت تحليل. يمنع
+    نشرًا عرضيًا من مسار قراءة.
+    """
+
+    def __init__(self, http_json=None, token=None):
+        self._http_json = http_json
+        self.token = token
+
+    def _call(self, method, url, **kwargs):
+        fn = self._http_json or _http_json
+        return fn(method, url, token=self.token, **kwargs)
+
+    def get(self, url, **kwargs):
+        return self._call("GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        raise SocialPublishError(
+            "عميل القراءة لا ينشر — استدعاء POST مرفوض "
+            "(استخدم عميل النشر PublishClient)")
+
+    def put(self, url, **kwargs):
+        raise SocialPublishError(
+            "عميل القراءة لا ينشر — استدعاء PUT مرفوض "
+            "(استخدم عميل النشر PublishClient)")
+
+
+class PublishClient:
+    """عميل نشر: كتابة مع إعادة محاولة منضبطة (429/5xx/نقل).
+
+    القراءة (GET) تمر بلا إعادة محاولة هنا — فحص الحالة له
+    حلقته الخاصة (_wait_ig_container_ready عبر ReadOnlyClient).
+    """
+
+    def __init__(self, http_json=None, token=None, policy=None):
+        self._http_json = http_json
+        self.token = token
+        self.policy = policy or PUBLISH_RETRY_POLICY
+
+    def _call(self, method, url, **kwargs):
+        fn = self._http_json or _http_json
+        call = lambda: fn(method, url, token=self.token, **kwargs)
+        return _with_retry(call, policy=self.policy)
+
+    def get(self, url, **kwargs):
+        fn = self._http_json or _http_json
+        return fn("GET", url, token=self.token, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self._call("POST", url, **kwargs)
+
+    def put(self, url, **kwargs):
+        return self._call("PUT", url, **kwargs)
+
+
+def read_client(token=None, http_json=None):
+    """عميل قراءة فقط (فحص حالة/رؤى بلا أي كتابة)."""
+    return ReadOnlyClient(http_json=http_json, token=token)
+
+
+def publish_client(token=None, http_json=None, policy=None):
+    """عميل نشر مع إعادة محاولة منضبطة."""
+    return PublishClient(http_json=http_json, token=token,
+                         policy=policy)
+
+
+def _find_facebook_bin():
+    """مسار facebook-cli (نفس مرشحات lib.publish)."""
+    for cand in FACEBOOK_BIN_CANDIDATES:
+        path = shutil.which(cand) or (cand if os.path.isfile(cand)
+                                      else None)
+        if path:
+            return path
+    return None
+
+
+def _default_runner(argv, timeout):
+    return subprocess.run(argv, capture_output=True, text=True,
+                          timeout=timeout)
+
+
+def facebook_token_preflight(facebook_bin=None, runner=None,
+                             timeout=30):
+    """فحص مبكر لصلاحية توكن فيسبوك قبل النشر (جولة الأنماط W1).
+
+    يستدعي `facebook-cli me` — قراءة فقط لا تنشر شيئًا — فإن
+    نجح فالتوكن صالح، وإن فشل فالتوكن منتهٍ أو غير صالح فيُرفع
+    SocialPublishError برسالة عربية تقول أعد الربط من الهاتف
+    قبل النشر بدل الفشل في منتصف النشر.
+    runner: دالة runner(argv, timeout) -> كائن
+    (returncode/stdout/stderr) — للاختبار؛ الافتراضي
+    subprocess.run.
+    التجديد الفعلي نفسه (تبديل توكن قصير العمر بآخر طويل
+    العمر عبر Graph API) مؤجل: يحتاج سرّ التطبيق + تسجيل
+    دخول جديد من هاتف المستخدم — انظر تقرير W1.
+    يرجع {"ok": True, "detail": "..."}.
+    """
+    fb = facebook_bin or _find_facebook_bin()
+    if not fb:
+        raise SocialPublishError(
+            "facebook-cli غير متاح في PATH — لا يمكن فحص صلاحية "
+            "توكن فيسبوك قبل النشر")
+    run = runner or _default_runner
+    try:
+        proc = run([fb, "me"], timeout)
+    except FileNotFoundError:
+        raise SocialPublishError(
+            "facebook-cli غير موجود: %s" % fb)
+    except subprocess.TimeoutExpired:
+        raise SocialPublishError(
+            "انتهت مهلة فحص صلاحية توكن فيسبوك (%d ثانية) — "
+            "أعد المحاولة لاحقًا" % timeout)
+    if proc.returncode != 0:
+        detail = ((proc.stderr or proc.stdout or "")
+                  .strip()[:200])
+        raise SocialPublishError(
+            "توكن فيسبوك غير صالح أو منتهٍ — فشل فحص الصلاحية "
+            "قبل النشر (%s)؛ أعد ربط الحساب من الهاتف ثم أعد "
+            "النشر" % (detail or "بلا تفاصيل"))
+    return {"ok": True,
+            "detail": "توكن فيسبوك صالح — فحص الهوية نجح"}
+
+
+def check_token_freshness(platform, studio_dir=None, now=None):
+    """عمر توكن TikTok/Instagram المحفوظ: هل تجاوز صلاحيته؟
+
+    يقرأ حقل "saved" من ملف التوكن (أو زمن تعديل الملف عند
+    غيابه). يرجع {"platform", "saved", "age_days",
+    "max_days", "stale", "message"} — stale=None عند غياب
+    التوكن أصلًا. تحذير مبكر لا منع: التوكن قد يُجدَّد من
+    جهة المنصة.
+    """
+    if platform not in ("tiktok", "instagram"):
+        raise SocialPublishError("منصة غير معروفة: %s" % platform)
+    max_days = (TIKTOK_TOKEN_MAX_DAYS if platform == "tiktok"
+                else INSTAGRAM_TOKEN_MAX_DAYS)
+    path = token_path(platform, studio_dir)
+    if not os.path.isfile(path):
+        return {"platform": platform, "saved": None,
+                "age_days": None, "max_days": max_days,
+                "stale": None,
+                "message": "لا يوجد ملف توكن لـ %s"
+                           % PLATFORM_NAMES[platform]}
+    saved_epoch = None
+    saved_text = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        saved_text = (data or {}).get("saved")
+        if isinstance(saved_text, str) and saved_text.strip():
+            saved_epoch = time.mktime(time.strptime(
+                saved_text.strip(), "%Y-%m-%d %H:%M:%S"))
+    except (ValueError, OSError):
+        saved_epoch = None
+    if saved_epoch is None:
+        saved_epoch = os.path.getmtime(path)
+        saved_text = time.strftime("%Y-%m-%d %H:%M:%S",
+                                   time.localtime(saved_epoch))
+    now_epoch = time.time() if now is None else float(now)
+    age_days = (now_epoch - saved_epoch) / 86400.0
+    stale = age_days > max_days
+    if stale:
+        message = ("توكن %s قديم (%.1f يوم — الحد %d يومًا) — "
+                   "جدّده قبل النشر" % (PLATFORM_NAMES[platform],
+                                        age_days, max_days))
+    else:
+        message = ("توكن %s ضمن الصلاحية (%.1f/%d يومًا)"
+                   % (PLATFORM_NAMES[platform], age_days, max_days))
+    return {"platform": platform, "saved": saved_text,
+            "age_days": age_days, "max_days": max_days,
+            "stale": stale, "message": message}
 
 
 class SocialPublishError(Exception):
@@ -597,16 +838,22 @@ def _http_json(method, url, body=None, token=None, headers=None,
             raw = resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
+        retry_lib.log_rate_limit(context or "social", e.headers)
         msg = ("فشل طلب %s %s (HTTP %d): %s" % (method, url, e.code,
                                                  detail))
         if context in ("tiktok", "instagram"):
             msg += "\n" + errors_lib.explain_error_text(msg, context)
-        raise SocialPublishError(msg)
+        err = SocialPublishError(msg)
+        err.status_code = e.code
+        err.retry_after = retry_lib.parse_retry_after(e.headers)
+        raise err
     except urllib.error.URLError as e:
         msg = "تعذر الاتصال بـ %s: %s" % (url, e)
         if context in ("tiktok", "instagram"):
             msg += "\n" + errors_lib.explain_error_text(msg, context)
-        raise SocialPublishError(msg)
+        err = SocialPublishError(msg)
+        err.transport = True
+        raise err
     try:
         return json.loads(raw)
     except ValueError:
@@ -646,12 +893,17 @@ def _http_put_bytes(url, chunk, start, total, token=None, timeout=600):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp.read()
     except urllib.error.HTTPError as e:
-        raise SocialPublishError(
+        err = SocialPublishError(
             "فشل رفع مقطع TikTok/Instagram عند البايت %d (HTTP %d)"
             % (start, e.code))
+        err.status_code = e.code
+        err.retry_after = retry_lib.parse_retry_after(e.headers)
+        raise err
     except urllib.error.URLError as e:
-        raise SocialPublishError("تعذر رفع المقطع عند البايت %d: %s"
+        err = SocialPublishError("تعذر رفع المقطع عند البايت %d: %s"
                                  % (start, e))
+        err.transport = True
+        raise err
 
 
 def _http_post_bytes_rupload(url, chunk, offset, total, token,
@@ -670,12 +922,17 @@ def _http_post_bytes_rupload(url, chunk, offset, total, token,
             resp.read()
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:200]
-        raise SocialPublishError(
+        err = SocialPublishError(
             "فشل رفع مقطع Instagram عند البايت %d (HTTP %d): %s"
             % (offset, e.code, detail))
+        err.status_code = e.code
+        err.retry_after = retry_lib.parse_retry_after(e.headers)
+        raise err
     except urllib.error.URLError as e:
-        raise SocialPublishError("تعذر رفع المقطع عند البايت %d: %s"
+        err = SocialPublishError("تعذر رفع المقطع عند البايت %d: %s"
                                  % (offset, e))
+        err.transport = True
+        raise err
 
 
 def _wait_ig_container_ready(media_id, token, timeout=IG_READY_TIMEOUT,
@@ -685,10 +942,10 @@ def _wait_ig_container_ready(media_id, token, timeout=IG_READY_TIMEOUT,
     SocialPublishError عند ERROR أو انتهاء المهلة."""
     url = "%s/%s/%s?fields=status_code" % (IG_API_BASE, IG_API_VERSION,
                                            media_id)
+    reader = ReadOnlyClient(token=token)
     deadline = time.time() + max(timeout, 0)
     while True:
-        resp = _http_json("GET", url, token=token, timeout=60,
-                          context="instagram")
+        resp = reader.get(url, timeout=60, context="instagram")
         code = (resp or {}).get("status_code")
         if code == "FINISHED":
             return True
@@ -715,8 +972,9 @@ def upload_tiktok(video, title, caption, token, timeout=600):
     validate_social_payload("tiktok", video, title, caption)
     _check_duration(video, TIKTOK_MAX_DURATION, "TikTok")
     payload = tiktok_init_payload(video, title, caption)
-    resp = _http_json("POST", payload["url"], body=payload["body"],
-                      token=token, timeout=timeout, context="tiktok")
+    resp = _http_json_with_retry(
+        "POST", payload["url"], body=payload["body"],
+        token=token, timeout=timeout, context="tiktok")
     data = resp.get("data") or {}
     publish_id = data.get("publish_id")
     upload_url = data.get("upload_url")
@@ -731,10 +989,11 @@ def upload_tiktok(video, title, caption, token, timeout=600):
             chunk = f.read(chunk_size)
             if not chunk:
                 break
-            _http_put_bytes(upload_url, chunk, offset, size,
-                            token=None, timeout=timeout)
+            _with_retry(lambda chunk=chunk, offset=offset: (
+                _http_put_bytes(upload_url, chunk, offset, size,
+                                token=None, timeout=timeout)))
             offset += len(chunk)
-    status = _http_json(
+    status = _http_json_with_retry(
         "POST", TIKTOK_API_BASE + TIKTOK_STATUS_PATH,
         body={"publish_id": publish_id}, token=token, timeout=timeout,
         context="tiktok")
@@ -767,9 +1026,10 @@ def upload_instagram(video, title, caption, ig_user_id, token,
                             ig_user_id=ig_user_id)
     _check_duration(video, IG_REEL_MAX_DURATION, "Instagram")
     payload = instagram_reel_payload(video, title, caption, ig_user_id)
-    create = _http_json("POST", payload["steps"][0]["url"],
-                        body=payload["steps"][0]["body"], token=token,
-                        timeout=timeout, context="instagram")
+    create = _http_json_with_retry(
+        "POST", payload["steps"][0]["url"],
+        body=payload["steps"][0]["body"], token=token,
+        timeout=timeout, context="instagram")
     # إنشاء الحاوية يرجع id فقط — بلا upload_url (كان الكود
     # يطلب upload_url فيرفض كل رد صحيح من Meta).
     media_id = create.get("id")
@@ -786,11 +1046,13 @@ def upload_instagram(video, title, caption, ig_user_id, token,
             chunk = f.read(chunk_size)
             if not chunk:
                 break
-            _http_post_bytes_rupload(rupload_url, chunk, offset, size,
-                                     token, timeout=timeout)
+            _with_retry(lambda chunk=chunk, offset=offset: (
+                _http_post_bytes_rupload(rupload_url, chunk, offset,
+                                         size, token,
+                                         timeout=timeout)))
             offset += len(chunk)
     _wait_ig_container_ready(media_id, token)
-    published = _http_json(
+    published = _http_json_with_retry(
         "POST", payload["steps"][3]["url"],
         body={"creation_id": media_id}, token=token, timeout=timeout,
         context="instagram")

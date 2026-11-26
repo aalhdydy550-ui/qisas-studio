@@ -58,6 +58,56 @@ CATEGORIES = (
     "unknown",
 )
 
+# رموز الأخطاء الثابتة — جولة تطبيق الأنماط (W5b)، مستوحاة من
+# مجلد `errors/` في Next.js (رمز موثّق برابط لقسم runbook).
+# الصيغة: STUDIO-<العائلة>-<رقم من 3 خانات>؛ الرقم متسلسل داخل
+# العائلة بترتيب CATEGORIES. ثابتة للأبد: لا تُعاد تسمية رمز
+# بعد نشره (رسائل الفشل وسجلات التشغيل تشير إليه).
+ERROR_CODES = {
+    "ffmpeg_not_found": "STUDIO-FFMPEG-001",
+    "ffmpeg_encode_failed": "STUDIO-FFMPEG-002",
+    "ffmpeg_no_audio": "STUDIO-FFMPEG-003",
+    "openmontage_project_missing": "STUDIO-OPENMONTAGE-001",
+    "openmontage_stage_failed": "STUDIO-OPENMONTAGE-002",
+    "facebook_not_installed": "STUDIO-FACEBOOK-001",
+    "facebook_token": "STUDIO-FACEBOOK-002",
+    "facebook_publish_failed": "STUDIO-FACEBOOK-003",
+    "tiktok_token": "STUDIO-TIKTOK-001",
+    "tiktok_publish_failed": "STUDIO-TIKTOK-002",
+    "instagram_token": "STUDIO-INSTAGRAM-001",
+    "instagram_user_id_missing": "STUDIO-INSTAGRAM-002",
+    "instagram_publish_failed": "STUDIO-INSTAGRAM-003",
+    "youtube_token_expired": "STUDIO-YOUTUBE-001",
+    "youtube_quota": "STUDIO-YOUTUBE-002",
+    "youtube_upload_failed": "STUDIO-YOUTUBE-003",
+    "concat_export_failed": "STUDIO-CONCAT-001",
+    "file_missing": "STUDIO-FILE-001",
+    "veo_balance_low": "STUDIO-VEO-001",
+    "veo_balance_stale": "STUDIO-VEO-002",
+    "llm_all_failed": "STUDIO-LLM-001",
+    "unknown": "STUDIO-UNKNOWN-001",
+}
+
+# دليل التشغيل (runbook): قسم واحد لكل رمز، بعنوان يحمل الرمز.
+RUNBOOK_PATH = "docs/ERRORS-RUNBOOK.md"
+
+
+def error_code(category):
+    """الرمز الثابت لفئة — STUDIO-UNKNOWN-001 للفئة غير المعروفة."""
+    return ERROR_CODES.get(category or "unknown", "STUDIO-UNKNOWN-001")
+
+
+def runbook_anchor(code):
+    """مرساة قسم الرمز في runbook (كما يولّدها Markdown من العنوان)."""
+    return "#" + code.lower()
+
+
+def runbook_link(category):
+    """رابط قسم runbook لفئة: المسار + المرساة (مثل
+    docs/ERRORS-RUNBOOK.md#studio-ffmpeg-001)."""
+    return "%s%s" % (RUNBOOK_PATH,
+                     runbook_anchor(error_code(category)))
+
 _UNKNOWN_WHAT = (
     "حصل خطأ غير متوقع أثناء تنفيذ الأمر، ولم نتعرف على سببه "
     "من رسالته — لا يعني هذا أن ملفاتك تضررت.")
@@ -69,6 +119,8 @@ _UNKNOWN_DO = (
 
 def _entry(category, title, what, do, steps):
     return {"category": category, "title": title,
+            "code": error_code(category),
+            "runbook": runbook_link(category),
             "what_happened": what, "what_to_do": do, "steps": steps}
 
 
@@ -597,8 +649,9 @@ def explain_error(exc_or_text, context=None):
     context: سياق اختياري يحسم الغموض — "facebook" أو
         "youtube" أو "ffmpeg" أو "openmontage" أو "veo" أو
         "check" أو "publish" أو "assemble" أو "run".
-    يرجع قاموسًا بمفاتيح: category, title, what_happened,
-    what_to_do, steps, original — إضافة إلى مفتاحي
+    يرجع قاموسًا بمفاتيح: category, title, code (الرمز الثابت
+    مثل STUDIO-FFMPEG-001), runbook (رابط قسم الدليل),
+    what_happened, what_to_do, steps, original — إضافة إلى مفتاحي
     "ماذا حدث" و"ماذا تفعل" بالعربية.
     لا يرفع استثناءً أبدًا — المدخل الفارغ أو غير المعروف
     يرجع الرسالة العامة.
@@ -618,6 +671,8 @@ def explain_error(exc_or_text, context=None):
     if category == "unknown":
         result = {"category": "unknown",
                   "title": "خطأ غير معروف",
+                  "code": error_code("unknown"),
+                  "runbook": runbook_link("unknown"),
                   "what_happened": _UNKNOWN_WHAT,
                   "what_to_do": _UNKNOWN_DO,
                   "steps": [_UNKNOWN_DO,
@@ -628,6 +683,8 @@ def explain_error(exc_or_text, context=None):
         rule = _RULE_BY_CATEGORY[category]
         result = {"category": rule["category"],
                   "title": rule["title"],
+                  "code": rule["code"],
+                  "runbook": rule["runbook"],
                   "what_happened": rule["what_happened"],
                   "what_to_do": rule["what_to_do"],
                   "steps": list(rule["steps"]),
@@ -642,6 +699,9 @@ def format_error(explained):
     if isinstance(explained, str):
         explained = explain_error(explained)
     lines = ["خطأ: %s" % explained.get("title", "خطأ غير معروف"),
+             "رمز الخطأ: %s — الدليل: %s"
+             % (explained.get("code", "STUDIO-UNKNOWN-001"),
+                explained.get("runbook", RUNBOOK_PATH)),
              "ماذا حدث: %s" % explained.get("what_happened", ""),
              "ماذا تفعل: %s" % explained.get("what_to_do", "")]
     steps = explained.get("steps") or []

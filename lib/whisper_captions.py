@@ -57,7 +57,7 @@ def ass_header(font_size=52):
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         "Style: Default,Noto Naskh Arabic,%d,&H00FFFFFF,&H000000FF,"
-        "&H80000000,&H80000000,1,0,0,0,100,100,0,0,1,3,0,2,40,40,60,1\n"
+        "&H80000000,&H80000000,1,0,0,0,100,100,0,0,1,3,0,2,40,40,64,1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "

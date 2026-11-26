@@ -21,13 +21,19 @@
 captions.json لمشاريع OpenMontage، وبتوقيتات مقدَّرة بتقسيم متساوٍ
 داخل كل عبارة لباقي المصادر (السرد ثابت الإيقاع تقريبًا).
 """
+import copy
 import json
 import math
 import os
 import re
+import shutil
+import tempfile
 
+from . import headless_stage
 from . import long_narration
+from . import motion_clips
 from .paths import resolve_inside
+from .stage_cache import hash_file
 
 TITLE_CARD_SECONDS = 3.0
 IMAGE_CLIP_SECONDS = 5.0
@@ -392,6 +398,16 @@ def _content_images(images, duration, clip_seconds=IMAGE_CLIP_SECONDS):
 
 MOTION_MODES = ("clips", "still", "kenburns", "youtube-long")
 
+# المسار السريع بلا GPU (الموجة الأولى، الطلب 1): العروض الجديدة
+# تستخدم Ken Burns افتراضيًا؛ و"clips" خيار صريح يتطلب حصة GPU
+# ووقت توليد (Wan/LTX) — يُفعَّل لاحقًا عبر improve_motion.
+FAST_MOTION_DEFAULT = "kenburns"
+
+# رسالة المسار السريع — نص حرفي من خطة الموجة الأولى (الطلب 1):
+# تُطبع عند إنتاج المسودة السريعة وتُحفظ في تقريرها.
+FAST_DRAFT_GPU_NOTE = ("الفيديو السريع جاهز الآن؛ الحركة المولّدة تحتاج "
+                       "حصة GPU ووقتًا — أعد التشغيل بـ`--motion clips` لاحقًا")
+
 
 def _segment_duration(seg):
     """مدة مقطع motion محلول (فيديو: out-in، صورة: duration)."""
@@ -452,7 +468,8 @@ def build_project(spec):
     "outro": {...}, "chapters": [فصل], "music": مسار|None,
     "width": 1280, "height": 720, "fps": 30,
     "motion": "clips"|"still"|"kenburns"|"youtube-long"
-    (الافتراضي "clips")}.
+    (الافتراضي FAST_MOTION_DEFAULT = "kenburns" — المسار السريع بلا
+    GPU أولًا؛ و"clips" خيار صريح كما كان)}.
     "youtube-long" مثل "clips" تمامًا في حلّ مقاطع الحركة من
     المانيفست، لكن الصور الاحتياطية تُوزَّع 2.5 ثانية للصورة بدل
     5 (إيقاع القطع السريع في قصص يوتيوب الطويلة) وبلا Ken Burns.
@@ -463,7 +480,7 @@ def build_project(spec):
     chapters = spec.get("chapters") or []
     if not chapters:
         raise LongVideoError("الفيديو الطويل يحتاج فصلًا واحدًا على الأقل")
-    motion = spec.get("motion", "clips")
+    motion = spec.get("motion", FAST_MOTION_DEFAULT)
     if motion not in MOTION_MODES:
         raise LongVideoError(
             "وضع الحركة غير معروف: %s "
@@ -499,6 +516,10 @@ def build_project(spec):
         raise LongVideoError("ملف الموسيقى الخلفية غير موجود: %s" % music)
 
     tracks = []
+    # بطاقات العناوين المحروقة (إصلاح التضاعف — 2026-11-26):
+    # تسجيل فقط، بلا تغيير في أي مسار ريندر — لتكون العناوين
+    # مقروءة آليًا عند التوصيل (مقدمة + كل فصل + خاتمة).
+    title_cards = []
     meta_chapters = []
     cursor = 0.0
     intro_dur = max(float(intro["duration"]), MIN_CARD_SECONDS)
@@ -517,6 +538,9 @@ def build_project(spec):
                    # "above" = أسفل الشاشة فوق الكابشن (قاعدة دائمة
                    # 2026-11-22: لا نص أعلى الشاشة أبدًا).
                    "position": "above", "fontsize": HOOK_FONTSIZE})
+    title_cards.append({"text": spec.get("hook") or spec["title"],
+                        "start": 0.0, "end": round(intro_dur, 3),
+                        "position": "above"})
     intro_meta = {"start": 0.0, "end": round(intro_dur, 3)}
     cursor = intro_dur
 
@@ -534,6 +558,10 @@ def build_project(spec):
                        "start": round(cursor, 3),
                        "end": round(cursor + TITLE_CARD_SECONDS, 3),
                        "position": "middle", "fontsize": TITLE_FONTSIZE})
+        title_cards.append({"text": ch["title"],
+                            "start": round(cursor, 3),
+                            "end": round(cursor + TITLE_CARD_SECONDS, 3),
+                            "position": "middle"})
         cursor += TITLE_CARD_SECONDS
         content_start = cursor
         dur = float(ch["duration"])
@@ -618,6 +646,10 @@ def build_project(spec):
                    "start": round(cursor, 3),
                    "end": round(cursor + outro_dur, 3),
                    "position": "middle", "fontsize": OUTRO_FONTSIZE})
+    title_cards.append({"text": outro["text"],
+                        "start": round(cursor, 3),
+                        "end": round(cursor + outro_dur, 3),
+                        "position": "middle"})
     cursor += outro_dur
     total = round(cursor, 3)
     if music:
@@ -633,8 +665,342 @@ def build_project(spec):
             "motion": motion, "motion_warnings": motion_warnings,
             "intro": intro_meta,
             "chapters": meta_chapters,
+            "title_cards": title_cards,
             "outro": {"start": round(outro_start, 3), "end": total}}
     return project, meta
+
+
+DEFAULT_HEADLESS_EDITOR = os.path.expanduser(
+    "~/workspace/headless-editor/editor.py")
+
+
+def _file_hash_or_path(path):
+    """بصمة محتوى ملف لمفتاح تخزين، أو مساره المطلق عند تعذّر القراءة.
+
+    الرجوع للمسار fail-open لمفتاح التخزين فقط — لا يؤثر في
+    المخرج أبدًا (أسوأ ما يحدث إصابة/غياب إضافي في التخزين).
+    """
+    if not path:
+        return None
+    try:
+        return hash_file(path)
+    except OSError:
+        return os.path.abspath(os.path.expanduser(path))
+
+
+def _fast_draft_cache_inputs(spec, project):
+    """مدخلات تخزين المسودة السريعة — مبنية على المحتوى لا المسارات.
+
+    فصل يتغيّر نصه أو سردُه أو أي صورة فيه يغيّر المفتاح،
+    فيُعاد ريندره؛ وما لم يتغيّر شيء يُعاد استخدام الفيديو.
+    """
+    chapters = []
+    for ch in spec.get("chapters") or []:
+        chapters.append({
+            "title": ch.get("title"),
+            "duration": ch.get("duration"),
+            "images": [_file_hash_or_path(p)
+                       for p in ch.get("images") or []],
+            "narration": _file_hash_or_path(ch.get("narration")),
+            "phrases": [(p.get("text"), p.get("start"), p.get("end"))
+                        for p in ch.get("phrases") or []],
+        })
+    intro = spec.get("intro") or {}
+    outro = spec.get("outro") or {}
+    return {
+        "kind": "fast-draft",
+        "motion": FAST_MOTION_DEFAULT,
+        "title": spec.get("title"),
+        "hook": spec.get("hook"),
+        "width": project.get("width"),
+        "height": project.get("height"),
+        "fps": project.get("fps"),
+        "intro": {"text": intro.get("text"),
+                  "narration": _file_hash_or_path(
+                      intro.get("narration"))},
+        "outro": {"text": outro.get("text"),
+                  "narration": _file_hash_or_path(
+                      outro.get("narration"))},
+        "chapters": chapters,
+    }
+
+
+def _synthesize_fast_part(text, out_wav, work_dir, voice):
+    """ركّب نص مقدمة/خاتمة/فصل بـPiper (الراوي الرجل افتراضيًا).
+
+    يرجع نتيجة synthesize_long (output/duration/chunks).
+    """
+    return long_narration.synthesize_long(
+        text, out_wav, work_dir=work_dir, voice=voice)
+
+
+def build_fast_draft(spec, out_path, cache=None, editor_path=None,
+                     work_dir=None, timeout=900, voice="piper"):
+    """ابنِ مسودة سريعة بلا GPU من spec بشكل build_project.
+
+    المسودة: سرد Piper (الراوي الرجل — إما جاهزًا في spec أو
+    يُركَّب هنا من فصل نصي {"title","text","images"}) + صور ثابتة
+    بحركة Ken Burns + كتابة متزامنة عبارة بعبارة أسفل الصورة فقط
+    (نفس build_project — لا مسار كتابة جديد هنا). بلا موسيقى أبدًا:
+    أي "music" في spec تُسقَط وتُوثَّق في التقرير.
+
+    out_path: إن انتهى بـ.json كُتب ملف المشروع فقط بلا ريندر؛
+    وإلا رُندر فيديو MP4 عبر headless-editor وكُتب مشروع JSON
+    بجانبه (<الاسم>-project.json). spec الممرَّرة لا تُعدَّل
+    (نسخة عميقة داخلية)، وmotion تُفرَض kenburns دائمًا.
+
+    cache: StageCache اختياري — إصابة فيديو مطابقة تعيد استخدام
+    الفيديو المخزّن بلا إعادة ريندر (record في مكانه).
+
+    يرجع {"output": مسار المخرج، "duration": مدة الفيديو،
+    "report": {"motion": "kenburns", "note": FAST_DRAFT_GPU_NOTE،
+    "cache_hit": bool، "music_dropped": bool، "warnings": [...],
+    "voice": voice، "format": "video"|"project-json"،
+    "project_json": مسار مشروع JSON، "work_dir": مجلد العمل}}.
+    تطبع FAST_DRAFT_GPU_NOTE عند كل إنتاج.
+    """
+    if not isinstance(spec, dict):
+        raise LongVideoError("مواصفات المسودة السريعة يجب أن تكون كائنًا")
+    if not out_path:
+        raise LongVideoError("مسار مخرج المسودة السريعة مطلوب")
+    out_path = os.path.abspath(os.path.expanduser(out_path))
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    if work_dir:
+        work = os.path.abspath(os.path.expanduser(work_dir))
+        os.makedirs(work, exist_ok=True)
+    else:
+        # مجلد مؤقت يُحفَظ (لا يُحذف): سرد الفصول النصية المُركَّب
+        # هنا قد يشير إليه مشروع JSON المكتوب بجانب المخرج.
+        work = tempfile.mkdtemp(prefix="fast-draft-")
+    fast = copy.deepcopy(spec)
+    # 1) فصول نصية: ركّب سردها بـPiper وابنِ الفصل (إعادة استخدام
+    # chapter_from_text — لا منطق سرد جديد هنا).
+    for i, ch in enumerate(fast.get("chapters") or []):
+        if not isinstance(ch, dict):
+            continue
+        narr = ch.get("narration")
+        if narr and os.path.isfile(narr):
+            continue
+        text = ch.get("text")
+        images = ch.get("images") or []
+        if not text or not images:
+            continue
+        info = _synthesize_fast_part(
+            text, os.path.join(work, "chapter-%d.wav" % (i + 1)),
+            work, voice)
+        fast["chapters"][i] = chapter_from_text(
+            ch.get("title") or "فصل %d" % (i + 1), text, info,
+            images, moral=ch.get("moral") or "")
+    # 2) مقدمة/خاتمة نصيتان بلا سرد: ركّبهما بالطريقة نفسها.
+    for label, fname in (("intro", "intro.wav"), ("outro", "outro.wav")):
+        part = fast.get(label) or {}
+        if not isinstance(part, dict):
+            continue
+        narr = part.get("narration")
+        if narr and os.path.isfile(narr):
+            continue
+        text = part.get("text")
+        if not text:
+            continue
+        info = _synthesize_fast_part(
+            text, os.path.join(work, fname), work, voice)
+        fast[label] = {"text": text, "narration": info["output"],
+                       "duration": info["duration"]}
+    # 3) المسار السريع: Ken Burns دائمًا، وبلا موسيقى أبدًا.
+    fast["motion"] = FAST_MOTION_DEFAULT
+    music_dropped = bool(fast.get("music"))
+    fast["music"] = None
+    project, meta = build_project(fast)
+    duration = meta["total_duration"]
+    is_json = out_path.lower().endswith(".json")
+    if is_json:
+        project_json = out_path
+    else:
+        base, _ = os.path.splitext(out_path)
+        project_json = base + "-project.json"
+    with open(project_json, "w", encoding="utf-8") as f:
+        json.dump(project, f, ensure_ascii=False, indent=2)
+    report = {
+        "motion": FAST_MOTION_DEFAULT,
+        "note": FAST_DRAFT_GPU_NOTE,
+        "cache_hit": False,
+        "music_dropped": music_dropped,
+        "warnings": list(meta.get("motion_warnings") or []),
+        "voice": voice,
+        "format": "project-json" if is_json else "video",
+        "project_json": project_json,
+        "work_dir": work,
+        "chapters": len(fast.get("chapters") or []),
+        "total_duration": duration,
+    }
+    if not is_json:
+        cache_inputs = None
+        if cache is not None:
+            cache_inputs = _fast_draft_cache_inputs(fast, project)
+            try:
+                hit = cache.lookup("video", cache_inputs)
+            except Exception:
+                hit = None
+            if hit and os.path.isfile(hit):
+                if hit != out_path:
+                    shutil.copyfile(hit, out_path)
+                # إصابة والتخزين في مكانه (record): المخرج نفسه
+                # هو النسخة المخزّنة — لا نسخ ولا إعادة ريندر.
+                report["cache_hit"] = True
+                report["reused"] = ["video"]
+                print(FAST_DRAFT_GPU_NOTE)
+                return {"output": out_path, "duration": duration,
+                        "report": report}
+        editor = editor_path or DEFAULT_HEADLESS_EDITOR
+        try:
+            headless_stage.render_project(editor, project_json,
+                                          out_path, timeout=timeout)
+        except headless_stage.HeadlessError as e:
+            raise LongVideoError(str(e))
+        if cache is not None and cache_inputs is not None:
+            try:
+                cache.record("video", cache_inputs, out_path)
+            except Exception:
+                # فشل التسجيل في التخزين لا يفشل مسودة سليمة.
+                pass
+    print(FAST_DRAFT_GPU_NOTE)
+    return {"output": out_path, "duration": duration, "report": report}
+
+
+def improve_motion(spec, motion_manifest, motion_dir, cache=None,
+                   freeze_dir=None, work_dir=None, clip_seconds=None):
+    """بدّل صور المسودة السريعة بمقاطع مولّدة (ترقية الحركة).
+
+    يأخذ spec بشكل build_project (يفضَّل ناتج build_fast_draft —
+    لكن أي spec صالح يعمل) + مانيفست حركة (مسار ملف أو قاموس
+    محمّل) + مجلد المقاطع المولّدة، فيحلّ لكل فصل مقاطعه عبر
+    motion_clips.resolve_chapter_motion، ويحوّل مقاطع freeze إلى
+    صور (آخر إطار) — مع إعادة استخدام المنتجات غير المتغيرة عبر
+    StageCache: إطار مجمّد مولَّد من قبل يُعاد استخدامه بلا إعادة
+    استخراج، والفيديو المولَّد نفسه لا يُعاد توليده أبدًا (هذه
+    الدالة لا تولّد مقاطع — التوليد GPU خارجها).
+
+    freeze_dir: مجلد الإطارات المجمّدة الجديدة (بلا cache)؛
+    وبلا freeze_dir/work_dir يُنشأ مجلد مؤقت يُحفَظ ويُوثَّق
+    مساره في التقرير. spec الممرَّرة لا تُعدَّل.
+
+    يرجع {"spec": spec الجديدة (motion="clips" + motion_segments
+    وmotion_report لكل فصل)، "motion": "clips"،
+    "reused": [تسميات المنتجات المعاد استخدامها]،
+    "generated": [تسميات المنتجات المولَّدة حديثًا]،
+    "warnings": [...]، "report": {...}} — وتُتحقق مقاطع كل فصل
+    بنفس تحققات build_project (عبر _check_motion_segments).
+    """
+    if not isinstance(spec, dict):
+        raise LongVideoError("مواصفات تحسين الحركة يجب أن تكون كائنًا")
+    if isinstance(motion_manifest, dict):
+        manifest = motion_manifest
+    else:
+        try:
+            manifest = motion_clips.load_motion_manifest(motion_manifest)
+        except motion_clips.MotionError as e:
+            raise LongVideoError(str(e))
+    if not motion_dir or not os.path.isdir(motion_dir):
+        raise LongVideoError(
+            "مجلد المقاطع المولّدة غير موجود: %s" % motion_dir)
+    if clip_seconds is None:
+        clip_seconds = motion_clips.IMAGE_CLIP_SECONDS
+    if freeze_dir:
+        freeze_dir = os.path.abspath(os.path.expanduser(freeze_dir))
+        os.makedirs(freeze_dir, exist_ok=True)
+    elif work_dir:
+        freeze_dir = os.path.join(
+            os.path.abspath(os.path.expanduser(work_dir)),
+            "motion-freezes")
+        os.makedirs(freeze_dir, exist_ok=True)
+    else:
+        freeze_dir = tempfile.mkdtemp(prefix="motion-freezes-")
+    new_spec = copy.deepcopy(spec)
+    chapters = new_spec.get("chapters") or []
+    if not chapters:
+        raise LongVideoError("تحسين الحركة يحتاج فصلًا واحدًا على الأقل")
+    reused, generated, warnings = [], [], []
+    chapter_reports = []
+    for i, ch in enumerate(chapters):
+        if not isinstance(ch, dict):
+            raise LongVideoError("فصل ليس كائنًا في الموضع %d" % (i + 1))
+        if not ch.get("duration"):
+            raise LongVideoError(
+                "الفصل %s بلا مدة صالحة" % (ch.get("title") or i + 1))
+        try:
+            resolved = motion_clips.resolve_chapter_motion(
+                ch, manifest, motion_dir, i + 1,
+                clip_seconds=clip_seconds)
+        except motion_clips.MotionError as e:
+            raise LongVideoError(str(e))
+        ch_warnings = list(resolved.get("warnings") or [])
+        segments = []
+        for j, seg in enumerate(resolved.get("segments") or []):
+            if seg.get("kind") != "freeze":
+                segments.append(seg)
+                continue
+            label = "chapter-%d-freeze-%d" % (i + 1, j)
+            src = seg["src"]
+            inputs = {"kind": "freeze-frame",
+                      "video": os.path.abspath(src),
+                      "video_hash": _file_hash_or_path(src)}
+            cached = None
+            if cache is not None:
+                try:
+                    cached = cache.lookup("scenes", inputs)
+                except Exception:
+                    cached = None
+            if cached and os.path.isfile(cached):
+                segments.append({"kind": "image", "src": cached,
+                                 "duration": seg["duration"]})
+                reused.append(label)
+                continue
+            out_jpg = os.path.join(
+                freeze_dir, "ch%d-%d.jpg" % (i + 1, j))
+            try:
+                motion_clips.extract_last_frame(src, out_jpg)
+            except motion_clips.MotionError as e:
+                ch_warnings.append(
+                    "تعذّر تجميد آخر إطار للمقطع في الفصل %s (%s) — "
+                    "صورة ثابتة بدلًا منه"
+                    % (ch.get("title") or (i + 1), e))
+                segments.append({"kind": "image",
+                                 "src": (ch.get("images") or [None])[0],
+                                 "duration": seg["duration"]})
+                continue
+            if cache is not None:
+                try:
+                    stored = cache.store("scenes", inputs, out_jpg)
+                except Exception:
+                    stored = out_jpg
+            else:
+                stored = out_jpg
+            segments.append({"kind": "image", "src": stored,
+                             "duration": seg["duration"]})
+            generated.append(label)
+        ch["motion_segments"] = segments
+        ch["motion_report"] = {"mode": resolved.get("mode") or "clips",
+                               "warnings": ch_warnings}
+        # نفس تحققات build_project حرفيًا (مدة المقاطع = مدة الفصل).
+        _check_motion_segments(ch, float(ch["duration"]))
+        warnings.extend(ch_warnings)
+        chapter_reports.append({
+            "title": ch.get("title") or "",
+            "mode": resolved.get("mode"),
+            "segments": len(segments),
+            "warnings": ch_warnings,
+        })
+    new_spec["motion"] = "clips"
+    report = {"motion": "clips", "reused": list(reused),
+              "generated": list(generated),
+              "warnings": list(warnings),
+              "freeze_dir": freeze_dir,
+              "chapters": chapter_reports}
+    return {"spec": new_spec, "motion": "clips",
+            "reused": reused, "generated": generated,
+            "warnings": warnings, "report": report}
 
 
 def format_timestamps(meta):

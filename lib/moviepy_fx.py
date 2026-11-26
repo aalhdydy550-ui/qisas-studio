@@ -32,7 +32,27 @@ class MoviePyFxError(Exception):
 
 
 ARABIC_FONT = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf"
+# خط النظام — احتياط فقط (انظر arabic_font_path).
+SYSTEM_FONT = ARABIC_FONT
+# خط الشجرة المثبّت (جولة v0.1.52 — نمط next/font: استضافة ذاتية +
+# تقسيم فرعي): Noto Naskh Arabic Bold v2.021 من google/fonts، مقسّم
+# فرعيًا إلى حروف الكابشن — انظر docs/fonts.md.
+TREE_FONT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets", "fonts", "NotoNaskhArabic-Bold-subset.ttf")
 DEFAULT_SIZE = (720, 1280)
+
+
+def arabic_font_path():
+    """مسار خط الكابشن العربي: خط الشجرة المثبّت أولًا، وإن غاب
+    (شجرة قديمة بلا assets/fonts) رجوع لمسار خط النظام.
+
+    يرجع مسارًا موجودًا دائمًا إن وُجد أحدهما؛ وإن غاب الاثنان
+    يرجع مسار النظام (فيرفع render_arabic_text_image خطًا واضحًا).
+    """
+    if os.path.isfile(TREE_FONT):
+        return TREE_FONT
+    return SYSTEM_FONT
 
 
 def zoom_at(t, duration, zoom_to=1.15):
@@ -64,7 +84,7 @@ def crop_window(base_w, base_h, zoom, out_w=720, out_h=1280):
     return x0, y0, int(ww), int(wh)
 
 
-def render_arabic_text_image(text, fontsize=58, font_path=ARABIC_FONT,
+def render_arabic_text_image(text, fontsize=58, font_path=None,
                              color=(255, 255, 255, 255),
                              stroke_color=(0, 0, 0, 255), stroke_width=2,
                              max_width=660):
@@ -74,9 +94,12 @@ def render_arabic_text_image(text, fontsize=58, font_path=ARABIC_FONT,
     مشكولًا ومرتبًا بنفسه — لا إعادة تشكيل مسبق (تفكّها raqm).
     إن تجاوز النص العرض الأقصى صغّر الخط حتى يدخل فيه.
     يرجع صورة PIL؛ يرفع MoviePyFxError عند خط فارغ أو خط مفقود.
+    الخط الافتراضي: خط الشجرة المثبّت (arabic_font_path) مع رجوع
+    لمسار النظام عند غيابه — انظر docs/fonts.md.
     """
     if not text or not text.strip():
         raise MoviePyFxError("نص فارغ — لا يمكن رسم صورة نص")
+    font_path = font_path or arabic_font_path()
     if not os.path.isfile(font_path):
         raise MoviePyFxError("ملف الخط غير موجود: %s" % font_path)
     from PIL import Image, ImageDraw, ImageFont
@@ -145,7 +168,7 @@ def ken_burns_clip(image_path, duration, zoom_to=1.15,
 
 
 def animated_text_clip(text, duration, fontsize=58, position="bottom",
-                       font_path=ARABIC_FONT, fade=0.5):
+                       font_path=None, fade=0.5):
     """مقطع نص عربي متحرك (ظهور/اختفاء تدريجي) — أسفل الشاشة دائمًا.
 
     قاعدة دائمة 2026-11-22: لا نص أعلى الشاشة أبدًا — أي موضع

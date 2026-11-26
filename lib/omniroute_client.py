@@ -45,6 +45,21 @@ import urllib.error
 import urllib.request
 
 from lib import llm_state
+from lib import retry_policy as retry_lib
+
+
+# تصنيف خطأ LLM إلى صنف إعادة المحاولة: quota ← rate_limited،
+# وserver ← server، وnetwork ← transport، وauth/not_found ←
+# logical (لا إعادة محاولة أبدًا)، وunknown ← transport (يُعاد
+# كالسابق — خطأ غير مصنَّف لا يُفترض فيه أنه إعداد خاطئ).
+_LLM_KIND_TO_RETRY_KIND = {
+    "quota": "rate_limited",
+    "server": "server",
+    "network": "transport",
+    "auth": "logical",
+    "not_found": "logical",
+    "unknown": "transport",
+}
 
 
 class OmniRouteError(Exception):
@@ -417,13 +432,17 @@ def chat_ollama(prompt, model=OLLAMA_DEFAULT_MODEL,
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "ignore")[:400]
+        retry_lib.log_rate_limit("ollama", e.headers)
         if e.code == 404:
             raise OmniRouteError(
                 "الموديل %s غير موجود في Ollama — نزّله بـ: "
                 "ollama pull %s (%s)"
                 % (model, model, detail or "model not found"))
-        raise OmniRouteError("HTTP %s من Ollama: %s"
+        err = OmniRouteError("HTTP %s من Ollama: %s"
                              % (e.code, detail or "بلا تفاصيل"))
+        err.status_code = e.code
+        err.retry_after = retry_lib.parse_retry_after(e.headers)
+        raise err
     except urllib.error.URLError as e:
         raise OmniRouteError(
             "خادم Ollama غير متاح على %s — شغّله بـ: ollama "
@@ -470,13 +489,17 @@ def embed_ollama(text, model=OLLAMA_DEFAULT_EMBED_MODEL,
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "ignore")[:400]
+        retry_lib.log_rate_limit("ollama", e.headers)
         if e.code == 404:
             raise OmniRouteError(
                 "الموديل %s غير موجود في Ollama — نزّله بـ: "
                 "ollama pull %s (%s)"
                 % (model, model, detail or "model not found"))
-        raise OmniRouteError("HTTP %s من Ollama: %s"
+        err = OmniRouteError("HTTP %s من Ollama: %s"
                              % (e.code, detail or "بلا تفاصيل"))
+        err.status_code = e.code
+        err.retry_after = retry_lib.parse_retry_after(e.headers)
+        raise err
     except urllib.error.URLError as e:
         raise OmniRouteError(
             "خادم Ollama غير متاح على %s — شغّله بـ: ollama "
@@ -622,6 +645,14 @@ def _run_attempts(prompt, attempts, retries, retry_delay,
         raise OmniRouteError("لا يوجد مزود للتجربة")
     failures = []
     rotated_away = set()
+    # سياسة إعادة المحاولة الموحّدة (lib.retry_policy — جولة
+    # الأنماط W1): حدّ أقصى 5 محاولات إجمالًا، وتراجع أسّي مع
+    # jitter، واحترام Retry-After بسقف نوم قصير. retries هنا
+    # عدد مرات الإعادة بعد الأولى — فيُترجم إلى محاولات.
+    policy = retry_lib.RetryPolicy(
+        max_attempts=min(max(retries + 1, 1),
+                         retry_lib.MAX_ATTEMPTS_LIMIT),
+        base_delay=retry_delay)
     for att in attempts:
         provider = att["provider"]
         if provider in rotated_away:
@@ -630,17 +661,24 @@ def _run_attempts(prompt, attempts, retries, retry_delay,
             # المحاولة على النموذج نفسه بأي مسار.
             continue
         if state is not None:
-            cooling, remaining = llm_state.cooling_down(
-                state, provider)
-            if cooling:
-                note = ("في تهدئة (حصة) — متبقٍ %d ثانية"
-                        % remaining)
+            # فحص الحصة قبل الاستدعاء (جولة الأنماط W2):
+            # can_call يفحص التهدئة + حدود RPM/RPD/TPM/TPD
+            # لكل (مزود، موديل)؛ والموديل الذي تجاوز حدّه لا
+            # يُستدعَى أصلًا. est_tokens=0: تُفحص المكالمات
+            # فقط حتى يُمرَّر عدد الرموز من on_attempt لاحقًا.
+            allowed, reason, retry_after = llm_state.can_call(
+                state, provider, model=att.get("model"),
+                est_tokens=0)
+            if not allowed:
+                note = ("تجاوز الحصة (%s) — متبقٍ %d ثانية"
+                        % (reason, retry_after))
                 failures.append((provider, "quota", note))
                 continue
         got = None
         last_error = None
         last_kind = "unknown"
         rotate = bool(att.get("rotate_on_quota"))
+        started = time.monotonic()
         for attempt in range(retries + 1):
             try:
                 got = att["fn"]()
@@ -652,8 +690,22 @@ def _run_attempts(prompt, attempts, retries, retry_delay,
                     # 429 على نموذج مجاني: لا إعادة محاولة
                     # عليه — يُدوَّر فورًا إلى التالي.
                     break
-                if attempt < retries:
-                    time.sleep(retry_delay * (2 ** attempt))
+                retry_kind = _LLM_KIND_TO_RETRY_KIND.get(
+                    last_kind, "transport")
+                retry_after = getattr(e, "retry_after", None)
+                if retry_after is not None and \
+                        retry_after > policy.max_retry_after:
+                    # طلب انتظارًا طويلًا: لا تنم داخل الكرون —
+                    # سجّل الفشل وتابع للمزود التالي؛ والكرون
+                    # اللاحق يعيد الجدولة.
+                    break
+                if attempt >= retries or not policy.should_retry(
+                        retry_kind, attempt + 1,
+                        time.monotonic() - started, retry_after):
+                    # خطأ منطقي (401/403/404) أو استنفاد
+                    # المحاولات/الميزانية — لا إعادة محاولة.
+                    break
+                time.sleep(policy.delay_for(attempt, retry_after))
         if got is not None:
             if on_attempt is not None:
                 on_attempt(provider, True, None)
@@ -675,17 +727,32 @@ _SYSTEM_PROMPT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "prompts",
     "story_system.md")
 
+# الموجّه الإنجليزي الأصلي (الجولة v0.1.53 — الطلب 4، EN-05):
+# نفس بنية الخمس ضربات بالعربي لكن بصياغة إنجليزية أصلية،
+# لا ترجمة حرفية.
+_SYSTEM_PROMPT_PATH_EN = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "prompts",
+    "story_system_en.md")
 
-def load_system_prompt():
-    """حمّل موجّه النظام المشترك حرفيًا (جولة v0.1.37).
 
-    ملف واحد `lib/prompts/story_system.md` هو مصدر قواعد
-    الأسلوب لكل استدعاء LLM في المشروع — أي تعديل فيه
-    يسري على كل الأوامر دفعة واحدة. يرجع النص كما هو
-    (بلا تعديل) أو "" إن غاب الملف.
+def load_system_prompt(lang="ar"):
+    """حمّل موجّه النظام المشترك حرفيًا (جولة v0.1.37،
+    واعٍ باللغة من الجولة v0.1.53).
+
+    ملف واحد لكل لغة هو مصدر قواعد الأسلوب لكل استدعاء LLM
+    في المشروع — أي تعديل فيه يسري على كل الأوامر دفعة
+    واحدة. يرجع النص كما هو (بلا تعديل) أو "" إن غاب الملف.
+
+    lang: "ar" (افتراضيًا — العربي حرفيًا كما كان قبل
+    إضافة اللغة، فبلا وسيط لا يتغيّر شيء) أو "en" (الموجّه
+    الإنجليزي الأصلي)؛ ولغة غير معروفة ترجع للعربي.
     """
+    head = (lang or "").strip().lower()[:2] \
+        if isinstance(lang, str) else ""
+    path = _SYSTEM_PROMPT_PATH_EN if head == "en" \
+        else _SYSTEM_PROMPT_PATH
     try:
-        with open(_SYSTEM_PROMPT_PATH, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             return fh.read()
     except OSError:
         return ""
@@ -777,7 +844,11 @@ def chat_http(base_url, model, prompt, system=None, max_tokens=200,
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "ignore")[:400]
-        raise OmniRouteError("HTTP %s: %s" % (e.code, detail))
+        retry_lib.log_rate_limit("omniroute", e.headers)
+        err = OmniRouteError("HTTP %s: %s" % (e.code, detail))
+        err.status_code = e.code
+        err.retry_after = retry_lib.parse_retry_after(e.headers)
+        raise err
     except urllib.error.URLError as e:
         raise OmniRouteError("تعذر الوصول إلى %s: %s" % (base_url, e.reason))
     try:
@@ -910,8 +981,11 @@ def chat(prompt, model, fallback_model=None, base_url="http://localhost:20128",
     """يحاول CLI أولًا، ثم HTTP لو وُجد مفتاح، ثم الموديل البديل.
 
     كل محاولة تُعاد تلقائيًا `retries` مرة بفاصل انتظار متضاعف
-    (retry_delay ثم ضعفاه...) قبل الانتقال للمحاولة التالية، حتى
-    تتجاوز الانقطاعات العابرة بدل اللجوء فورًا للبديل.
+    مع jitter (lib.retry_policy) قبل الانتقال للمحاولة التالية،
+    حتى تتجاوز الانقطاعات العابرة بدل اللجوء فورًا للبديل.
+    أخطاء الإعداد (401/403/404) لا تُعاد أبدًا، وRetry-After
+    طويل لا يُنام داخل الكرون — يُسجَّل الفشل ويُعاد في كرون
+    لاحق.
     يرجع (النص، المسار المستخدم، الموديل المستخدم).
     يرفع LLMAllFailedError (عربي، فئة OmniRouteError) لو فشلت
     كل المحاولات مع تجميع رسائل الخطأ.

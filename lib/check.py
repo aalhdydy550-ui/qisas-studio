@@ -27,6 +27,13 @@
      يغطي نصًا. الكشف البكسلي إرشادي — انظر docstring في
      `qa_safe_area` للحدود.
 
+إضافة (جولة v0.1.55): مقروئية الكابشن — سرعة قراءة عبارات
+ملف ASS الشقيق (حرف/ثانية، عبر `lib.caption_readability`).
+معلومة تحذيرية فقط في التقرير (`caption_readability`)، ليست
+فحص PASS/FAIL سابعًا ولا تؤثر في `passed` أو كود الخروج
+أبدًا؛ والعبارة الوامضة (>17 حرف/ث) تُذكر بنصها وسرعتها.
+بلا ملف ASS شقيق يُتخطى الفحص بصمت.
+
 يُستخدم أيضًا كفحص مسبق افتراضي في `studio.py publish`
 (مع --skip-check للتجاوز).
 """
@@ -75,6 +82,45 @@ QA_EDGE_TOLERANCE_PX = 2   # لمس الحافة = مقصوص
 
 class CheckError(Exception):
     """خطأ في فحص الفيديو (رسالته عربية)."""
+
+
+# قالب نتائج الفحص (جولة الأنماط W8 — نمط semsec §4(3)):
+# كل فحص يحمل معرّفًا ثابتًا وخطورة ورسالة إصلاح — تُضاف
+# كحقول جديدة في run_checks دون تغيير أي حكم فحص قائم.
+# الاسم ← (المعرّف، رسالة الإصلاح عند الفشل).
+_CHECK_META = {
+    "المدة": ("CHK-DUR-001",
+              "أعد إنتاج الفيديو بمدة 40–60 ثانية (عمودي) أو 8–12 "
+              "دقيقة (طويل) ثم أعد الفحص."),
+    "الصمت عند الفواصل": ("CHK-SIL-002",
+                          "أعد دمج/توليد المقطع: أزل الصمت عند فاصل "
+                          "المشهد ثم أعد الفحص."),
+    "الصوت": ("CHK-AUD-003",
+              "أعد إنتاج الصوت بمستوى أعلى (أقصى ≥ -25 ديسيبل "
+              "ومتوسط ≥ -40 ديسيبل) أو أضف مسارًا صوتيًا ثم أعد "
+              "الفحص."),
+    "المقاس": ("CHK-SIZE-004",
+               "أعد الريندر بالمقاس الصحيح 720×1280 (عمودي) أو "
+               "1280×720 (طويل)."),
+    "شعار الصفحة": ("CHK-LOGO-005",
+                    "أعد الريندر مع شارة «قصص وعبر» الذهبية أعلى "
+                    "اليمين في كل الإطارات."),
+    QA_NAME: ("CHK-SAFE-006",
+              "انقل الكتابة إلى أسفل الشاشة داخل هوامش 5% وأبعدها "
+              "عن الشارة، أو صحّح هوامش ASS (MarginL/MarginR/"
+              "MarginV) ثم أعد الفحص."),
+}
+
+
+def _check_result(name, ok, detail):
+    """غلّف نتيجة فحص بالقالب: {"name", "ok", "detail",
+    "id", "severity", "fix"} — الفاشل خطورته high ومعه رسالة
+    إصلاح؛ والناجح خطورته info ولا إجراء عليه."""
+    fid, fix = _CHECK_META[name]
+    return {"name": name, "ok": ok, "detail": detail,
+            "id": fid,
+            "severity": "high" if not ok else "info",
+            "fix": fix if not ok else "لا إجراء مطلوب — الفحص ناجح."}
 
 
 def _run(cmd, timeout=300):
@@ -744,6 +790,45 @@ def _discover_ass(video_path):
     return cand if os.path.isfile(cand) else None
 
 
+def _readability_summary(report, formatted, ass_file):
+    """لخّص تقرير المقروئية في قاموس JSON (الشكل نفسه في studio.py)."""
+    def _short(phrase):
+        return {"text": phrase["text"], "start": phrase["start"],
+                "end": phrase["end"], "cps": round(phrase["cps"], 1)}
+    return {"ass_path": ass_file, "source": "ass",
+            "total": report["total"],
+            "flashing": [_short(p) for p in report["flashing"]],
+            "borderline": [_short(p) for p in report["borderline"]],
+            "max_cps": round(report["max_cps"], 1),
+            "median_cps": round(report["median_cps"], 1),
+            "report": formatted}
+
+
+def check_caption_readability(video_path, ass_path=None):
+    """مقروئية كابشن الفيديو من ملف ASS الشقيق (تحذير فقط).
+
+    يرجع ملخصًا قاموسيًا، أو None بلا ملف ASS. أي عطل (غياب
+    الوحدة، ملف ASS غير قابل للقراءة) يرجع ملخصًا بمفتاح
+    "error" بدل رفع استثناء — الفحص لا يفشل تقرير الجودة
+    أبدًا. الاستيراد كسول لأن الوحدة اختيارية.
+    """
+    ass_file = ass_path or _discover_ass(video_path)
+    if not ass_file:
+        return None
+    try:
+        from lib import caption_readability as readability_lib
+    except ImportError:
+        return {"ass_path": ass_file, "source": "ass",
+                "error": "وحدة فحص المقروئية غير متاحة"}
+    try:
+        report = readability_lib.analyze_ass_file(ass_file)
+    except (OSError, UnicodeDecodeError) as e:
+        return {"ass_path": ass_file, "source": "ass",
+                "error": "تعذّرت قراءة ملف ASS (%s)" % e}
+    return _readability_summary(
+        report, readability_lib.format_report(report), ass_file)
+
+
 def qa_safe_area(video_path, duration, width, height, ass_path=None):
     """فحص النص والمنطقة الآمنة على إطارات فعلية: (ناجح؟، تفصيل).
 
@@ -805,12 +890,17 @@ def run_checks(path, long_mode=False, ass_path=None):
     """شغّل كل فحوصات الجودة على فيديو. يرجع تقريرًا قاموسيًا.
 
     {"path", "long", "duration", "width", "height",
-     "checks": [{"name", "ok", "detail"}], "passed": bool}
+     "checks": [{"name", "ok", "detail", "id", "severity",
+                 "fix"}], "passed": bool,
+     "caption_readability": ملخص المقروئية أو None بلا ASS}
     long_mode يُستنتج تلقائيًا من المقاس الأفقي إن لم يُمرَّر.
     ass_path ملف ASS اختياري لفحص مواضع العبارات؛ وبلاه
     يُكتشف ملف بجانب الفيديو بنفس الاسم تلقائيًا.
     الفحوصات الأساسية 6 (المدة، الصمت، الصوت، المقاس،
-    الشعار، النص والمنطقة الآمنة).
+    الشعار، النص والمنطقة الآمنة) — كل منها بمعرّف ثابت
+    (CHK-…) وخطورة ورسالة إصلاح (جولة الأنماط W8).
+    مقروئية الكابشن معلومة تحذيرية خارج قائمة "checks" —
+    لا تؤثر في "passed" أبدًا.
     """
     # مسار مطلق: ملف اسمه يبدأ بشرطة (-test.mp4) كان يُفسَّر
     # كخيار من ffprobe/ffmpeg فيفشل الفحص (اختراق 2026-11-22).
@@ -823,21 +913,20 @@ def run_checks(path, long_mode=False, ass_path=None):
     checks = []
 
     ok, detail = eval_duration(duration, long_mode)
-    checks.append({"name": "المدة", "ok": ok, "detail": detail})
+    checks.append(_check_result("المدة", ok, detail))
 
     silences = detect_silences(path)
     ok, detail = eval_silences(silences, duration, long_mode)
-    checks.append({"name": "الصمت عند الفواصل", "ok": ok,
-                   "detail": detail})
+    checks.append(_check_result("الصمت عند الفواصل", ok, detail))
 
     mean_db, max_db = (None, None)
     if info["has_audio"]:
         mean_db, max_db = audio_levels(path)
     ok, detail = eval_audio(info["has_audio"], mean_db, max_db)
-    checks.append({"name": "الصوت", "ok": ok, "detail": detail})
+    checks.append(_check_result("الصوت", ok, detail))
 
     ok, detail = eval_size(width, height, long_mode)
-    checks.append({"name": "المقاس", "ok": ok, "detail": detail})
+    checks.append(_check_result("المقاس", ok, detail))
 
     with tempfile.TemporaryDirectory() as td:
         gold_counts = []
@@ -847,11 +936,15 @@ def run_checks(path, long_mode=False, ass_path=None):
             gold_counts.append(("%.1fث" % t,
                                 count_gold_pixels(frame, width)))
     ok, detail = eval_logo(gold_counts)
-    checks.append({"name": "شعار الصفحة", "ok": ok, "detail": detail})
+    checks.append(_check_result("شعار الصفحة", ok, detail))
 
     ok, detail = qa_safe_area(path, duration, width, height,
                               ass_path=ass_path)
-    checks.append({"name": QA_NAME, "ok": ok, "detail": detail})
+    checks.append(_check_result(QA_NAME, ok, detail))
+
+    # مقروئية الكابشن (جولة v0.1.55): تحذير + تقرير فقط — خارج
+    # قائمة الفحوصات، فلا تؤثر في "passed" أو كود الخروج أبدًا.
+    readability = check_caption_readability(path, ass_path=ass_path)
 
     return {"path": os.path.abspath(path),
             "long": long_mode,
@@ -859,11 +952,16 @@ def run_checks(path, long_mode=False, ass_path=None):
             "width": width,
             "height": height,
             "checks": checks,
-            "passed": all(c["ok"] for c in checks)}
+            "passed": all(c["ok"] for c in checks),
+            "caption_readability": readability}
 
 
 def format_report(result):
-    """نص عربي للتقرير: PASS/FAIL لكل فحص + خلاصة."""
+    """نص عربي للتقرير: PASS/FAIL لكل فحص + خلاصة.
+
+    الفحص الفاشل يُلحق به سطر «الإصلاح:» برسالته (W8) —
+    وسطور PASS/FAIL نفسها دون تغيير.
+    """
     lines = ["فحص جودة: %s" % result["path"],
              "المدة %.1f ثانية — %dx%d%s" % (
                  result["duration"], result["width"], result["height"],
@@ -872,7 +970,21 @@ def format_report(result):
     for c in result["checks"]:
         mark = "PASS" if c["ok"] else "FAIL"
         lines.append("[%s] %s — %s" % (mark, c["name"], c["detail"]))
+        if not c["ok"] and c.get("fix"):
+            lines.append("    الإصلاح: %s" % c["fix"])
     lines.append("")
+    # مقروئية الكابشن (جولة v0.1.55): معلومة تحذيرية فقط —
+    # العبارة الوامضة بنصها وسرعتها؛ ولا أثر لها في سطر النتيجة.
+    readability = result.get("caption_readability")
+    if readability is not None:
+        lines.append("مقروئية الكابشن (%s):"
+                     % readability.get("ass_path", ""))
+        if readability.get("error"):
+            lines.append("  تعذّر الفحص: %s" % readability["error"])
+        else:
+            for line in readability["report"].splitlines():
+                lines.append("  " + line)
+        lines.append("")
     failed = [c["name"] for c in result["checks"] if not c["ok"]]
     if not failed:
         lines.append("النتيجة: كل الفحوصات ناجحة — الفيديو جاهز للنشر")
