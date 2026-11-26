@@ -54,8 +54,12 @@ class TestRunResumeWiring(unittest.TestCase):
             self.assertEqual(script.call_count, 1)
             self.assertEqual(produce.call_count, 1)
             self.assertEqual(assemble.call_count, 1)
+            # سجل التشغيل البنيوي run-log-<id>.json (جولة الأنماط
+            # W5b) يعيش في المجلد نفسه لكنه ليس سجل تشغيل
+            # run_record — يُستثنى من العدّ هنا.
             records = [os.path.join(runs, f) for f in os.listdir(runs)
-                       if f.startswith("run-") and f.endswith(".json")]
+                       if f.startswith("run-") and f.endswith(".json")
+                       and not f.startswith("run-log-")]
             self.assertEqual(len(records), 1)
             rec = run_record.load_record(records[0])
             self.assertEqual(rec["status"], "done")

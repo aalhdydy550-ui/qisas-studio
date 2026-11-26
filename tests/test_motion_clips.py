@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -492,6 +493,181 @@ class TestExtractLastFrame(unittest.TestCase):
             self.assertEqual(result, out)
             self.assertTrue(os.path.isfile(out))
             self.assertGreater(os.path.getsize(out), 0)
+
+
+class TestCheckFirstFrameChain(unittest.TestCase):
+    """تدقيق سلسلة first_frame — فحص بيانات نقي بلا ملفات."""
+
+    def _manifest(self, spec):
+        """spec: {clip_id: [first_frame لكل توليد]} → مانيفست."""
+        clips, generations = {}, {}
+        for clip_id, firsts in spec.items():
+            gens = []
+            for i, ff in enumerate(firsts):
+                gen_id = "%s-%s" % (clip_id, "ab"[i])
+                gens.append(gen_id)
+                generations[gen_id] = {
+                    "clip_id": clip_id,
+                    "output_name": gen_id + ".mp4",
+                    "scene": "", "slice": "", "take": "ab"[i],
+                    "first_frame": ff}
+            clips[clip_id] = {"generations": gens,
+                              "duration_needed_s": None,
+                              "coverage_note": ""}
+        return {"generation_seconds": 5.04, "clips": clips,
+                "generations": generations}
+
+    def test_clean_chain_no_warnings(self):
+        manifest = self._manifest({"C1": ["img1.jpg"],
+                                   "C2": ["img2.jpg"],
+                                   "C3": ["img3.jpg"]})
+        self.assertEqual(
+            motion_clips.check_first_frame_chain(
+                manifest, ["C1", "C2", "C3"]), [])
+
+    def test_same_first_frame_across_consecutive_clips_warns(self):
+        # النمط القائم في المانيفست الحقيقي: مقطعان متتابعان من
+        # نفس الصورة الثابتة — ليس تمديدًا بالإطار الأخير.
+        manifest = self._manifest({"C1": ["img1.jpg"],
+                                   "C2": ["img1.jpg"]})
+        warnings = motion_clips.check_first_frame_chain(
+            manifest, ["C1", "C2"])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("C2", warnings[0])
+        self.assertIn("C1", warnings[0])
+        self.assertIn("الإطار الأخير", warnings[0])
+
+    def test_real_manifest_chapter1_pattern(self):
+        # فصل 1 الحقيقي: 9 مقاطع (C01–C09) كلها من
+        # images/long/img1-wide.jpg — 8 تحذيرات (زوج متتابع).
+        spec = {"C%02d" % n: ["images/long/img1-wide.jpg"]
+                for n in range(1, 10)}
+        manifest = self._manifest(spec)
+        warnings = motion_clips.check_first_frame_chain(
+            manifest, ["C%02d" % n for n in range(1, 10)])
+        self.assertEqual(len(warnings), 8)
+        self.assertTrue(all("الإطار الأخير" in w for w in warnings))
+
+    def test_missing_first_frame_warns(self):
+        manifest = self._manifest({"C1": [""],
+                                   "C2": ["img2.jpg"]})
+        warnings = motion_clips.check_first_frame_chain(
+            manifest, ["C1", "C2"])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("بلا first_frame", warnings[0])
+
+    def test_differing_first_frame_within_clip_warns(self):
+        # توليدا المقطع الواحد يجب أن يتشاركا first_frame نفسه.
+        manifest = self._manifest({"C1": ["img1.jpg", "img2.jpg"]})
+        warnings = motion_clips.check_first_frame_chain(
+            manifest, ["C1"])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("إطارات أولى مختلفة", warnings[0])
+
+    def test_unknown_clip_warns(self):
+        manifest = self._manifest({"C1": ["img1.jpg"]})
+        warnings = motion_clips.check_first_frame_chain(
+            manifest, ["C1", "C99"])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("غير موجود", warnings[0])
+
+    def test_empty_and_single_clip(self):
+        manifest = self._manifest({"C1": ["img1.jpg"]})
+        self.assertEqual(
+            motion_clips.check_first_frame_chain(manifest, []), [])
+        self.assertEqual(
+            motion_clips.check_first_frame_chain(manifest, ["C1"]),
+            [])
+
+
+class TestResolveNextFirstFrame(MotionClipsBase):
+    """بذرة التمديد: آخر إطار يُعرض من المقطع السابق."""
+
+    def _fake_extract(self, calls):
+        def fake(src, out):
+            calls.append(src)
+            with open(out, "wb") as f:
+                f.write(b"")
+            return out
+        return fake
+
+    def test_uses_b_when_b_is_played(self):
+        # L-C01 مدته 7.587ث → [a كاملًا، b بدايته] — آخر إطار
+        # يُعرض من b لا من a.
+        calls = []
+        with mock.patch.object(motion_clips, "extract_last_frame",
+                               self._fake_extract(calls)):
+            out = motion_clips.resolve_next_first_frame(
+                "L-C01", self.manifest, self.motion_dir)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].endswith("L-C01-b.mp4"))
+        self.assertEqual(out, os.path.join(
+            self.motion_dir, "L-C01-last-frame.jpg"))
+
+    def test_uses_a_when_b_not_played(self):
+        # L-C02 مدته 4.413ث ≤ 5.04ث — يُعرض a وحده.
+        calls = []
+        with mock.patch.object(motion_clips, "extract_last_frame",
+                               self._fake_extract(calls)):
+            out = motion_clips.resolve_next_first_frame(
+                "L-C02", self.manifest, self.motion_dir)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].endswith("L-C02-a.mp4"))
+        self.assertEqual(out, os.path.join(
+            self.motion_dir, "L-C02-last-frame.jpg"))
+
+    def test_freeze_tail_extracts_from_a(self):
+        # مدة 12ث → [a، b، freeze من a] — آخر إطار يُعرض هو
+        # آخر إطار في a (مصدر الـfreeze).
+        calls = []
+        with mock.patch.object(motion_clips, "extract_last_frame",
+                               self._fake_extract(calls)):
+            motion_clips.resolve_next_first_frame(
+                "L-C01", self.manifest, self.motion_dir,
+                duration_needed=12.0)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].endswith("L-C01-a.mp4"))
+
+    def test_explicit_out_path(self):
+        out = os.path.join(self.tmp.name, "seed.jpg")
+        calls = []
+        with mock.patch.object(motion_clips, "extract_last_frame",
+                               self._fake_extract(calls)):
+            result = motion_clips.resolve_next_first_frame(
+                "L-C02", self.manifest, self.motion_dir,
+                out_path=out)
+        self.assertEqual(result, out)
+        self.assertTrue(os.path.isfile(out))
+
+    def test_unknown_clip_raises(self):
+        with self.assertRaises(motion_clips.MotionError):
+            motion_clips.resolve_next_first_frame(
+                "L-C99", self.manifest, self.motion_dir)
+
+    def test_missing_a_raises(self):
+        os.remove(os.path.join(self.motion_dir, "L-C01-a.mp4"))
+        with self.assertRaises(motion_clips.MotionError):
+            motion_clips.resolve_next_first_frame(
+                "L-C01", self.manifest, self.motion_dir)
+
+    def test_real_extraction_from_b_when_ffmpeg_available(self):
+        if not shutil.which("ffmpeg"):
+            self.skipTest("ffmpeg غير متاح في بيئة الاختبار")
+        # فيديوهان حقيقيان بلونين مختلفين — يثبت الاستخراج
+        # الفعلي من b لا مجرد تخطيط المسار.
+        for name, color in (("L-C01-a.mp4", "red"),
+                            ("L-C01-b.mp4", "blue")):
+            subprocess.run(
+                ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                 "-i", "color=c=%s:size=320x240:rate=30:duration=2"
+                 % color,
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                 os.path.join(self.motion_dir, name)],
+                check=True, timeout=60)
+        out = motion_clips.resolve_next_first_frame(
+            "L-C01", self.manifest, self.motion_dir)
+        self.assertTrue(os.path.isfile(out))
+        self.assertGreater(os.path.getsize(out), 0)
 
 
 class TestRealManifest(unittest.TestCase):

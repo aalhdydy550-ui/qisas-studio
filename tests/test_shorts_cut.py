@@ -186,7 +186,7 @@ class TestCutShortsEndToEnd(unittest.TestCase):
         self.assertIn("فجأة طرق الباب", text)
         self.assertNotIn("عبارة لاحقة", text)
         # محاذاة 2 = أسفل الشاشة فقط (نمط whisper_captions).
-        self.assertIn(",2,40,40,60,1", text)
+        self.assertIn(",2,40,40,64,1", text)
 
     def test_silent_video_produces_no_shorts(self):
         silent = os.path.join(self.tmp, "silent.mp4")

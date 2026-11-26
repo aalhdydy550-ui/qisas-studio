@@ -345,5 +345,174 @@ class TestCheckDuration(unittest.TestCase):
                     video, sp.IG_REEL_MAX_DURATION, "Instagram")
 
 
+class TestReadOnlyClient(unittest.TestCase):
+    """جولة الأنماط W1: فصل القراءة عن النشر — عميل القراءة
+    يفشل بصوت عالٍ عند أي كتابة."""
+
+    def _fake_http(self, calls):
+        def fake(method, url, body=None, token=None, headers=None,
+                 timeout=300, **kw):
+            calls.append((method, url))
+            return {"status_code": "FINISHED"}
+        return fake
+
+    def test_get_allowed(self):
+        calls = []
+        client = sp.ReadOnlyClient(http_json=self._fake_http(calls),
+                                   token="tok-abcdef")
+        res = client.get("https://example.invalid/status")
+        self.assertEqual(res["status_code"], "FINISHED")
+        self.assertEqual(calls, [("GET",
+                                  "https://example.invalid/status")])
+
+    def test_post_refused_loudly(self):
+        client = sp.ReadOnlyClient(
+            http_json=self._fake_http([]), token="tok-abcdef")
+        with self.assertRaises(sp.SocialPublishError) as cm:
+            client.post("https://example.invalid/media", body={})
+        self.assertIn("لا ينشر", str(cm.exception))
+
+    def test_put_refused_loudly(self):
+        client = sp.ReadOnlyClient(
+            http_json=self._fake_http([]), token="tok-abcdef")
+        with self.assertRaises(sp.SocialPublishError) as cm:
+            client.put("https://example.invalid/up", body=b"x")
+        self.assertIn("لا ينشر", str(cm.exception))
+
+
+class TestPublishClientRetry(unittest.TestCase):
+    """جولة الأنماط W1: عميل النشر يعيد المحاولة عند 429،
+    ولا يعيد عند 400."""
+
+    def _err(self, code):
+        err = sp.SocialPublishError("فشل طلب POST (HTTP %d)" % code)
+        err.status_code = code
+        err.retry_after = None
+        return err
+
+    def test_retry_on_429_then_success(self):
+        from lib import retry_policy as rp
+        calls = []
+        outcomes = [self._err(429), self._err(429), {"id": "42"}]
+
+        def fake(method, url, body=None, token=None, headers=None,
+                 timeout=300, **kw):
+            calls.append((method, url))
+            item = outcomes[len(calls) - 1]
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        policy = rp.RetryPolicy(max_attempts=3, base_delay=0.0,
+                                jitter=False)
+        client = sp.PublishClient(http_json=fake, token="tok-abcdef",
+                                  policy=policy)
+        res = client.post("https://example.invalid/media", body={})
+        self.assertEqual(res, {"id": "42"})
+        self.assertEqual(len(calls), 3)
+
+    def test_no_retry_on_400(self):
+        from lib import retry_policy as rp
+        calls = []
+
+        def fake(method, url, body=None, token=None, headers=None,
+                 timeout=300, **kw):
+            calls.append((method, url))
+            raise self._err(400)
+
+        policy = rp.RetryPolicy(max_attempts=3, base_delay=0.0,
+                                jitter=False)
+        client = sp.PublishClient(http_json=fake, token="tok-abcdef",
+                                  policy=policy)
+        with self.assertRaises(sp.SocialPublishError):
+            client.post("https://example.invalid/media", body={})
+        self.assertEqual(len(calls), 1)
+
+
+class TestFacebookPreflight(unittest.TestCase):
+    """جولة الأنماط W1: فحص مبكر لصلاحية توكن فيسبوك قبل النشر."""
+
+    def _runner(self, returncode, stderr=""):
+        import types
+        def run(argv, timeout):
+            self.assertEqual(argv[1], "me")
+            return types.SimpleNamespace(returncode=returncode,
+                                         stdout="{}",
+                                         stderr=stderr)
+        return run
+
+    def test_valid_token_ok(self):
+        res = sp.facebook_token_preflight(
+            facebook_bin="/usr/bin/facebook-cli",
+            runner=self._runner(0))
+        self.assertTrue(res["ok"])
+
+    def test_invalid_token_raises_arabic(self):
+        with self.assertRaises(sp.SocialPublishError) as cm:
+            sp.facebook_token_preflight(
+                facebook_bin="/usr/bin/facebook-cli",
+                runner=self._runner(1, "OAuthException"))
+        self.assertIn("توكن فيسبوك", str(cm.exception))
+        self.assertIn("الهاتف", str(cm.exception))
+
+    def test_missing_binary_raises(self):
+        import shutil
+        real_which = shutil.which
+        real_isfile = os.path.isfile
+        shutil.which = lambda *a, **k: None
+        os.path.isfile = lambda *a, **k: False
+        try:
+            with self.assertRaises(sp.SocialPublishError) as cm:
+                sp.facebook_token_preflight(runner=self._runner(0))
+        finally:
+            shutil.which = real_which
+            os.path.isfile = real_isfile
+        self.assertIn("facebook-cli", str(cm.exception))
+
+
+class TestTokenFreshness(unittest.TestCase):
+    """جولة الأنماط W1: عمر التوكن المحفوظ — تحذير مبكر."""
+
+    def test_tiktok_token_older_than_a_day_is_stale(self):
+        import time
+        with tempfile.TemporaryDirectory() as td:
+            sp.save_token("tiktok", "test-token-abcdef",
+                          studio_dir=td)
+            path = sp.token_path("tiktok", studio_dir=td)
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            data["saved"] = "2026-11-20 10:00:00"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            now = time.mktime(time.strptime(
+                "2026-11-25 10:00:00", "%Y-%m-%d %H:%M:%S"))
+            info = sp.check_token_freshness("tiktok", studio_dir=td,
+                                            now=now)
+        self.assertTrue(info["stale"])
+        self.assertAlmostEqual(info["age_days"], 5.0)
+
+    def test_fresh_instagram_token_not_stale(self):
+        import time
+        with tempfile.TemporaryDirectory() as td:
+            sp.save_token("instagram", "test-token-abcdef",
+                          studio_dir=td)
+            path = sp.token_path("instagram", studio_dir=td)
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            data["saved"] = "2026-11-25 10:00:00"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            now = time.mktime(time.strptime(
+                "2026-11-25 12:00:00", "%Y-%m-%d %H:%M:%S"))
+            info = sp.check_token_freshness("instagram",
+                                            studio_dir=td, now=now)
+        self.assertFalse(info["stale"])
+
+    def test_missing_token_stale_is_none(self):
+        with tempfile.TemporaryDirectory() as td:
+            info = sp.check_token_freshness("tiktok", studio_dir=td)
+        self.assertIsNone(info["stale"])
+
+
 if __name__ == "__main__":
     unittest.main()

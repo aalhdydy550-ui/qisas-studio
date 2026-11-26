@@ -1620,13 +1620,15 @@ class TestMltStage(unittest.TestCase):
             self.assertEqual(profile.get("display_aspect_den"), den)
             # صندوق الهوك أسفل الشاشة فوق صندوق العبارات
             # (قاعدة دائمة 2026-11-22: لا نص أعلى أبدًا):
-            # x=0 وعرض الإطار كاملًا، وy=height-420 وارتفاع 150.
+            # (v0.1.62) متمركز بالهندسة المقاسة — عرضه 264
+            # ("هوك صادم" بخط 58) وx=(w-264)//2 — وy=height-420
+            # وارتفاع 150.
             hook = ET.fromstring(xml_text).find(
                 "tractor/filter[@id='filter-hook']")
             geometry = hook.find(
                 "property[@name='geometry']").text.split()
-            self.assertEqual(geometry, ["0", str(h - 420),
-                                        str(w), "150"])
+            self.assertEqual(geometry, [str((w - 264) // 2),
+                                        str(h - 420), "264", "150"])
 
 
 class TestEnsureEnvironment(unittest.TestCase):
@@ -1655,13 +1657,23 @@ class TestEnsureEnvironment(unittest.TestCase):
         run.assert_not_called()
 
     def test_missing_unit_file_triggers_restore_once(self):
-        run = self._run(
-            isfile=lambda p: p != studio._UNIT_FILE)
-        run.assert_called_once()
-        args, kwargs = run.call_args
+        # تحديث 2026-11-26 (إصلاح بطء بدء التشغيل: version استغرق
+        # 323ث): غياب ملف الخدمة وحده لم يعد يطلق الاسترداد المتزامن
+        # بمهلة 300ث — صار يطلقه في الخلفية (Popen) مرة واحدة بلا
+        # حظر، لأن خطوة 0 من setup-env.sh تعيد الملف من نسخة
+        # الـhome في ثوانٍ. التأكيد الجديد أشد: يثبت الخلفية
+        # وغياب المتزامن معًا.
+        with mock.patch.object(studio.subprocess, "Popen") as popen:
+            run = self._run(
+                isfile=lambda p: p != studio._UNIT_FILE)
+        run.assert_not_called()  # لا استرداد متزامن إطلاقًا
+        popen.assert_called_once()
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0][0], "/bin/bash")
         self.assertIn("setup-env.sh", args[0][-1])
         self.assertEqual(kwargs["env"].get("STUDIO_ENV_RESTORED"), "1")
-        self.assertEqual(kwargs["timeout"], 300)
+        self.assertTrue(kwargs.get("start_new_session"))
+        self.assertEqual(kwargs.get("stdout"), studio.subprocess.DEVNULL)
 
     def test_missing_tool_and_no_script_warns_only(self):
         run = self._run(which=lambda c: None,

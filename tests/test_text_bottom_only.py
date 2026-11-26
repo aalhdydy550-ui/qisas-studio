@@ -69,8 +69,10 @@ class TestBottomOnlyRule(unittest.TestCase):
         hook = root.find("tractor/filter[@id='filter-hook']")
         x, y, w, h = (int(v) for v in hook.find(
             "property[@name='geometry']").text.split())
-        # صندوق الهوك كاملًا في النصف السفلي وفوق صندوق العبارات.
-        self.assertEqual((x, w), (0, VIDEO["width"]))
+        # صندوق الهوك كاملًا في النصف السفلي وفوق صندوق العبارات؛
+        # و(v0.1.62) عرضه متمركز بالهندسة المقاسة (264) لا كامل
+        # العرض — halign يتجاهله MLT 7.22، وx + w/2 = مركز الإطار.
+        self.assertEqual((x, w), (228, 264))
         self.assertGreater(y, VIDEO["height"] // 2)
         self.assertEqual(h, 150)
         phrases = [f for f in root.findall("tractor/filter")
