@@ -11,6 +11,9 @@
 #   مكتوب في الملف أبدًا.
 # - رئيس واحد لكل فريق (chief: true).
 # - الأدوات بقائمتي allow/deny؛ وExclude يفوز دائمًا.
+# - cwd بـ ${STUDIO_HOME} (جذر الاستوديو — يضبطه أمر team
+#   تلقائيًا على مجلد studio.py نفسه إن لم يكن المتغير معرَّفًا)،
+#   لا بمسار مطلق لمضيف بعينه، فيعمل المثال على أي جهاز.
 teams:
   - name: qisas-crew
     description: سرب إنتاج قصص وعبر اليومي — تشخيص وتوليد ونشر.
@@ -30,7 +33,7 @@ bots:
     effort: low
     approval: ask
     computer: off
-    cwd: /home/hatch/workspace/studio
+    cwd: ${STUDIO_HOME}
     tools:
       allow:
         - native:read
@@ -50,7 +53,7 @@ bots:
     effort: medium
     approval: ask
     computer: local
-    cwd: /home/hatch/workspace/studio
+    cwd: ${STUDIO_HOME}
     tools:
       allow:
         - native:read
@@ -72,7 +75,7 @@ bots:
     effort: low
     approval: ask
     computer: off
-    cwd: /home/hatch/workspace/studio
+    cwd: ${STUDIO_HOME}
     tools:
       allow:
         - native:publish
