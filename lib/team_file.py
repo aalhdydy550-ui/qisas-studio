@@ -30,7 +30,12 @@
 - المفاتيح كمراجع سرّية فقط ``{env: NAME}`` أو ``{file: PATH}``
   — مفتاح مكتوب في الملف **مرفوض** (خروج 2 مع ذكر الموضع).
 - الحاسوب ``local|off`` فقط في v1 — أي قيمة أخرى مرفوضة.
-- ``cwd`` مسار كامل موجود (لا ``~``).
+- ``cwd`` مسار كامل موجود (لا ``~``)؛ ويُقبل فيه توسيع متغيرات
+  البيئة ``$VAR``/``${VAR}`` على نمط ``studio.expand`` (وأشهرها
+  ``${STUDIO_HOME}`` لجذر الاستوديو — يضبطه أمر ``team`` في
+  ``studio.py`` على مجلد الاستوديو نفسه إن لم يكن معرَّفًا)؛
+  والمسار بعد التوسيع يجب أن يكون كاملًا وموجودًا، ومتغير
+  بيئة غير معرَّف مرفوض.
 
 حقول البوت: ``name`` (1–100 حرفًا، فريد)، ``team``،
 ``title``، ``description``، ``chief: true`` (رئيس واحد لكل
@@ -308,6 +313,25 @@ def _validate_team(team, index, errors):
         errors.append("فريق %s: ‏prune‏ يجب أن تكون true أو false." % where)
 
 
+def _expand_cwd(cwd):
+    """وسّع متغيرات البيئة في ``cwd`` (``$VAR``/``${VAR}``).
+
+    على نمط ``studio.expand`` (``expandvars``) — لكن
+    ``expandvars`` يترك المتغير غير المعرَّف كما هو، فيُكشف
+    هنا صراحة. ترجع ``(المسار الموسَّع، اسم متغير غير معرَّف
+    أو None)``. القيمة المخزَّنة في الملف لا تتغيّر — التوسيع
+    للتحقق فقط، فيبقى الملف نفسه محمولًا بين الأجهزة.
+    """
+    expanded = os.path.expandvars(cwd)
+    match = re.search(
+        r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))",
+        expanded,
+    )
+    if match:
+        return expanded, match.group(1) or match.group(2)
+    return expanded, None
+
+
 def _validate_bot(bot, index, team_names, errors):
     where = "bots[%d]" % index
     if not isinstance(bot, dict):
@@ -391,6 +415,26 @@ def _validate_bot(bot, index, team_names, errors):
             errors.append(
                 "بوت %s: ‏cwd‏ لا يقبل «~» — اكتب المسار الكامل." % where
             )
+        elif "$" in cwd:
+            # توسيع متغيرات البيئة ($VAR/${VAR}) — المسار المطلق
+            # المكتوب لمضيف بعينه لا يعمل على جهاز آخر، فالمثال
+            # المشحون يستخدم ${STUDIO_HOME} (جذر الاستوديو).
+            expanded, missing = _expand_cwd(cwd)
+            if missing is not None:
+                errors.append(
+                    "بوت %s: ‏cwd‏ «%s» فيه متغير بيئة غير معرَّف "
+                    "«%s»." % (where, cwd, missing)
+                )
+            elif not os.path.isabs(expanded):
+                errors.append(
+                    "بوت %s: ‏cwd‏ «%s» ليس مسارًا كاملًا بعد التوسيع."
+                    % (where, cwd)
+                )
+            elif not os.path.exists(expanded):
+                errors.append(
+                    "بوت %s: ‏cwd‏ «%s» غير موجود على الخادم."
+                    % (where, cwd)
+                )
         elif not os.path.isabs(cwd):
             errors.append(
                 "بوت %s: ‏cwd‏ «%s» ليس مسارًا كاملًا." % (where, cwd)
