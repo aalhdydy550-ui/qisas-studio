@@ -253,7 +253,7 @@ def _print_translated(prefix, exc, context, lang="ar"):
     else:
         print(errors_lib.format_error(explained))
 
-VERSION = "0.1.62"
+VERSION = "0.1.63"
 # قيد ترخيص الصوت الإنجليزي (الموجة الأولى — W3، مقروء من بطاقة
 # الموديل en_US-ryan-medium: CC BY-NC-SA 4.0، انظر docs/voices.md):
 # يظهر حرفيًا في نص مساعدة --lang في أوامر run/long-video/
@@ -621,7 +621,18 @@ def _log_auto_script(script, reason):
         pass
 
 
-_READONLY_COMMANDS = ("version",)
+# أوامر الموجة ب (جولة v0.1.63) لا تحتاج استعادة البيئة ولا خادم
+# OmniRoute: أغلفة قراءة/إعداد خفيفة فوق وحدات lib/ — فتُعامل
+# كأوامر قراءة فقط هنا (تحذير فقط عند غياب أداة، بلا استرداد
+# متزامن وبلا تشغيل خادم).
+_NEW_COMMANDS = ("approval", "team", "routines", "check-back", "usage",
+                 "models", "round-pack", "handoffs", "keys", "sentinel",
+                 "control", "inspect", "read-log", "search-log",
+                 "send-work", "wait-job", "interrupt-job", "switch-model",
+                 "wait", "events", "brief", "workers", "export",
+                 "features", "triage", "recipe", "webhook", "setup",
+                 "router")
+_READONLY_COMMANDS = ("version",) + _NEW_COMMANDS
 
 
 def _ensure_environment(read_only=False):
@@ -2448,21 +2459,54 @@ def cmd_debug_config(profile=None, cli_overrides=None):
 
 
 def cmd_doctor(cfg, fix=False, accounts_flag=False, llm_flag=False,
-               lang="ar"):
-    """فحص بيئة studio (تقرير PASS/FAIL صادق). --fix ينشئ config.yaml.
+               lang="ar", as_json=False):
+    """فحص بيئة studio (تقرير PASS/FAIL صادق).
 
+    --fix يصلح ما يمكن (config.yaml من المثال + إنشاء مجلدي
+    الفيديو والتشغيل) ثم يعيد الفحص.
     --accounts يضيف قسمًا منفصلًا بعدّاده الخاص لفحوصات الحسابات
     (فيسبوك/يوتيوب/Veo/TikTok/Instagram — قراءة فقط).
     --llm يضيف قسمًا منفصلًا لفحوصات سلسلة LLM (بوابة
     OmniRoute + مساعد Gemini — قراءة فقط).
+    --json (ع20) يرجع وثيقة واحدة
+    {"ok", "problems", "warnings", "checks": [{id, status, message,
+    fix}]} (الأساسية + فحص الترخيص + فحوص المضيف) وخروج 7 عند
+    أي FAIL؛ ومع --fix تُضاف fixed/unfixed. أقسام --accounts
+    و--llm لا تدخل وثيقة JSON.
 
     (الجولة v0.1.41: سطرا الغلاف هنا مترجمان؛ وجسم تقرير
     lib/doctor.py يبقى عربيًا — خارج الحزمة.)
     """
     here = os.path.dirname(os.path.abspath(__file__))
-    if fix and doctor.ensure_config(here):
-        print(i18n_lib.t("doctor_config_created", lang))
-    checks = doctor.run_checks(cfg)
+    if as_json:
+        from lib import cli_output as _cli_output
+        out = _cli_output.Output(json_mode=True)
+        checks = doctor.run_checks(cfg)
+        fixed_names = []
+        unfixed_names = []
+        if fix:
+            fixed = doctor.apply_fixes(checks, cfg, studio_dir=here)
+            checks = fixed["checks"]
+            fixed_names = fixed["fixed"]
+            unfixed_names = fixed["unfixed"]
+        checks = checks + [license_lib.doctor_check()]
+        checks = checks + doctor.run_host_checks(cfg)
+        report = doctor.to_json_report(checks)
+        if fix:
+            report["fixed"] = fixed_names
+            report["unfixed"] = unfixed_names
+        out.result(report)
+        return 0 if report["ok"] else doctor.DOCTOR_FAIL_EXIT
+    if fix:
+        initial = doctor.run_checks(cfg)
+        fixed = doctor.apply_fixes(initial, cfg, studio_dir=here)
+        if fixed["fixed"]:
+            print("أُصلح: %s" % "، ".join(fixed["fixed"]))
+        if fixed["unfixed"]:
+            print("تعذّر إصلاح: %s" % "، ".join(fixed["unfixed"]))
+        checks = fixed["checks"]
+    else:
+        checks = doctor.run_checks(cfg)
     # فحص الترخيص (جولة v0.1.43): حالة التجربة/الرخصة — يرفع
     # عدّاد doctor الكلي إلى 28 (27 في run_checks + هذا الفحص).
     checks = checks + [license_lib.doctor_check()]
@@ -6697,6 +6741,1190 @@ COMMERCIAL_COMMANDS = frozenset((
     "reframe", "preview", "request", "quick",
 ))
 
+# ------------------------------------------- أوامر الموجة ب (جولة v0.1.63)
+# أغلفة رقيقة فوق وحدات الموجة أ — بلا منطق جديد هنا؛ المنطق في
+# lib/. كل أمر يرجع رمز خروج من ع1 ويطبع عبر lib/cli_output.py
+# عند --json (وثيقة JSON واحدة على stdout)، وسطورًا بشرية عربية
+# بلا --json. الاستيرادات كسولة داخل الدوال حيث أمكن.
+#
+# انحرافات موثقة عن الخطة (لا دالة لها في وحدات الموجة أ):
+# - حالة الفريق: لا تحميل/حفظ لها في lib/team_file.py، فيحفظها
+#   الأمر في runs/team-state.json (0600، كتابة ذرية).
+# - حدود الاستخدام: لا دالة حفظ في lib/usage_caps.py، فيكتب الأمر
+#   ~/.qisas-studio/usage-caps.json بنفسه (0600، كتابة ذرية).
+# - wait/wait-job: لا دالة انتظار في الوحدات، فالاستطلاع حلقة
+#   صغيرة هنا فوق get_job (بلا منطق قرار جديد).
+# - control: بلا معالج موصَّل، فيرجع run_control ملخص الفعل
+#   والهدف بعد التحقق منهما (لا ينفّذ فعلًا حقيقيًا).
+# - switch-model: لا حفظ للنموذج المختار في الوحدات، فالأمر
+#   يتحقق من المحرك وصحته فقط (بلا تغيير إعداد دائم).
+
+
+def _new_output(args):
+    """Output عقد CLI الموحّد من رايتي الجذر --json/--quiet."""
+    from lib import cli_output as _cli_output
+    return _cli_output.Output(
+        json_mode=bool(getattr(args, "json", False)),
+        quiet=bool(getattr(args, "quiet", False)))
+
+
+def _runs_dir_of(cfg):
+    """مجلد التشغيل runs/ من الإعداد."""
+    return expand(cfg["paths"]["runs_dir"])
+
+
+def _team_state_path(cfg):
+    """مسار ملف حالة الفريق المحفوظة (runs/team-state.json)."""
+    return os.path.join(_runs_dir_of(cfg), "team-state.json")
+
+
+def _load_team_state(cfg):
+    """اقرأ حالة الفريق المحفوظة؛ غيابها = حالة فارغة."""
+    from lib import team_file as _team_file
+    path = _team_state_path(cfg)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return _team_file.empty_state()
+    if not isinstance(data, dict):
+        return _team_file.empty_state()
+    data.setdefault("teams", {})
+    data.setdefault("bots", {})
+    return data
+
+
+def _save_team_state(cfg, state):
+    """احفظ حالة الفريق ذريًا بصلاحية 0600."""
+    path = _team_state_path(cfg)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+
+
+def _usage_caps_path():
+    """مسار ملف حدود الاستخدام (~/.qisas-studio/usage-caps.json)."""
+    return os.path.join(os.path.expanduser("~"), ".qisas-studio",
+                        "usage-caps.json")
+
+
+def _save_usage_caps(updates):
+    """احفظ تحديثات حدود الاستخدام ذريًا بصلاحية 0600.
+
+    قيمة 0 أو None تمسح الحد (بلا حد)؛ والباقي يُكتب كما هو.
+    يرجع محتوى الملف بعد الحفظ.
+    """
+    path = _usage_caps_path()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    for key, value in updates.items():
+        if value is None or value == 0:
+            raw.pop(key, None)
+        else:
+            raw[key] = value
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(raw, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+    return raw
+
+
+def _parse_feature_value(text):
+    """فسّر قيمة مفتاح مزايا نصية: true/false/عدد/نص."""
+    low = text.strip().lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    return text
+
+
+def _parse_recipe_step(text):
+    """فسّر خطوة وصفة بصيغة «الاسم: الأمر...» إلى قاموس."""
+    import shlex
+    if ":" not in text:
+        raise ValueError(
+            "صيغة الخطوة: «الاسم: الأمر...» (وصل: %s)" % text)
+    name, command = text.split(":", 1)
+    parts = shlex.split(command.strip())
+    if not name.strip() or not parts:
+        raise ValueError(
+            "الخطوة تحتاج اسمًا وأمرًا غير فارغين (وصل: %s)" % text)
+    return {"name": name.strip(), "command": parts}
+
+
+_JOB_TERMINAL = ("done", "failed", "skipped", "reused", "cancelled")
+
+# حالات المهمة (done/failed/...) ← حالات الانتظار
+# (completed/idle/...) التي يفهمها wait_outcome_for_state.
+_JOB_STATE_TO_WAIT_STATE = {
+    "done": "completed",
+    "failed": "failed",
+    "skipped": "idle",
+    "reused": "idle",
+    "cancelled": "failed",
+}
+
+
+def _wait_outcome(status):
+    """حوّل حالة مهمة منتهية إلى نتيجة انتظار (بند 19)."""
+    from lib import job_registry as _job_registry
+    wait_state = _JOB_STATE_TO_WAIT_STATE.get(status)
+    if wait_state is None:
+        return "timed-out"
+    return _job_registry.wait_outcome_for_state(wait_state)
+
+
+def _poll_job(cfg, job_id, timeout, poll_interval):
+    """استطلع مهمة حتى تنتهي أو تنتهي المهلة.
+
+    يرجع (المهمة أو None، انتهت؟). مهمة منتهية أصلًا ترجع فورًا.
+    """
+    from lib import job_registry as _job_registry
+    runs_dir = _runs_dir_of(cfg)
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    job = _job_registry.get_job(runs_dir, job_id)
+    while job is not None and job.get("status") not in _JOB_TERMINAL:
+        if time.monotonic() >= deadline:
+            return job, False
+        time.sleep(max(0.0, float(poll_interval)))
+        job = _job_registry.get_job(runs_dir, job_id)
+    return job, job is not None
+
+
+def cmd_approval(args, out):
+    """approval show|set — مستويات الموافقة الخمسة (ع3).
+
+    show يطبع المستوى والوضع والمنح؛ وset يضبط --level أو
+    --mode أو --custom (ACTION=DECISION). خروج 2 على مدخل باطل.
+    """
+    from lib import approval as _approval
+    if args.approval_cmd == "show":
+        state = _approval.show()
+        return _approval_show_result(state, out)
+    gate = _approval.ApprovalGate()
+    changed = []
+    try:
+        if getattr(args, "level", None):
+            gate.set_level(args.level)
+            changed.append("level=%s" % args.level)
+        if getattr(args, "mode", None):
+            gate.set_mode(args.mode)
+            changed.append("mode=%s" % args.mode)
+        for item in getattr(args, "custom", None) or []:
+            if "=" not in item:
+                return out.error(
+                    "صيغة custom غير صالحة: %s (الصيغة ACTION=DECISION)"
+                    % item,
+                    hint="مثال: --custom publish=ask",
+                    code=2)
+            action, decision = item.split("=", 1)
+            gate.set_custom_action(action.strip(), decision.strip())
+            changed.append("custom %s=%s"
+                           % (action.strip(), decision.strip()))
+    except _approval.ApprovalError as e:
+        return out.error(str(e), code=2)
+    if not changed:
+        return out.error("حدد ما يُضبط: --level أو --mode أو --custom",
+                         hint="مثال: approval set --level auto",
+                         code=2)
+    state = _approval.show()
+    state = dict(state)
+    state["changed"] = changed
+    out.result(state, human_lines=[
+        "مستوى الموافقة: %s" % state["level"],
+        "الوضع: %s" % state["mode"],
+        "ما تغيّر: %s" % "، ".join(changed),
+    ])
+    return 0
+
+
+def _approval_show_result(state, out):
+    """نتيجة موحدة لأمر approval show."""
+    out.result({"level": state["level"], "mode": state["mode"],
+                "custom": state["custom"], "grants": state["grants"]},
+               human_lines=[
+                   "مستوى الموافقة: %s" % state["level"],
+                   "الوضع: %s" % state["mode"],
+                   "منح دائمة/جلسة: %d" % len(state["grants"]),
+               ])
+    return 0
+
+
+def cmd_team(cfg, args, out):
+    """team apply|export|check — ملف الفريق الإعلاني (ع17).
+
+    apply يطبع الخطة ثم يطبّقها (--dry-run للخطة فقط، و--prune
+    للحذف في فرق prune: true)؛ وcheck خروج 6 إن كان شيء
+    سيتغيّر؛ وexport يطبع الحالة المحفوظة. إعادة التطبيق بلا
+    تغييرات تطبع `No changes.`.
+    """
+    from lib import team_file as _team_file
+    if args.team_cmd == "export":
+        state = _load_team_state(cfg)
+        data = _team_file.export_state(state)
+        lines = ["الفرق: %d — البوتات: %d"
+                 % (len(data["teams"]), len(data["bots"]))]
+        for team in data["teams"]:
+            lines.append("فريق: %s" % team.get("name"))
+        for bot in data["bots"]:
+            lines.append("بوت: %s (فريق %s)"
+                         % (bot.get("name"), bot.get("team")))
+        out.result(data, human_lines=lines)
+        return 0
+    try:
+        data = _team_file.load_team_file(expand(args.file))
+    except FileNotFoundError:
+        return out.error("ملف الفريق غير موجود: %s" % args.file,
+                         code=7)
+    except OSError as e:
+        return out.error("تعذر قراءة ملف الفريق: %s" % e, code=1)
+    except _team_file.TeamFileError as e:
+        return out.error(str(e), code=getattr(e, "exit_code", 2) or 2)
+    state = _load_team_state(cfg)
+    if args.team_cmd == "check":
+        try:
+            changed = _team_file.check(data, state)
+        except _team_file.TeamFileError as e:
+            return out.error(str(e), code=getattr(e, "exit_code", 2) or 2)
+        out.result({"changed": bool(changed)},
+                   human_lines=["سيتغيّر شيء عند التطبيق"
+                                if changed else "No changes."])
+        return 6 if changed else 0
+    try:
+        result = _team_file.apply(data, state, dry_run=args.dry_run,
+                                  prune=args.prune)
+    except _team_file.TeamFileError as e:
+        return out.error(str(e), code=getattr(e, "exit_code", 2) or 2)
+    except _team_file.TeamApplyError as e:
+        if getattr(e, "state", None) is not None:
+            _save_team_state(cfg, e.state)
+        return out.error(str(e),
+                         hint="أُنجز جزء من التطبيق — أعد التطبيق "
+                              "ليكمل من حيث توقف",
+                         code=1)
+    if not args.dry_run:
+        _save_team_state(cfg, result["state"])
+    applied = result.get("applied") or []
+    lines = [result.get("message") or ""]
+    for action in applied:
+        if isinstance(action, dict):
+            lines.append("- %s" % (action.get("detail")
+                                   or action.get("name") or "؟"))
+    out.result({"changed": bool(result.get("changed")),
+                "message": result.get("message"),
+                "applied": applied},
+               human_lines=lines)
+    return 0
+
+
+def cmd_routines(cfg, args, out):
+    """routines ledger|missed — سجل وقوعات الروتينات (ع4).
+
+    ledger يعرض سطور السجل (بفلترة اختيارية)؛ وmissed يلخّص
+    الوقوعات الفائتة وعددها المنهار.
+    """
+    from lib import schedule_watch as _schedule_watch
+    runs_dir = _runs_dir_of(cfg)
+    if args.routines_cmd == "ledger":
+        entries = _schedule_watch.read_ledger(
+            runs_dir, routine=args.routine, state=args.state,
+            limit=args.limit)
+        lines = ["%s — %s — %s — %s (×%s)"
+                 % (e.get("ts", "")[:19], e.get("routine"),
+                    e.get("state"), e.get("reason"),
+                    e.get("count") or 1)
+                 for e in entries] or ["لا وقوعات مسجلة بعد"]
+        out.result({"entries": entries, "count": len(entries)},
+                   human_lines=lines)
+        return 0
+    entries = _schedule_watch.read_ledger(
+        runs_dir, routine=args.routine, state="missed",
+        limit=args.limit)
+    collapsed = sum(int(e.get("count") or 1) for e in entries)
+    lines = ["الوقوعات الفائتة: %d صفًا (%d وقوعًا منهارًا)"
+             % (len(entries), collapsed)]
+    for e in entries:
+        lines.append("%s — %s — %s (×%s)"
+                     % (e.get("ts", "")[:19], e.get("routine"),
+                        e.get("reason"), e.get("count") or 1))
+    out.result({"entries": entries, "count": len(entries),
+                "collapsed": collapsed},
+               human_lines=lines)
+    return 0
+
+
+def cmd_check_back(cfg, args, out):
+    """check-back add|list|cancel — متابعة مؤجلة لمرة واحدة.
+
+    add يقبل --due بصيغة ISO أو --in-minutes؛ وlist يفلتر
+    بالتشغيل/العامل/الحالة؛ وcancel يلغي معلَّقًا (7 إن غاب).
+    """
+    from lib import check_back as _check_back
+    runs_dir = _runs_dir_of(cfg)
+    if args.check_back_cmd == "list":
+        try:
+            records = _check_back.list_check_backs(
+                runs_dir, run_id=args.run_id, worker=args.worker,
+                status=args.status)
+        except _check_back.CheckBackError as e:
+            return out.error(str(e), code=2)
+        pending = _check_back.count_pending(
+            runs_dir, run_id=args.run_id, worker=args.worker)
+        lines = ["%s — %s — %s — يستحق %s"
+                 % (r.get("id"), r.get("run_id"), r.get("status"),
+                    str(r.get("due") or "")[:19])
+                 for r in records] or ["لا check-backs مسجلة"]
+        out.result({"check_backs": records, "count": len(records),
+                    "pending": pending},
+                   human_lines=lines)
+        return 0
+    if args.check_back_cmd == "cancel":
+        record = _check_back.cancel_check_back(runs_dir, args.id)
+        if record is None:
+            return out.error("لا يوجد check-back بهذا المعرف: %s"
+                             % args.id,
+                             code=7)
+        out.result({"check_back": record},
+                   human_lines=["أُلغي check-back %s (الحالة: %s)"
+                                % (record.get("id"),
+                                   record.get("status"))])
+        return 0
+    due = args.due
+    if due is None and args.in_minutes is not None:
+        from datetime import datetime as _datetime
+        from datetime import timedelta as _timedelta
+        try:
+            from zoneinfo import ZoneInfo as _ZoneInfo
+            _cairo = _ZoneInfo("Africa/Cairo")
+        except Exception:
+            _cairo = None
+        now = _datetime.now(_cairo) if _cairo else _datetime.now()
+        due = now + _timedelta(minutes=args.in_minutes)
+    if due is None:
+        return out.error("حدد الموعد: --due بصيغة ISO أو --in-minutes",
+                         hint="مثال: --in-minutes 5",
+                         code=2)
+    try:
+        record = _check_back.add_check_back(
+            runs_dir, args.run_id, args.worker, due, note=args.note)
+    except _check_back.CheckBackError as e:
+        return out.error(str(e), code=2)
+    out.result({"check_back": record},
+               human_lines=["أُضيف check-back %s — يستحق %s"
+                            % (record.get("id"),
+                               str(record.get("due") or "")[:19])])
+    return 0
+
+
+def cmd_usage_caps(cfg, args, out):
+    """usage caps show|set — حدود الاستخدام (ع9).
+
+    show يعرض الحدود والمجاميع الجارية؛ وset يكتب حدًا واحدًا
+    أو أكثر (0 يمسح الحد). متغيرات البيئة QISAS_USAGE_CAP_*
+    تفوز على الملف عند العرض.
+    """
+    from lib import usage_caps as _usage_caps
+    if args.caps_cmd == "show":
+        caps = _usage_caps.load_caps(studio_root=STUDIO_DIR)
+        usage = _usage_caps.current_totals(studio_root=STUDIO_DIR)
+        lines = _usage_caps.format_caps(caps, usage).split("\n")
+        out.result({"caps": caps, "usage": usage},
+                   human_lines=lines)
+        return 0
+    updates = {}
+    for key, attr in (("dailyUsd", "daily_usd"),
+                      ("monthlyUsd", "monthly_usd"),
+                      ("dailyTokens", "daily_tokens"),
+                      ("monthlyTokens", "monthly_tokens")):
+        value = getattr(args, attr, None)
+        if value is not None:
+            updates[key] = value
+    if getattr(args, "stops", None):
+        updates["stops"] = args.stops
+    if not updates:
+        return out.error("حدد حدًا واحدًا على الأقل لضبطه",
+                         hint="مثال: usage caps set --daily-usd 5",
+                         code=2)
+    _save_usage_caps(updates)
+    caps = _usage_caps.load_caps(studio_root=STUDIO_DIR)
+    lines = _usage_caps.format_caps(caps).split("\n")
+    out.result({"caps": caps, "saved": updates},
+               human_lines=lines)
+    return 0
+
+
+def cmd_models(args, out):
+    """models list|health — سجل محركات النماذج (بند 9).
+
+    list يعرض المحركات المسجلة؛ وhealth يعرض صحة كل محرك
+    (محرك مجهول يتدهور إلى «غير متاح» ولا يرمي أبدًا).
+    """
+    from lib import model_driver as _model_driver
+    _model_driver.register_builtin_drivers()
+    if args.models_cmd == "list":
+        names = _model_driver.list_drivers()
+        health = _model_driver.driver_health_all()
+        lines = ["المحركات: %d" % len(names)]
+        for name in names:
+            info = health.get(name) or {}
+            lines.append("- %s: %s"
+                         % (name, "متاح" if info.get("available")
+                            else "غير متاح (%s)"
+                            % (info.get("reason") or "؟")))
+        out.result({"drivers": names, "health": health},
+                   human_lines=lines)
+        return 0
+    health = _model_driver.driver_health_all()
+    lines = []
+    for name in sorted(health):
+        info = health[name]
+        lines.append("- %s: %s"
+                     % (name, "متاح" if info.get("available")
+                        else "غير متاح (%s)"
+                        % (info.get("reason") or "؟")))
+    out.result({"health": health}, human_lines=lines or ["لا محركات"])
+    return 0
+
+
+def cmd_round_pack(cfg, args, out):
+    """round-pack export|import|review — حزم الجولات (ع15).
+
+    export يبني ملف .md واحدًا (أسراره منظفة ومعدودة)؛ وimport
+    يستورد بعد المراجعة (بلا استبدال إلا بـ--force)؛ وreview
+    يتحقق بلا كتابة (خروج 8 عند رفض الحزمة).
+    """
+    from lib import round_pack as _round_pack
+    if args.pack_cmd == "export":
+        try:
+            summary = _round_pack.export_pack(
+                expand(args.dir), args.files or [],
+                name=args.name, version=args.version or VERSION,
+                changes=args.change or [], tests=args.test or [],
+                out_path=expand(args.out))
+        except _round_pack.PackError as e:
+            return out.error(str(e), code=2)
+        out.result(summary, human_lines=[
+            "صُدّرت الحزمة: %s" % summary["path"],
+            "الملفات: %d — الحجم: %d بايت — أسرار نُظّفت: %d"
+            % (summary["files"], summary["total_bytes"],
+               summary["secrets_scrubbed"]),
+        ])
+        return 0
+    if args.pack_cmd == "import":
+        try:
+            summary = _round_pack.import_pack(
+                expand(args.pack), expand(args.dest),
+                allow_overwrite=args.force)
+        except _round_pack.PackError as e:
+            return out.error(str(e), code=2)
+        out.result(summary, human_lines=[
+            "استُوردت الحزمة «%s» (%s) إلى %s"
+            % (summary.get("pack"), summary.get("version"),
+               expand(args.dest)),
+            "الملفات: %s" % ", ".join(summary.get("files") or []),
+        ])
+        return 0
+    review = _round_pack.review_pack(expand(args.pack))
+    lines = list(review.get("summary_lines") or [])
+    for warning in review.get("warnings") or []:
+        lines.append("تحذير: %s" % warning)
+    for error in review.get("errors") or []:
+        lines.append("خطأ: %s" % error)
+    out.result(review, human_lines=lines)
+    return 0 if review.get("ok") else 8
+
+
+def cmd_handoffs(cfg, args, out):
+    """handoffs list — تسليمات المنسّق وحالاتها (ع4)."""
+    from lib import job_registry as _job_registry
+    try:
+        records = _job_registry.list_deliveries(
+            _runs_dir_of(cfg), state=args.state, limit=args.limit)
+    except _job_registry.JobRegistryError as e:
+        return out.error(str(e), code=2)
+    text = _job_registry.format_deliveries(records)
+    out.result({"deliveries": records, "count": len(records)},
+               human_lines=text.split("\n"))
+    return 0
+
+
+def cmd_keys(args, out):
+    """keys set|test|rotate|list — الأسرار كتابة فقط (ع12).
+
+    المفتاح عبر --token-file فقط — أبدًا --token على سطر
+    الأوامر (يُرفض برمز 2). set/test يجريان استدعاء اختبار
+    واحدًا؛ والمرفوض لا يُحفظ. list يعرض الأسماء والوجود
+    فقط — أبدًا القيم.
+    """
+    from lib import secret_guard as _secret_guard
+    if args.keys_cmd == "list":
+        try:
+            entries = _secret_guard.list_keys()
+        except _secret_guard.KeyStoreError as e:
+            return out.error(str(e), code=1)
+        lines = ["المفاتيح المحفوظة: %d" % len(entries)]
+        for entry in entries:
+            lines.append("- %s (%s): موجود"
+                         % (entry.get("name"),
+                            entry.get("provider") or "custom"))
+        out.result({"keys": entries, "count": len(entries)},
+                   human_lines=lines)
+        return 0
+    if getattr(args, "token", None) is not None:
+        return out.error(
+            "لا تمرّر المفتاح في سطر الأوامر أبدًا — ضعه في ملف "
+            "ومرّر مساره عبر --token-file",
+            hint="مثال: keys set --name gemini "
+                 "--token-file /tmp/token.txt",
+            code=2)
+    if args.keys_cmd == "test":
+        try:
+            value = _secret_guard.read_token_file(
+                expand(args.token_file))
+        except _secret_guard.KeyStoreError as e:
+            return out.error(str(e), code=2)
+        ok, message = _secret_guard.test_key(args.provider, value)
+        out.result({"provider": args.provider, "ok": bool(ok),
+                    "message": message},
+                   human_lines=[message])
+        return 0 if ok else 1
+    try:
+        value = _secret_guard.read_token_file(expand(args.token_file))
+    except _secret_guard.KeyStoreError as e:
+        return out.error(str(e), code=2)
+    try:
+        if args.keys_cmd == "set":
+            entry = _secret_guard.set_key(
+                args.name, value, provider=args.provider)
+        else:
+            entry = _secret_guard.rotate_key(args.name, value)
+    except _secret_guard.KeyTestError as e:
+        return out.error(str(e),
+                         hint="المفتاح الذي يرفضه المزوّد لا يُحفظ",
+                         code=1)
+    except _secret_guard.KeyStoreError as e:
+        return out.error(str(e), code=7)
+    except ValueError as e:
+        return out.error(str(e), code=2)
+    verb = "حُفظ المفتاح" if args.keys_cmd == "set" else "دُوّر المفتاح"
+    out.result({"key": entry},
+               human_lines=["%s «%s» (%s)"
+                            % (verb, entry.get("name"),
+                               entry.get("provider"))])
+    return 0
+
+
+def cmd_sentinel(cfg, args, out):
+    """sentinel — فاحص صحة يقرأ فقط ويجمّع الأعطال (ع14).
+
+    يقرأ runs/jobs.jsonl وسجلات التشغيل قراءة فقط، ويكتب
+    القضايا خارج مجلد البيانات. --out داخل البيانات أو git
+    مرفوض. خروج 0 دائمًا عند نجاح الفحص.
+    """
+    from lib import sentinel as _sentinel
+    data_dir = expand(args.data_dir) if args.data_dir else STUDIO_DIR
+    out_dir = expand(args.out) if args.out else None
+    try:
+        code, summary = _sentinel.run_sentinel(
+            data_dir, out_dir=out_dir,
+            json_mode=bool(getattr(args, "json", False)), once=True)
+    except _sentinel.SentinelError as e:
+        return out.error(str(e), code=2)
+    scanned = summary.get("scanned") or {}
+    out.result(summary, human_lines=[
+        "الفحص: %s" % ("تغيّرت المصادر" if summary.get("changed")
+                       else "لا تغيير في المصادر"),
+        "قضايا جديدة: %s — الإجمالي: %s"
+        % (summary.get("new_issues"), summary.get("total_issues")),
+        "فُحص: %s مهمة، %s سطر سجل"
+        % (scanned.get("jobs"), scanned.get("log_lines")),
+        "مجلد القضايا: %s" % summary.get("out_dir"),
+    ])
+    return code
+
+
+def cmd_control(cfg, args, out):
+    """control <verb> — سطح تحكم محدود (بند 17).
+
+    أفعال القراءة تعمل بلا هدف؛ وأفعال التعديل ترفض الهدف
+    الصامت (خروج 2)؛ وفعل مجهول مرفوض (خروج 2). بلا معالج
+    موصَّل يرجع الفعل ملخص الفعل والهدف بعد التحقق منهما.
+    """
+    from lib import control_fixture as _control_fixture
+    target = None
+    if getattr(args, "target", None):
+        target = _control_fixture.ControlTarget(
+            data_dir=_runs_dir_of(cfg), label=args.target)
+    try:
+        result = _control_fixture.run_control(args.verb, target=target)
+    except _control_fixture.ControlError as e:
+        return out.error(str(e), code=2)
+    if not isinstance(result, dict):
+        result = {"result": result}
+    lines = ["الفعل: %s" % result.get("verb", args.verb)]
+    if result.get("target"):
+        lines.append("الهدف: %s" % result["target"])
+    out.result(result, human_lines=lines)
+    return 0
+
+
+def cmd_inspect(cfg, args, out):
+    """inspect jobs|runs — قراءات محدودة (بند 19).
+
+    jobs يسرد مهام سجل التشغيل؛ وruns يسرد مجلدات التشغيل
+    في runs/.
+    """
+    from lib import job_registry as _job_registry
+    runs_dir = _runs_dir_of(cfg)
+    if args.inspect_cmd == "jobs":
+        try:
+            jobs = _job_registry.list_jobs(
+                runs_dir, status=args.status, limit=args.limit)
+        except _job_registry.JobRegistryError as e:
+            return out.error(str(e), code=2)
+        text = _job_registry.format_jobs(jobs)
+        out.result({"jobs": jobs, "count": len(jobs)},
+                   human_lines=text.split("\n"))
+        return 0
+    names = []
+    try:
+        for name in sorted(os.listdir(runs_dir)):
+            if os.path.isdir(os.path.join(runs_dir, name)):
+                names.append(name)
+    except OSError:
+        names = []
+    lines = ["مجلدات التشغيل في runs/: %d" % len(names)]
+    lines.extend("- %s" % name for name in names)
+    out.result({"runs": names, "count": len(names)},
+               human_lines=lines)
+    return 0
+
+
+def cmd_read_log(cfg, args, out):
+    """read-log — اقرأ آخر N مدخلًا من سجل (بند 19).
+
+    الحد الأقصى 200 مدخل. ملف غائب خروج 7.
+    """
+    from lib import log_reader as _log_reader
+    path = (expand(args.file) if args.file
+            else os.path.join(_runs_dir_of(cfg), "studio.log"))
+    try:
+        entries = _log_reader.read_log(path, limit=args.limit)
+    except _log_reader.LogReaderError as e:
+        message = str(e)
+        code = 7 if ("غير موجود" in message or "لا يوجد" in message) \
+            else 1
+        return out.error(message, code=code)
+    lines = [json.dumps(e, ensure_ascii=False) for e in entries]
+    out.result({"path": path, "entries": entries,
+                "count": len(entries)},
+               human_lines=lines or ["السجل فارغ"])
+    return 0
+
+
+def cmd_search_log(cfg, args, out):
+    """search-log — ابحث في سجل (أول 100 مطابقة، بند 19)."""
+    from lib import log_reader as _log_reader
+    path = (expand(args.file) if args.file
+            else os.path.join(_runs_dir_of(cfg), "studio.log"))
+    try:
+        matches = _log_reader.search_log(path, args.query,
+                                         limit=args.limit)
+    except _log_reader.LogReaderError as e:
+        message = str(e)
+        code = 7 if ("غير موجود" in message or "لا يوجد" in message) \
+            else 1
+        return out.error(message, code=code)
+    lines = [json.dumps(e, ensure_ascii=False) for e in matches]
+    out.result({"path": path, "query": args.query, "matches": matches,
+                "count": len(matches)},
+               human_lines=lines or ["لا مطابقات"])
+    return 0
+
+
+def cmd_send_work(cfg, args, out):
+    """send-work — سجّل تسليمًا جديدًا بحالة source (ع4/ع11).
+
+    المصدر تسمية ع11 إلزامية؛ والافتراضي مصدر سطر الأوامر.
+    """
+    from lib import job_registry as _job_registry
+    source = args.source or _job_registry.format_source(
+        "cli", "send-work", "direct")
+    try:
+        record = _job_registry.register_delivery(
+            _runs_dir_of(cfg), source, kind=args.kind,
+            title=args.title)
+    except _job_registry.JobRegistryError as e:
+        return out.error(str(e), code=2)
+    out.result({"delivery": record},
+               human_lines=["سُجّل التسليم %s بحالة %s"
+                            % (record.get("id"), record.get("state"))])
+    return 0
+
+
+def cmd_wait_job(cfg, args, out):
+    """wait-job — انتظر مهمة حتى تنتهي (بند 19).
+
+    النتيجة settled عند انتهاء المهمة، وtimed-out عند انتهاء
+    المهلة. خروج 0 عند done، و1 عند فشل/مهلة.
+    """
+    from lib import job_registry as _job_registry
+    job, settled = _poll_job(cfg, args.job_id, args.timeout, args.poll)
+    if job is None:
+        return out.error("لا توجد مهمة بهذا المعرف: %s" % args.job_id,
+                         code=7)
+    status = job.get("status")
+    if settled:
+        outcome = _wait_outcome(status)
+    else:
+        outcome = "timed-out"
+    out.result({"job_id": args.job_id, "status": status,
+                "outcome": outcome, "settled": bool(settled)},
+               human_lines=["المهمة %s: %s (الانتظار: %s)"
+                            % (args.job_id, status, outcome)])
+    return 0 if status == "done" else 1
+
+
+def cmd_interrupt_job(cfg, args, out):
+    """interrupt-job — قاطع مهمة وشجرتها المفوَّضة (بند 19).
+
+    مهمة غائبة خروج 7؛ ومهمة منتهية أصلًا ترجع بلا تغيير.
+    """
+    from lib import job_registry as _job_registry
+    runs_dir = _runs_dir_of(cfg)
+    if _job_registry.get_job(runs_dir, args.job_id) is None:
+        return out.error("لا توجد مهمة بهذا المعرف: %s" % args.job_id,
+                         code=7)
+    changed = _job_registry.interrupt_job(runs_dir, args.job_id)
+    out.result({"job_id": args.job_id, "changed": len(changed),
+                "jobs": changed},
+               human_lines=["قُوطعت المهمة %s — تغيّر %d سجلًا"
+                            % (args.job_id, len(changed))])
+    return 0
+
+
+def cmd_switch_model(args, out):
+    """switch-model — تحقق من محرك نموذج قبل التبديل (بند 9).
+
+    محرك مجهول خروج 7؛ ومحرك معروف غير متاح يُبلَّغ بلا فشل.
+    (لا حفظ دائم للنموذج المختار — لا دالة له في الموجة أ.)
+    """
+    from lib import model_driver as _model_driver
+    _model_driver.register_builtin_drivers()
+    driver = _model_driver.get_driver(args.model)
+    health = driver.health()
+    if (not health.get("available")
+            and health.get("reason") == "unknown_driver"):
+        return out.error("محرك غير معروف: %s" % args.model,
+                         hint="اعرض المحركات بـ: models list",
+                         code=7)
+    out.result({"model": args.model,
+                "available": bool(health.get("available")),
+                "health": health},
+               human_lines=["النموذج: %s — %s"
+                            % (args.model,
+                               "متاح" if health.get("available")
+                               else "غير متاح (%s)"
+                               % (health.get("reason") or "؟"))])
+    return 0
+
+
+def cmd_wait(cfg, args, out):
+    """wait — انتظر مهمة مع أحداثها (بند 19).
+
+    كـ wait-job لكنه يعيد أيضًا أحداث المهمة وعلامة
+    الاستئناف (resumed). خروج 0 عند settled، و1 عند غيره.
+    """
+    from lib import log_reader as _log_reader
+    runs_dir = _runs_dir_of(cfg)
+    job, settled = _poll_job(cfg, args.job_id, args.timeout, args.poll)
+    if job is None:
+        return out.error("لا توجد مهمة بهذا المعرف: %s" % args.job_id,
+                         code=7)
+    events = _log_reader.read_job_events(runs_dir, args.job_id,
+                                         limit=args.limit)
+    resumed = _log_reader.events_resumed(events)
+    if settled:
+        outcome = _wait_outcome(job.get("status"))
+    elif _log_reader.events_settled(events):
+        settled = True
+        outcome = "settled"
+    else:
+        outcome = "timed-out"
+    out.result({"job_id": args.job_id, "status": job.get("status"),
+                "outcome": outcome, "settled": bool(settled),
+                "resumed": resumed, "events": events},
+               human_lines=["المهمة %s: %s (الانتظار: %s)"
+                            % (args.job_id, job.get("status"), outcome)])
+    return 0 if outcome == "settled" else 1
+
+
+def cmd_events(cfg, args, out):
+    """events — اقرأ أحداث مهمة (بند 19).
+
+    آخر N حدثًا (افتراضي 200) + علامة الاستئناف من أول حدث.
+    مهمة بلا أحداث ترجع قائمة فارغة — بلا خطأ.
+    """
+    from lib import log_reader as _log_reader
+    runs_dir = _runs_dir_of(cfg)
+    events = _log_reader.read_job_events(runs_dir, args.job_id,
+                                         limit=args.limit)
+    resumed = _log_reader.events_resumed(events)
+    lines = [json.dumps(e, ensure_ascii=False) for e in events]
+    out.result({"job_id": args.job_id, "events": events,
+                "count": len(events), "resumed": resumed},
+               human_lines=lines or ["لا أحداث لهذه المهمة"])
+    return 0
+
+
+def cmd_brief(cfg, args, out):
+    """brief show|dismiss — الموجز اليومي (ع16).
+
+    show يعرض حالة الموجز (لا يُنشر موجز فارغ أبدًا)؛ وdismiss
+    يرفض صفًا — للمالك فقط (خروج 5 عند ملكية غيره، و7 عند
+    صف غائب).
+    """
+    from lib import daily_brief as _daily_brief
+    runs_dir = _runs_dir_of(cfg)
+    if args.brief_cmd == "show":
+        state = _daily_brief.load_state(runs_dir)
+        brief = _daily_brief.build_brief()
+        text = _daily_brief.render_brief(brief)
+        lines = text.split("\n")
+        lines.append("")
+        lines.append("ملف الموجز: %s"
+                     % (state.get("brief_file") or "لم يُسلَّم بعد"))
+        lines.append("المنطقة الزمنية: %s"
+                     % (state.get("timezone") or "Africa/Cairo"))
+        out.result({"empty": bool(_daily_brief.is_empty(brief)),
+                    "timezone": state.get("timezone"),
+                    "brief_file": state.get("brief_file"),
+                    "important_rows": state.get("important_rows") or [],
+                    "delivered": state.get("delivered") or {}},
+                   human_lines=lines)
+        return 0
+    state = _daily_brief.load_state(runs_dir)
+    rows = [{"id": row_id, "title": row_id, "body": ""}
+            for row_id in state.get("important_rows") or []]
+    brief = _daily_brief.build_brief(needs_you=rows)
+    try:
+        brief = _daily_brief.dismiss_row(
+            brief, args.row_id, owner=args.owner,
+            thread_owner=args.thread_owner)
+    except _daily_brief.BriefError as e:
+        message = str(e)
+        if "للمالك فقط" in message:
+            code = 5
+        elif "لا يوجد صف" in message:
+            code = 7
+        else:
+            code = 1
+        return out.error(message, code=code)
+    state["last_dismissals"] = list(brief.get("dismissed") or [])
+    _daily_brief.save_state(runs_dir, state)
+    out.result({"row_id": args.row_id,
+                "dismissed": brief.get("dismissed") or []},
+               human_lines=["رُفض الصف %s" % args.row_id])
+    return 0
+
+
+def cmd_workers(cfg, args, out):
+    """workers pause|resume|stop — إيقاف العمال (بند 28).
+
+    pause مجمّد قابل للاستئناف؛ وstop نهائي لا يُستأنف بعده
+    (خروج 1). --all يطبّق على كل عامل مسجل.
+    """
+    from lib import job_registry as _job_registry
+    runs_dir = _runs_dir_of(cfg)
+    actions = {"pause": _job_registry.pause_worker,
+               "resume": _job_registry.resume_worker,
+               "stop": _job_registry.stop_worker}
+    func = actions[args.workers_cmd]
+    if args.all:
+        workers = sorted(_job_registry.list_workers(runs_dir))
+    elif args.worker:
+        workers = [args.worker]
+    else:
+        return out.error("حدد عاملًا بـ --worker أو كل العمال بـ --all",
+                         hint="مثال: workers pause --worker doctor",
+                         code=2)
+    if not workers:
+        out.result({"workers": []},
+                   human_lines=["لا عمال مسجلون"])
+        return 0
+    results = []
+    try:
+        for worker in workers:
+            results.append(func(runs_dir, worker))
+    except _job_registry.JobRegistryError as e:
+        return out.error(str(e), code=1)
+    lines = ["%s: %s" % (r.get("worker"), r.get("state"))
+             for r in results]
+    out.result({"workers": results}, human_lines=lines)
+    return 0
+
+
+def cmd_export_job(cfg, args, out):
+    """export --job ID --out DIR — حزمة تشخيصية (بند 32).
+
+    manifest.json + job.json + نصوص (≤2000 رسالة لكلٍّ)،
+    أسرار منزوعة. مجلد غير فارغ مرفوض إلا بـ--force.
+    مهمة غائبة خروج 7.
+    """
+    from lib import diagnostic_export as _diagnostic_export
+    from lib import job_registry as _job_registry
+    runs_dir = _runs_dir_of(cfg)
+    job = _job_registry.get_job(runs_dir, args.job)
+    if job is None:
+        return out.error("لا توجد مهمة بهذا المعرف: %s" % args.job,
+                         code=7)
+    try:
+        manifest = _diagnostic_export.export_job(
+            job, expand(args.out), force=args.force)
+    except _diagnostic_export.ExportError as e:
+        return out.error(str(e), code=1)
+    out.result(manifest, human_lines=[
+        "صُدّرت حزمة المهمة %s إلى %s"
+        % (args.job, expand(args.out)),
+        "الملفات: %s — البايتات: %s"
+        % (manifest.get("total_files"), manifest.get("total_bytes")),
+    ])
+    return 0
+
+
+def cmd_features(args, out):
+    """features list|set — مفاتيح المزايا (ع7).
+
+    list يعرض المفاتيح المعروفة بقيمها الفعالة (الغائب مميز
+    عن false)؛ وset يدمج مفتاحًا واحدًا (true/false/عدد/نص).
+    """
+    from lib import features as _features
+    if args.features_cmd == "list":
+        values = _features.list_features()
+        lines = ["مفاتيح المزايا: %d" % len(values)]
+        for name in sorted(values):
+            lines.append("- %s: %s" % (name, values[name]))
+        out.result({"features": values}, human_lines=lines)
+        return 0
+    try:
+        effective = _features.set(args.name,
+                                  _parse_feature_value(args.value))
+    except _features.FeatureError as e:
+        return out.error(str(e), code=2)
+    out.result({"name": args.name, "value": effective},
+               human_lines=["المفتاح %s = %s" % (args.name, effective)])
+    return 0
+
+
+def cmd_triage(cfg, args, out):
+    """triage inbox — فرز تعليقات/رسائل الصفحة (بند 23).
+
+    يقرأ العناصر من ملف JSON (--file: قائمة {id, text}) أو
+    نص واحد (--text). عنصر يفشل فرزُه يُؤجَّل للفحص التالي
+    (status=deferred) — بلا فشل للأمر كله.
+    """
+    from lib import inbox_triage as _inbox_triage
+    items = []
+    if args.file:
+        try:
+            with open(expand(args.file), encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except FileNotFoundError:
+            return out.error("ملف العناصر غير موجود: %s" % args.file,
+                             code=7)
+        except (OSError, ValueError) as e:
+            return out.error("تعذر قراءة ملف العناصر: %s" % e, code=2)
+        if not isinstance(raw, list):
+            return out.error("ملف العناصر يجب أن يحوي قائمة",
+                             code=2)
+        items = raw
+    elif args.text:
+        items = [{"id": "cli-1", "text": args.text}]
+    else:
+        return out.error("مرّر عناصر الفرز: --file أو --text",
+                         hint="مثال: triage inbox --text «مرحبًا»",
+                         code=2)
+    for item in items:
+        if (not isinstance(item, dict)
+                or not isinstance(item.get("text"), str)):
+            return out.error("كل عنصر يحتاج {id, text} نصًا",
+                             code=2)
+    try:
+        results = _inbox_triage.triage(items)
+    except Exception as e:
+        return out.error("فشل الفرز: %s" % e, code=1)
+    deferred = sum(1 for r in results
+                   if r.get("status") == "deferred")
+    lines = ["فُرز %d عنصرًا — مؤجل: %d" % (len(results), deferred)]
+    for r in results:
+        lines.append("- %s: %s" % (r.get("id"),
+                                   r.get("status") or "؟"))
+    out.result({"items": results, "count": len(results),
+                "deferred": deferred},
+               human_lines=lines)
+    return 0
+
+
+def cmd_recipe(cfg, args, out):
+    """recipe save|run|list — وصفات خطوات متكررة (بند 30).
+
+    save يقبل --step مكررًا بصيغة «الاسم: الأمر...»؛ وrun
+    ينفّذ الخطوات بالترتيب بلا نموذج (--dry-run يسرد فقط)؛
+    وlist يسرد الوصفات المحفوظة.
+    """
+    from lib import recipes as _recipes
+    recipes_dir = (expand(args.dir) if getattr(args, "dir", None)
+                   else os.path.join(STUDIO_DIR, "recipes"))
+    if args.recipe_cmd == "list":
+        found = _recipes.list_recipes(recipes_dir)
+        lines = ["الوصفات: %d" % len(found)]
+        for recipe in found:
+            lines.append("- %s (%d خطوات)"
+                         % (recipe.get("name"), recipe.get("steps")))
+        out.result({"recipes": found, "count": len(found)},
+                   human_lines=lines)
+        return 0
+    if args.recipe_cmd == "save":
+        try:
+            steps = [_parse_recipe_step(s) for s in args.step or []]
+        except ValueError as e:
+            return out.error(str(e), code=2)
+        if not steps:
+            return out.error("الوصفة تحتاج خطوة واحدة على الأقل "
+                             "(--step «الاسم: الأمر...»)",
+                             code=2)
+        try:
+            path = _recipes.save_recipe(
+                recipes_dir, args.name, args.description or "",
+                steps, overwrite=args.force)
+        except _recipes.RecipeError as e:
+            return out.error(str(e), code=2)
+        out.result({"recipe": args.name, "path": path, "steps": steps},
+                   human_lines=["حُفظت الوصفة «%s» في %s"
+                                % (args.name, path)])
+        return 0
+    try:
+        report = _recipes.run_recipe(recipes_dir, args.name,
+                                     dry_run=args.dry_run)
+    except _recipes.RecipeError as e:
+        return out.error(str(e), code=7)
+    lines = ["الوصفة «%s»: %s" % (report.get("recipe"),
+                                   "نجحت" if report.get("ok")
+                                   else "فشلت")]
+    for step in report.get("steps") or []:
+        lines.append("- %s: %s" % (step.get("name"),
+                                   step.get("returncode")))
+    out.result(report, human_lines=lines)
+    return 0 if report.get("ok") else 1
+
+
+def cmd_webhook(cfg, args, out):
+    """webhook serve|token — مستقبل webhooks (ع18).
+
+    serve يرفض البدء ما لم تكن راية webhookReceiver=True
+    (خروج 5 + كيف تُفعَّل)؛ وtoken يصدر رمزًا يُعرض مرة
+    واحدة فقط (يُحفظ تجزئته لا نصه).
+    """
+    from lib import webhook_receiver as _webhook
+    if args.webhook_cmd == "token":
+        path = (expand(args.path) if getattr(args, "path", None)
+                else os.path.join(os.path.expanduser("~"),
+                                  ".qisas-studio",
+                                  "webhook-token.json"))
+        token = _webhook.issue_token(path)
+        # الرمز يُعرض مرة واحدة حرفيًا — يُطبع مباشرة بلا
+        # تنقيح (تنقيح المخرجات قد يقنّعه فيفسد نسخه).
+        if bool(getattr(args, "json", False)):
+            print(json.dumps(
+                {"ok": True, "token": token, "token_path": path,
+                 "note": "يُعرض مرة واحدة — احفظه الآن"},
+                ensure_ascii=False))
+        else:
+            print("رمز webhook (يُعرض مرة واحدة — احفظه الآن):")
+            print(token)
+            print("ملف التجزئة: %s" % path)
+        return 0
+    if not _webhook.is_enabled():
+        return out.error(_webhook.enable_hint(),
+                         hint="studio.py features set "
+                              "webhookReceiver true",
+                         code=5)
+    try:
+        receiver = _webhook.serve(host=args.host, port=args.port)
+    except _webhook.WebhookError as e:
+        return out.error(str(e), code=1)
+    except OSError as e:
+        import errno as _errno
+        code = 6 if e.errno == _errno.EADDRINUSE else 1
+        return out.error("تعذر تشغيل مستقبل webhooks: %s" % e,
+                         code=code)
+    if bool(getattr(args, "json", False)):
+        out.result({"listening": True, "host": args.host,
+                    "port": args.port})
+    else:
+        print("مستقبل webhooks يعمل على %s:%d — أوقف بـ Ctrl-C"
+              % (args.host, args.port))
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        receiver.stop()
+        return 130
+
+
+def cmd_setup(args, out):
+    """setup — إعداد أول تشغيل (بند 26).
+
+    يسجّل تاريخ أول تشغيل مرة واحدة؛ وإعادة التشغيل ترجع
+    التقرير نفسه بلا أي كتابة.
+    """
+    from lib import license as _license
+    report = _license.first_run_setup()
+    lines = _license.first_run_lines(report)
+    out.result(report, human_lines=lines)
+    return 0
+
+
+def cmd_router_test(args, out):
+    """router test — اختبار توجيه نموذج واحد (بند 5).
+
+    استدعاء اختبار واحد بلا مصنّف (decider) فيرجع الافتراضي
+    بسبب no_choice — ولا يرمي أبدًا ولا يتصل بالشبكة.
+    """
+    from lib import router as _router
+    result = _router.route(args.task, args.role or [], "",
+                           args.request or "", args.default)
+    out.result(result, human_lines=[
+        "النموذج: %s — الجهد: %s — المصدر: %s — %s"
+        % (result.get("model"), result.get("effort"),
+           result.get("source"), result.get("attribution")),
+        "السبب: %s" % (result.get("reason") or "—"),
+    ])
+    return 0
+
 
 def main():
     # ثنائية اللغة (الجولة v0.1.41): وصف المساعدة يتبع LANG
@@ -6731,6 +7959,14 @@ def main():
                     help="هذا التشغيل استخدام شخصي غير تجاري — يُعفى "
                          "من بوابة الترخيص التجاري (PolyForm "
                          "Noncommercial: الشخصي مجاني دائمًا)")
+    # الجولة v0.1.63 (ع2): رايتا الجذر --json و--quiet — تمرران
+    # إلى Output في كل الأوامر الجديدة (وثيقة JSON واحدة على
+    # stdout عند --json، وإسقاط التقدّم عند --quiet).
+    ap.add_argument("--json", action="store_true",
+                    help="اطبع نتيجة الأمر JSON واحدًا على stdout "
+                         "(بدل السطور البشرية العربية)")
+    ap.add_argument("--quiet", action="store_true",
+                    help="أسقط سطور التقدّم على stderr")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status", help="فحص حالة الطبقات الثلاث")
     sub.add_parser("version",
@@ -6747,6 +7983,13 @@ def main():
     p.add_argument("--llm", action="store_true",
                    help="أضف فحوصات سلسلة LLM: بوابة OmniRoute + "
                         "مساعد Gemini (قراءة فقط)")
+    # الجولة v0.1.63 (ع20): --json يرجع تقرير ع20 ورمز خروج 7
+    # عند أي FAIL. الافتراضي SUPPRESS حتى لا يمحو قيمة راية
+    # الجذر --json حين تُمرَّر قبل الأمر.
+    p.add_argument("--json", action="store_true",
+                   default=argparse.SUPPRESS,
+                   help="اطبع التقرير JSON: {ok, problems, warnings, "
+                        "checks:[{id, status, message, fix}]}")
     sub.add_parser("llm-status",
                    help="حالة مزودي الذكاء: السلسلة + التهدئة + "
                         "عدادات اليوم (قراءة فقط)")
@@ -7975,6 +9218,262 @@ def main():
     p.add_argument("--set", dest="set_balance", type=int, default=None,
                    help="اضبط الرصيد المسجَّل (وحدة) مع ختم وقت "
                         "التحديث بتوقيت القاهرة الآن")
+    # أوامر الموجة ب (جولة v0.1.63): أغلفة رقيقة فوق وحدات الموجة أ.
+    p = sub.add_parser("approval", help="مستويات الموافقة: عرض أو ضبط")
+    _sp = p.add_subparsers(dest="approval_cmd", required=True)
+    _sp.add_parser("show", help="اعرض مستوى الموافقة والوضع والمنح")
+    p = _sp.add_parser("set", help="اضبط مستوى الموافقة أو الوضع")
+    p.add_argument("--level",
+                   choices=["ask", "edits", "auto", "full", "custom"],
+                   help="مستوى الموافقة: ask أو edits أو auto أو full "
+                        "أو custom")
+    p.add_argument("--mode", choices=["normal", "read-and-draft"],
+                   help="وضع التشغيل: normal أو read-and-draft")
+    p.add_argument("--custom", action="append", default=[],
+                   metavar="ACTION=DECISION",
+                   help="قرار فعل في خريطة custom (يُكرَّر، مثال: "
+                        "--custom publish=ask)")
+    p = sub.add_parser("team", help="ملف الفريق الإعلاني: تطبيق/تصدير/فحص")
+    _sp = p.add_subparsers(dest="team_cmd", required=True)
+    p = _sp.add_parser("apply", help="اطبع الخطة ثم طبّق ملف فريق")
+    p.add_argument("file", help="ملف team.yaml")
+    p.add_argument("--dry-run", action="store_true",
+                   help="الخطة فقط بلا أي تغيير")
+    p.add_argument("--prune", action="store_true",
+                   help="احذف البوتات غير المذكورة في فرق prune: true")
+    p = _sp.add_parser("check", help="هل سيتغيّر شيء عند التطبيق؟ "
+                                     "(خروج 6 إن نعم)")
+    p.add_argument("file", help="ملف team.yaml")
+    _sp.add_parser("export", help="صدّر الحالة المحفوظة للفريق")
+    p = sub.add_parser("routines", help="سجل وقوعات الروتينات")
+    _sp = p.add_subparsers(dest="routines_cmd", required=True)
+    p = _sp.add_parser("ledger", help="اعرض سطور سجل الوقوعات")
+    p.add_argument("--routine", help="فلترة باسم روتين")
+    p.add_argument("--state",
+                   choices=["ran", "failed", "missed", "skipped",
+                            "queued", "running"],
+                   help="فلترة بحالة وقوع")
+    p.add_argument("--limit", type=int, default=50,
+                   help="أقصى سطور (الافتراضي: 50)")
+    p = _sp.add_parser("missed", help="لخّص الوقوعات الفائتة")
+    p.add_argument("--routine", help="فلترة باسم روتين")
+    p.add_argument("--limit", type=int, default=50,
+                   help="أقصى سطور (الافتراضي: 50)")
+    p = sub.add_parser("check-back", help="متابعة مؤجلة لمرة واحدة")
+    _sp = p.add_subparsers(dest="check_back_cmd", required=True)
+    p = _sp.add_parser("add", help="أضف check-back معلَّقًا")
+    p.add_argument("--run-id", required=True, help="معرّف التشغيل")
+    p.add_argument("--worker", required=True, help="اسم العامل")
+    p.add_argument("--due", help="موعد الاستحقاق بصيغة ISO")
+    p.add_argument("--in-minutes", type=int,
+                   help="الاستحقاق بعد N دقيقة من الآن")
+    p.add_argument("--note", help="ملاحظة قصيرة (≤500 حرف)")
+    p = _sp.add_parser("list", help="اسرد check-backs")
+    p.add_argument("--run-id", help="فلترة بمعرّف التشغيل")
+    p.add_argument("--worker", help="فلترة باسم العامل")
+    p.add_argument("--status",
+                   choices=["pending", "consumed", "cancelled"],
+                   help="فلترة بالحالة")
+    p = _sp.add_parser("cancel", help="ألغِ check-back معلَّقًا")
+    p.add_argument("--id", required=True, help="معرّف check-back")
+    p = sub.add_parser("usage", help="حدود الاستخدام")
+    _sp = p.add_subparsers(dest="usage_cmd", required=True)
+    _p = _sp.add_parser("caps", help="حدود الاستخدام: عرض أو ضبط")
+    _sp2 = _p.add_subparsers(dest="caps_cmd", required=True)
+    _sp2.add_parser("show", help="اعرض الحدود والمجاميع الجارية")
+    p = _sp2.add_parser("set", help="اضبط حدًا أو أكثر (0 يمسح الحد)")
+    p.add_argument("--daily-usd", type=float, help="حد الدولار اليومي")
+    p.add_argument("--monthly-usd", type=float, help="حد الدولار الشهري")
+    p.add_argument("--daily-tokens", type=int, help="حد الرموز اليومي")
+    p.add_argument("--monthly-tokens", type=int, help="حد الرموز الشهري")
+    p.add_argument("--stops", choices=["unattended", "everything"],
+                   help="ما يوقفه الحد: unattended أو everything")
+    p = sub.add_parser("models", help="محركات النماذج: قائمة أو صحة")
+    _sp = p.add_subparsers(dest="models_cmd", required=True)
+    _sp.add_parser("list", help="اسرد المحركات المسجلة")
+    _sp.add_parser("health", help="اعرض صحة كل محرك")
+    p = sub.add_parser("round-pack", help="حزم الجولات: تصدير/استيراد/مراجعة")
+    _sp = p.add_subparsers(dest="pack_cmd", required=True)
+    p = _sp.add_parser("export", help="صدّر حزمة جولة إلى ملف .md واحد")
+    p.add_argument("--dir", required=True, help="مجلد ملفات الحزمة")
+    p.add_argument("--file", action="append", default=[], dest="files",
+                   help="ملف نسبي في الحزمة (يُكرَّر)")
+    p.add_argument("--name", required=True, help="اسم الحزمة")
+    p.add_argument("--version", help="إصدار الحزمة (الافتراضي: إصدار studio)")
+    p.add_argument("--change", action="append", default=[],
+                   help="سطر تغيير (يُكرَّر)")
+    p.add_argument("--test", action="append", default=[],
+                   help="سطر اختبار (يُكرَّر)")
+    p.add_argument("--out", required=True, help="ملف الحزمة .md الناتج")
+    p = _sp.add_parser("import", help="استورد حزمة بعد مراجعتها")
+    p.add_argument("--pack", required=True, help="ملف الحزمة .md")
+    p.add_argument("--dest", required=True, help="مجلد الاستيراد")
+    p.add_argument("--force", action="store_true",
+                   help="اسمح باستبدال ملفات موجودة (مع نسخة .previous)")
+    p = _sp.add_parser("review", help="راجع حزمة بلا كتابة")
+    p.add_argument("--pack", required=True, help="ملف الحزمة .md")
+    p = sub.add_parser("handoffs", help="تسليمات المنسّق")
+    _sp = p.add_subparsers(dest="handoffs_cmd", required=True)
+    p = _sp.add_parser("list", help="اسرد التسليمات وحالاتها")
+    p.add_argument("--state",
+                   choices=["source", "queued", "running", "waiting",
+                            "resume", "completed", "failed", "cancelled"],
+                   help="فلترة بالحالة")
+    p.add_argument("--limit", type=int, default=20,
+                   help="أقصى تسليمات (الافتراضي: 20)")
+    p = sub.add_parser("keys", help="المفاتيح: كتابة فقط (ع12)")
+    _sp = p.add_subparsers(dest="keys_cmd", required=True)
+    p = _sp.add_parser("set", help="احفظ مفتاحًا بعد اختبار واحد")
+    p.add_argument("--name", required=True, help="اسم المفتاح")
+    p.add_argument("--provider", help="المزوّد (يُخمَّن من الصيغة إن غاب)")
+    p.add_argument("--token-file", required=True,
+                   help="ملف يحمل المفتاح (أبدًا --token)")
+    p.add_argument("--token", default=None,
+                   help="مرفوض دائمًا — استخدم --token-file")
+    p = _sp.add_parser("test", help="اختبر مفتاحًا بلا حفظه")
+    p.add_argument("--provider", required=True, help="المزوّد")
+    p.add_argument("--token-file", required=True,
+                   help="ملف يحمل المفتاح (أبدًا --token)")
+    p = _sp.add_parser("rotate", help="دوّر مفتاحًا محفوظًا")
+    p.add_argument("--name", required=True, help="اسم المفتاح")
+    p.add_argument("--token-file", required=True,
+                   help="ملف يحمل المفتاح الجديد (أبدًا --token)")
+    p.add_argument("--token", default=None,
+                   help="مرفوض دائمًا — استخدم --token-file")
+    _sp.add_parser("list", help="اسرد المفاتيح (أسماء ووجود فقط)")
+    p = sub.add_parser("sentinel", help="فاحص صحة يقرأ فقط (ع14)")
+    p.add_argument("--data-dir", help="مجلد البيانات المقروء "
+                                      "(الافتراضي: مجلد studio)")
+    p.add_argument("--out", help="مجلد كتابة القضايا (يرفض داخل "
+                                 "البيانات أو git)")
+    p.add_argument("--once", action="store_true",
+                   help="فحص واحد (السلوك الحالي دائمًا)")
+    p.add_argument("--json", action="store_true",
+                   default=argparse.SUPPRESS,
+                   help="اطبع الملخص JSON بدل السطور")
+    p = sub.add_parser("control", help="سطح تحكم محدود (بند 17)")
+    p.add_argument("verb", help="الفعل (قراءة أو تعديل)")
+    p.add_argument("--target", help="هدف صريح (إلزامي لأفعال التعديل)")
+    p = sub.add_parser("inspect", help="قراءات محدودة: مهام أو تشغيلات")
+    _sp = p.add_subparsers(dest="inspect_cmd", required=True)
+    p = _sp.add_parser("jobs", help="اسرد مهام سجل التشغيل")
+    p.add_argument("--status",
+                   choices=["running", "done", "failed", "skipped",
+                            "reused", "cancelled"],
+                   help="فلترة بالحالة")
+    p.add_argument("--limit", type=int, default=20,
+                   help="أقصى مهام (الافتراضي: 20)")
+    _sp.add_parser("runs", help="اسرد مجلدات التشغيل في runs/")
+    p = sub.add_parser("read-log", help="اقرأ آخر مدخلات سجل (≤200)")
+    p.add_argument("--file", help="ملف السجل (الافتراضي: runs/studio.log)")
+    p.add_argument("--limit", type=int, default=200,
+                   help="أقصى مدخلات (الافتراضي: 200)")
+    p = sub.add_parser("search-log", help="ابحث في سجل (≤100 مطابقة)")
+    p.add_argument("--file", help="ملف السجل (الافتراضي: runs/studio.log)")
+    p.add_argument("--query", required=True, help="عبارة البحث")
+    p.add_argument("--limit", type=int, default=100,
+                   help="أقصى مطابقات (الافتراضي: 100)")
+    p = sub.add_parser("send-work", help="سجّل تسليمًا جديدًا")
+    p.add_argument("--title", required=True, help="عنوان التسليم")
+    p.add_argument("--kind", default="run",
+                   choices=["run", "batch", "assemble", "schedule"],
+                   help="نوع التسليم (الافتراضي: run)")
+    p.add_argument("--source", help="تسمية مصدر ع11 "
+                                    "(الافتراضي: مصدر سطر الأوامر)")
+    p = sub.add_parser("wait-job", help="انتظر مهمة حتى تنتهي")
+    p.add_argument("--job-id", required=True, help="معرّف المهمة")
+    p.add_argument("--timeout", type=float, default=60,
+                   help="مهلة الانتظار بالثواني (الافتراضي: 60)")
+    p.add_argument("--poll", type=float, default=2,
+                   help="فاصل الاستطلاع بالثواني (الافتراضي: 2)")
+    p = sub.add_parser("interrupt-job", help="قاطع مهمة وشجرتها")
+    p.add_argument("--job-id", required=True, help="معرّف المهمة")
+    p = sub.add_parser("switch-model", help="تحقق من محرك نموذج قبل التبديل")
+    p.add_argument("--model", required=True, help="اسم المحرك/النموذج")
+    p = sub.add_parser("wait", help="انتظر مهمة مع أحداثها")
+    p.add_argument("--job-id", required=True, help="معرّف المهمة")
+    p.add_argument("--timeout", type=float, default=60,
+                   help="مهلة الانتظار بالثواني (الافتراضي: 60)")
+    p.add_argument("--poll", type=float, default=2,
+                   help="فاصل الاستطلاع بالثواني (الافتراضي: 2)")
+    p.add_argument("--limit", type=int, default=200,
+                   help="أقصى أحداث (الافتراضي: 200)")
+    p = sub.add_parser("events", help="اقرأ أحداث مهمة")
+    p.add_argument("--job-id", required=True, help="معرّف المهمة")
+    p.add_argument("--limit", type=int, default=200,
+                   help="أقصى أحداث (الافتراضي: 200)")
+    p = sub.add_parser("brief", help="الموجز اليومي: عرض أو رفض صف")
+    _sp = p.add_subparsers(dest="brief_cmd", required=True)
+    _sp.add_parser("show", help="اعرض حالة الموجز")
+    p = _sp.add_parser("dismiss", help="ارفض صفًا من الموجز (للمالك فقط)")
+    p.add_argument("--row-id", required=True, help="معرّف الصف")
+    p.add_argument("--owner", required=True, help="مالك الرفض")
+    p.add_argument("--thread-owner", required=True, help="مالك الخيط")
+    p = sub.add_parser("workers", help="إيقاف العمال: pause/resume/stop")
+    _sp = p.add_subparsers(dest="workers_cmd", required=True)
+    for _verb in ("pause", "resume", "stop"):
+        p = _sp.add_parser(_verb, help="عامل: %s" % _verb)
+        p.add_argument("--worker", help="اسم العامل")
+        p.add_argument("--all", action="store_true",
+                       help="طبّق على كل عامل مسجل")
+    p = sub.add_parser("export", help="صدّر حزمة تشخيصية لمهمة")
+    p.add_argument("--job", required=True, help="معرّف المهمة")
+    p.add_argument("--out", required=True, help="مجلد الحزمة الناتج")
+    p.add_argument("--force", action="store_true",
+                   help="اسمح بمجلد غير فارغ (يحذف فقط ما في manifest)")
+    p = sub.add_parser("features", help="مفاتيح المزايا: قائمة أو ضبط")
+    _sp = p.add_subparsers(dest="features_cmd", required=True)
+    _sp.add_parser("list", help="اسرد المفاتيح المعروفة وقيمها")
+    p = _sp.add_parser("set", help="اضبط مفتاحًا واحدًا (دمج لا استبدال)")
+    p.add_argument("--name", required=True, help="اسم المفتاح")
+    p.add_argument("--value", required=True,
+                   help="القيمة: true/false/عدد/نص")
+    p = sub.add_parser("triage", help="فرز تعليقات/رسائل الصفحة")
+    _sp = p.add_subparsers(dest="triage_cmd", required=True)
+    p = _sp.add_parser("inbox", help="افرز عناصر بريد/تعليقات")
+    p.add_argument("--file", help="ملف JSON بقائمة {id, text}")
+    p.add_argument("--text", help="نص عنصر واحد للفرز")
+    p = sub.add_parser("recipe", help="وصفات خطوات متكررة")
+    p.add_argument("--dir", help="مجلد الوصفات "
+                                 "(الافتراضي: recipes/ في studio)")
+    _sp = p.add_subparsers(dest="recipe_cmd", required=True)
+    p = _sp.add_parser("save", help="احفظ وصفة جديدة")
+    p.add_argument("--dir", default=argparse.SUPPRESS,
+                   help="مجلد الوصفات (الافتراضي: recipes/ في studio)")
+    p.add_argument("--name", required=True, help="اسم الوصفة")
+    p.add_argument("--description", default="", help="وصف الوصفة")
+    p.add_argument("--step", action="append", default=[],
+                   help="خطوة بصيغة «الاسم: الأمر...» (تُكرَّر)")
+    p.add_argument("--force", action="store_true",
+                   help="اكتب فوق وصفة موجودة بالاسم نفسه")
+    p = _sp.add_parser("run", help="نفّذ وصفة بالترتيب بلا نموذج")
+    p.add_argument("--dir", default=argparse.SUPPRESS,
+                   help="مجلد الوصفات (الافتراضي: recipes/ في studio)")
+    p.add_argument("--name", required=True, help="اسم الوصفة")
+    p.add_argument("--dry-run", action="store_true",
+                   help="اسرد الخطوات المخططة بلا تنفيذ")
+    p = _sp.add_parser("list", help="اسرد الوصفات المحفوظة")
+    p.add_argument("--dir", default=argparse.SUPPRESS,
+                   help="مجلد الوصفات (الافتراضي: recipes/ في studio)")
+    p = sub.add_parser("webhook", help="مستقبل webhooks (مطفأ افتراضيًا)")
+    _sp = p.add_subparsers(dest="webhook_cmd", required=True)
+    p = _sp.add_parser("serve", help="شغّل المستقبل على 127.0.0.1:8800")
+    p.add_argument("--host", default="127.0.0.1", help="المضيف")
+    p.add_argument("--port", type=int, default=8800, help="المنفذ")
+    p = _sp.add_parser("token", help="أصدر رمزًا (يُعرض مرة واحدة)")
+    p.add_argument("--path", help="مسار ملف التجزئة "
+                                  "(الافتراضي: ~/.qisas-studio/"
+                                  "webhook-token.json)")
+    sub.add_parser("setup", help="إعداد أول تشغيل (مرة واحدة)")
+    p = sub.add_parser("router", help="موجّه النماذج")
+    _sp = p.add_subparsers(dest="router_cmd", required=True)
+    p = _sp.add_parser("test", help="اختبار توجيه واحد (يرجع الافتراضي)")
+    p.add_argument("--task", default="اختبار توجيه", help="المهمة")
+    p.add_argument("--request", default="", help="الطلب")
+    p.add_argument("--default", default="gemini/gemini-3-flash-preview",
+                   help="النموذج الافتراضي عند الفشل المفتوح")
+    p.add_argument("--role", action="append", default=[],
+                   help="دور/نموذج معروض (يُكرَّر)")
     args = ap.parse_args()
     cfg = load_config()
     # لغة CLI (الجولة v0.1.41): --lang أولًا، ثم LANG/LANGUAGE،
@@ -8064,7 +9563,68 @@ def main():
 
     if args.cmd == "doctor":
         return cmd_doctor(cfg, fix=args.fix, accounts_flag=args.accounts,
-                          llm_flag=args.llm, lang=lang)
+                          llm_flag=args.llm, lang=lang,
+                          as_json=bool(getattr(args, "json", False)))
+    # أوامر الموجة ب (جولة v0.1.63) — أغلفة رقيقة فوق وحدات الموجة أ.
+    _out = _new_output(args)
+    if args.cmd == "approval":
+        return cmd_approval(args, _out)
+    if args.cmd == "team":
+        return cmd_team(cfg, args, _out)
+    if args.cmd == "routines":
+        return cmd_routines(cfg, args, _out)
+    if args.cmd == "check-back":
+        return cmd_check_back(cfg, args, _out)
+    if args.cmd == "usage":
+        return cmd_usage_caps(cfg, args, _out)
+    if args.cmd == "models":
+        return cmd_models(args, _out)
+    if args.cmd == "round-pack":
+        return cmd_round_pack(cfg, args, _out)
+    if args.cmd == "handoffs":
+        return cmd_handoffs(cfg, args, _out)
+    if args.cmd == "keys":
+        return cmd_keys(args, _out)
+    if args.cmd == "sentinel":
+        return cmd_sentinel(cfg, args, _out)
+    if args.cmd == "control":
+        return cmd_control(cfg, args, _out)
+    if args.cmd == "inspect":
+        return cmd_inspect(cfg, args, _out)
+    if args.cmd == "read-log":
+        return cmd_read_log(cfg, args, _out)
+    if args.cmd == "search-log":
+        return cmd_search_log(cfg, args, _out)
+    if args.cmd == "send-work":
+        return cmd_send_work(cfg, args, _out)
+    if args.cmd == "wait-job":
+        return cmd_wait_job(cfg, args, _out)
+    if args.cmd == "interrupt-job":
+        return cmd_interrupt_job(cfg, args, _out)
+    if args.cmd == "switch-model":
+        return cmd_switch_model(args, _out)
+    if args.cmd == "wait":
+        return cmd_wait(cfg, args, _out)
+    if args.cmd == "events":
+        return cmd_events(cfg, args, _out)
+    if args.cmd == "brief":
+        return cmd_brief(cfg, args, _out)
+    if args.cmd == "workers":
+        return cmd_workers(cfg, args, _out)
+    if args.cmd == "export":
+        return cmd_export_job(cfg, args, _out)
+    if args.cmd == "features":
+        return cmd_features(args, _out)
+    if args.cmd == "triage":
+        return cmd_triage(cfg, args, _out)
+    if args.cmd == "recipe":
+        return cmd_recipe(cfg, args, _out)
+    if args.cmd == "webhook":
+        return cmd_webhook(cfg, args, _out)
+    if args.cmd == "setup":
+        return cmd_setup(args, _out)
+    if args.cmd == "router":
+        return cmd_router_test(args, _out)
     if args.cmd == "llm-status":
         return cmd_llm_status(cfg, lang=lang)
     if args.cmd == "debug-config":
@@ -8508,9 +10068,24 @@ def main():
                 expand(args.out) if args.out else None,
                 run_fn=_request_run_fn(cfg), project=args.project,
                 dry_run=args.dry_run, allow_fallback=args.allow_fallback)
+        except request_flow.UsageCapError as e:
+            # قرار موثّق (عقد ع1): لا رمز خروج 429/409 في ع1؛
+            # فالرفع يرجع 1 (فشل) مع طباعة الحالة (429/409)
+            # والرمز spend_cap ومهلة إعادة الضبط ليقرأها
+            # السكربت — و4 مرفوض لأنه يعني في ع1 «يحتاج تسجيل
+            # دخول/مهلة» لا «بُلغ حد إنفاق».
+            print(str(e))
+            print("الحالة: %s — الرمز: %s%s"
+                  % (e.status, e.code,
+                     (" — إعادة الضبط بعد %s ثانية" % e.retry_after)
+                     if e.retry_after is not None else ""))
+            return 1
         except request_flow.RequestFlowError as e:
             print(str(e))
-            return 1
+            code = getattr(e, "exit_code", 1)
+            if code not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 130):
+                code = 1
+            return code
         except ValueError as e:
             print(str(e))
             return 2

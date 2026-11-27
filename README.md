@@ -436,14 +436,15 @@ does not change the license: personal use stays free.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) — latest: **0.1.62 (2026-11-26)**:
-Fix round: `assemble --no-title` skips the hook-title burn on
-Concat videos (the manifest records no burned title, so a later
-`hook-title` is allowed); the hook guard's refusal now names the
-CLI flag `--force` instead of Python's `force=True`; and MLT text
-geometry is fixed for real — `halign` is ignored entirely by MLT
-7.22 and height alone never centers, so hook lines, captions and
-the default hook are now centered by PIL-measured geometry (hook
-box height 58 → 150, fixing the clipping). 17 new tests,
-including 5 rendered (pixel-measured) geometry tests. Full test
-suite **3406/3406**, `doctor` 28/28.
+See [CHANGELOG.md](CHANGELOG.md) — latest: **0.1.63 (2026-11-27)**:
+Multi-agent coordination from OpenMausBot patterns (from-scratch
+implementation, no copied code; enterprise features excluded):
+five approval levels with a safety floor, `team.yaml` rosters,
+a unified CLI contract (`--json`/`--quiet`, exit codes 0–8/130),
+`doctor --json` (exit 7 on FAIL) and `--fix`, a fail-open model
+router, usage caps (429/409 `spend_cap`), a typed-error driver
+registry, routines ledger + check-back, a budgeted memory store,
+Sentinel + control fixture + diagnostic export, round packs,
+recipes, a daily brief, write-only keys, and ~25 new command
+groups — all times Africa/Cairo, webhooks disabled by default.
+Full test suite **4081/4081**, `doctor` 28/28.
