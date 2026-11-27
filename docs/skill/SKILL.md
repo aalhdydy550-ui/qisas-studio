@@ -335,7 +335,7 @@ python3 studio.py failure-drill --all --json
 python3 studio.py approval show
 # مستويات الموافقة الخمسة (ask/edits/auto/full/custom)؛ والافتراضي ask؛ وأرضية أمان ترفض دائمًا: حذف منشور/إنفاق مال/تغيير مفاتيح/حذف ملفات مشروع — حتى تحت full
 python3 studio.py team apply --dry-run
-# ملف team.yaml: فرق وبوتات (نموذج INSTANCE/MODEL، جهد، موافقة، حاسوب local|off، أدوات allow/deny، أسرار {env|file} فقط) — وcheck خروج 6 عند تغيير معلّق، وإعادة التطبيق تطبع No changes.
+# ملف team.yaml: فرق وبوتات (نموذج INSTANCE/MODEL، جهد، موافقة، حاسوب local|off، أدوات allow/deny، أسرار {env|file} فقط) — وcheck خروج 6 عند تغيير معلّق، وإعادة التطبيق تطبع No changes. و`cwd` يقبل توسيع متغيرات البيئة `$VAR`/`${VAR}` — وأشهرها `${STUDIO_HOME}` لجذر الاستوديو (يضبطه أمر `team` تلقائيًا إن لم يكن معرَّفًا) — والمسار بعد التوسيع يجب أن يكون كاملًا وموجودًا.
 python3 studio.py doctor --json
 # تقرير JSON {ok, problems, warnings, checks:[{id,status,message,fix}]} — وخروج 7 عند أي FAIL؛ و--fix يصلح ما يمكن ثم يعيد الفحص؛ وفحوص مضيف (شبكة/قرص/melt/piper)
 python3 studio.py usage caps show
