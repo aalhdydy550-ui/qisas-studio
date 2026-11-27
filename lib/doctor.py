@@ -350,7 +350,9 @@ def run_checks(cfg=None):
         _lib_check("PIL", "Pillow (خلفيات التجربة)",
                    fix="pip install --user pillow"),
         _font_check(),
-        _file_check(p["logo_badge"], "شارة شعار «قصص وعبر»"),
+        _file_check(p["logo_badge"], "شارة شعار «قصص وعبر»",
+                    fix="تأكد من وجود الشارة في assets/"
+                        "qisas-logo-badge.png"),
         _file_check(p["config"], "ملف config.yaml", level="warn",
                     fix="cp config.example.yaml config.yaml"),
         _writable_dir_check(p["videos_dir"], "مجلد الفيديو (قابل للكتابة)"),
@@ -365,7 +367,9 @@ def run_checks(cfg=None):
                     level="warn",
                     fix="استنسخ Concat واستخرج AppImage"),
         _file_check(p["ensure_env"], "حارس البيئة ensure-env.sh",
-                    level="warn"),
+                    level="warn",
+                    fix="استنسخ سكربت ensure-env.sh أو تجاهل الفحص "
+                        "إن لم تستخدمه"),
         _file_check(p["youtube_venv"], "بيئة YouTube ‏(.venv-youtube)",
                     level="warn",
                     fix="شغّل setup.sh لإنشائها (أو تجاهلها إن لم تنشر "
@@ -516,3 +520,215 @@ def format_report(checks):
     else:
         lines.append("النتيجة: كل الفحوصات سليمة — النظام جاهز")
     return "\n".join(lines), errors, warnings
+
+# ------------------------------------------------------------------
+# مخرجات JSON + فحوص مضيف + وضع --fix (جولة v0.1.63، عقدا ع2 وع20)
+#
+# - `--json` يرجع `{"ok", "problems", "warnings", "checks":
+#   [{"id", "status", "message", "fix"}]}`؛ وخروج 7 عند أي FAIL
+#   (فحص بمستوى error فاشل)؛ وكل فحص FAIL يحمل `fix` غير فارغ
+#   (يُملأ بإصلاح افتراضي إن غاب من الفحص نفسه).
+# - `--fix` يصلح ما يمكن (config.yaml من المثال + إنشاء
+#   مجلدي الفيديو والتشغيل) ثم يعيد الفحص.
+# - فحوص المضيف (شبكة، مساحة قرص، أدوات خارجية melt/piper)
+#   بنفس صيغة سطور الفحوصات الأساسية — قسم مستقل لا يغيّر
+#   عدد الفحوصات الأساسية (27 في run_checks + فحص الترخيص
+#   = 28 في `studio.py doctor`).
+# ------------------------------------------------------------------
+
+# رمز خروج doctor عند أي FAIL (ع20 — وهو رمز ع1 رقم 7).
+DOCTOR_FAIL_EXIT = 7
+
+# إصلاح افتراضي يُملأ به أي فحص FAIL بلا `fix` في مصدره.
+_DEFAULT_FIX = "أصلح السبب ثم أعد `python3 studio.py doctor`"
+
+# عنوان فحص الشبكة (طلب خفيف بمهلة قصيرة — تحذير فقط).
+_HOST_NETWORK_URL = "https://pypi.org"
+
+# مجلدات قابلة للإصلاح عبر --fix: الاسم ← مفتاح cfg.paths.
+_FIXABLE_DIRS = {
+    "مجلد الفيديو (قابل للكتابة)": "videos_dir",
+    "مجلد التشغيل (قابل للكتابة)": "runs_dir",
+}
+
+
+def _check_id(name, index, used):
+    """معرّف ثابت للفحص من اسمه (slug): حروف/أرقام فقط،
+    والباقي `-`؛ وإن فرغ الاسم أو تكرر المعرّف يُستخدم
+    `check-NN` مع لاحقة تمييز."""
+    slug = "".join(ch if ch.isalnum() else "-"
+                   for ch in (name or "").lower())
+    slug = "-".join(part for part in slug.split("-") if part)
+    if not slug:
+        slug = "check-%02d" % (index + 1)
+    base, n = slug, 2
+    while slug in used:
+        slug = "%s-%d" % (base, n)
+        n += 1
+    used.add(slug)
+    return slug
+
+
+def _status_of(check):
+    """حالة JSON للفحص: pass إن ناجح، وfail إن فاشل بمستوى
+    error، وwarn إن فاشل بمستوى warn (أو أي مستوى آخر)."""
+    if check.get("ok"):
+        return "pass"
+    if check.get("level") == "error":
+        return "fail"
+    return "warn"
+
+
+def to_json_report(checks):
+    """حوّل قائمة فحوصات (صيغة run_checks) إلى تقرير JSON
+    بالشكل المتفق عليه: `{"ok", "problems", "warnings",
+    "checks": [{"id", "status", "message", "fix"}]}`.
+
+    `ok` صحيحة إن لم يكن أي FAIL (تحذيرات فقط لا تُسقطها)؛
+    و`problems` عدد FAIL و`warnings` عدد التحذيرات.
+    دالة نقية — لا تقرأ القرص ولا الشبكة.
+    """
+    entries = []
+    problems = warnings = 0
+    used = set()
+    for i, check in enumerate(checks or []):
+        status = _status_of(check)
+        if status == "fail":
+            problems += 1
+        elif status == "warn":
+            warnings += 1
+        fix = (check.get("fix") or "").strip()
+        if status != "pass" and not fix:
+            fix = _DEFAULT_FIX
+        entries.append({
+            "id": _check_id(check.get("name", ""), i, used),
+            "status": status,
+            "message": "%s — %s" % (check.get("name", ""),
+                                    check.get("detail", "")),
+            "fix": fix,
+        })
+    return {"ok": problems == 0,
+            "problems": problems,
+            "warnings": warnings,
+            "checks": entries}
+
+
+def json_exit_code(checks):
+    """رمز خروج doctor لقائمة فحوصات: 0 إن لم يكن أي FAIL،
+    و7 (DOCTOR_FAIL_EXIT) عند أي FAIL."""
+    return 0 if to_json_report(checks)["ok"] else DOCTOR_FAIL_EXIT
+
+
+def _network_check(urlopen=None, timeout=5):
+    """فحص الشبكة: طلب خفيف إلى pypi.org بمهلة قصيرة.
+
+    تحذير فقط عند الفشل (الشبكة ليست أساسية للتجربة
+    المحلية). `urlopen` للحقن في الاختبارات.
+    """
+    name = "الشبكة (اتصال إنترنت)"
+    opener = urlopen or urllib.request.urlopen
+    try:
+        with opener(_HOST_NETWORK_URL, timeout=timeout) as resp:
+            ok = 200 <= resp.status < 500
+    except Exception:
+        ok = False
+    return {"name": name, "ok": ok, "level": "warn",
+            "detail": "يعمل" if ok else "غير متاح (مهلة %dث)" % timeout,
+            "fix": "" if ok else "تحقق من اتصال الشبكة ثم أعد "
+                                 "`python3 studio.py doctor`"}
+
+
+def _disk_space_check(path=None, min_free_gb=1.0):
+    """فحص مساحة القرص: مساحة حرة ≥ `min_free_gb` في `path`
+    (الافتراضي مجلد الاستوديو). تحذير فقط عند الضيق."""
+    path = os.path.expanduser(str(path or STUDIO_DIR))
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError as e:
+        return {"name": "مساحة القرص", "ok": False, "level": "warn",
+                "detail": "تعذر قراءة مساحة القرص في %s (%s)"
+                          % (path, e),
+                "fix": "تأكد من وجود المسار %s ثم أعد الفحص" % path}
+    free_gb = usage.free / (1024 ** 3)
+    ok = free_gb >= min_free_gb
+    return {"name": "مساحة القرص", "ok": ok, "level": "warn",
+            "detail": "مساحة حرة %.1f غيغابايت في %s"
+                      % (free_gb, path),
+            "fix": "" if ok else "حرّر مساحة على القرص (احذف مخرجات "
+                                 "قديمة من runs/ أو videos/)"}
+
+
+def run_host_checks(cfg=None, disk_path=None, min_free_gb=1.0,
+                    urlopen=None, network_timeout=5):
+    """فحوص المضيف فقط (قسم مستقل بصيغة السطور نفسها):
+    شبكة، مساحة قرص، وأدوات خارجية melt/piper.
+
+    `disk_path` و`urlopen` و`network_timeout` للحقن في
+    الاختبارات (بلا شبكة حقيقية وبلا قرص حقيقي).
+    """
+    cfg = cfg or {}
+    disk = disk_path
+    if disk is None:
+        disk = (cfg.get("paths") or {}).get("videos_dir")
+    return [
+        _network_check(urlopen=urlopen, timeout=network_timeout),
+        _disk_space_check(path=disk, min_free_gb=min_free_gb),
+        _check("melt", "أداة المضيف melt/MLT", level="warn"),
+        _check("piper", "أداة المضيف Piper", level="warn"),
+    ]
+
+
+def run_all_checks(cfg=None, **host_kwargs):
+    """كل الفحوصات: الأساسية (27) + المضيف. عدد الأساسية
+    لا يتغيّر — فحوص المضيف قسم إضافي بعدها."""
+    return run_checks(cfg) + run_host_checks(cfg, **host_kwargs)
+
+
+def run_json_report(cfg=None, include_host=True, **host_kwargs):
+    """شغّل الفحوصات وارجع (تقرير JSON، رمز الخروج).
+
+    رمز الخروج 0 إن لم يكن أي FAIL، و7 عند أي FAIL.
+    `include_host=False` يرجع الأساسية فقط.
+    """
+    checks = (run_all_checks(cfg, **host_kwargs) if include_host
+              else run_checks(cfg))
+    report = to_json_report(checks)
+    return report, 0 if report["ok"] else DOCTOR_FAIL_EXIT
+
+
+def apply_fixes(checks, cfg=None, studio_dir=None, recheck=None):
+    """صلّح ما يمكن من الفحوصات الفاشلة ثم أعد الفحص.
+
+    القابل للإصلاح هنا: إنشاء config.yaml من المثال
+    (`ensure_config`)، وإنشاء مجلدي الفيديو والتشغيل.
+    الباقي يُترك في `unfixed` مع سببه في الفحص نفسه.
+    يرجع `{"fixed": [أسماء], "unfixed": [أسماء],
+    "checks": [الفحوصات بعد إعادة الفحص]}`.
+    `recheck` للحقن في الاختبارات (الافتراضي `run_checks`).
+    """
+    cfg = cfg or {}
+    fixed = []
+    unfixed = []
+    for check in checks or []:
+        if check.get("ok"):
+            continue
+        name = check.get("name", "")
+        done = False
+        if "config.yaml" in name:
+            done = ensure_config(studio_dir)
+        elif name in _FIXABLE_DIRS:
+            key = _FIXABLE_DIRS[name]
+            path = (cfg.get("paths") or {}).get(key)
+            if not path:
+                path = DEFAULT_PATHS.get(
+                    "videos_dir" if key == "videos_dir" else "runs_dir")
+            try:
+                os.makedirs(os.path.expanduser(str(path)),
+                            exist_ok=True)
+                done = True
+            except OSError:
+                done = False
+        (fixed if done else unfixed).append(name)
+    runner = recheck or (lambda: run_checks(cfg))
+    return {"fixed": fixed, "unfixed": unfixed,
+            "checks": runner()}

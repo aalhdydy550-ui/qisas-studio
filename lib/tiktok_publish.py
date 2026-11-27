@@ -33,6 +33,7 @@ video.upload وموافقة مراجعة قد تستغرق أيامًا — فل
 """
 import json
 import os
+import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -54,6 +55,89 @@ TIKTOK_CAPTION_LIMIT = 2200
 
 class TikTokPublishError(Exception):
     """خطأ في نشر TikTok عبر مهمة المتصفح (رسالته عربية)."""
+
+
+class ApprovalBlockedError(TikTokPublishError):
+    """رفضت بوابة الموافقة نشر TikTok (جولة v0.1.63).
+
+    .exit_code: 5 عند الرفض (deny أو رفض المستخدم تفاعليًا)،
+    و3 حين يحتاج النشر إجابة بشرية والتشغيل غير تفاعلي
+    (سؤال معلّق مسجَّل في runs/approval-decisions.jsonl).
+    """
+
+    def __init__(self, message, exit_code=5):
+        self.exit_code = exit_code
+        super().__init__(message)
+
+
+def _require_approval(action, scope="*"):
+    """افحص بوابة الموافقة قبل نشر TikTok — قاعدة «بلا تغيير
+    سلوك افتراضي» (قرار المنسق الملزم).
+
+    - بلا ملف إعداد (~/.qisas-studio/approval.json غائب):
+      allow فورًا بلا أي سؤال — فيبقى سلوك أوامر النشر
+      الحالية (والكرونات) كما هو.
+    - أرضية الأمان: deny دائمًا حتى بلا إعداد.
+    - allow ← تمضي الحزمة؛ وdeny ← ApprovalBlockedError
+      خروج 5؛ وask + stdin طرفية ← سؤال تفاعلي؛ وask + بلا
+      طرفية ← السؤال معلّق مسجَّل في
+      runs/approval-decisions.jsonl (تسجله gate.check) +
+      ApprovalBlockedError خروج 3 — بلا تعليق أبدًا.
+    - أي عطل في وحدة الموافقة ← allow (fail-open للمسار
+      القديم، ما عدا أرضية الأمان).
+    """
+    try:
+        from lib import approval as approval_lib
+    except Exception:  # noqa: BLE001 — البوابة غائبة = يمضي
+        return "allow"
+    try:
+        if action in getattr(approval_lib, "SAFETY_FLOOR",
+                             frozenset()):
+            raise ApprovalBlockedError(
+                "أرضية الأمان: الفعل «%s» مرفوض دائمًا — لا "
+                "موافقة تسمح به" % action, exit_code=5)
+        if not os.path.isfile(approval_lib.config_path()):
+            return "allow"
+        gate = approval_lib.ApprovalGate()
+        decision = gate.check(action, scope=scope)
+    except ApprovalBlockedError:
+        raise
+    except Exception:  # noqa: BLE001 — فشل البوابة = يمضي
+        return "allow"
+    if decision == "allow":
+        return "allow"
+    if decision == "deny":
+        raise ApprovalBlockedError(
+            "بوابة الموافقة رفضت النشر «%s» — اضبط مستوى "
+            "الموافقة أو امنح النشر صراحةً ثم أعد النشر"
+            % action, exit_code=5)
+    try:
+        interactive = sys.stdin.isatty()
+    except Exception:  # noqa: BLE001 — بلا طرفية = غير تفاعلي
+        interactive = False
+    if interactive:
+        try:
+            answer = input(
+                "النشر يحتاج موافقتك — «%s» (نعم/لا): "
+                % action).strip().lower()
+        except EOFError:
+            raise ApprovalBlockedError(
+                "النشر «%s» يحتاج موافقة بشرية — أُغلق الإدخال "
+                "قبل الإجابة؛ وسُجّل السؤال المعلّق في "
+                "runs/approval-decisions.jsonl" % action,
+                exit_code=3)
+        except KeyboardInterrupt:
+            raise
+        if answer in ("نعم", "ن", "yes", "y"):
+            return "allow"
+        raise ApprovalBlockedError(
+            "رفضتَ النشر «%s» — لم يُنشر شيء" % action,
+            exit_code=5)
+    raise ApprovalBlockedError(
+        "النشر «%s» يحتاج موافقة بشرية — التشغيل غير تفاعلي "
+        "(كرون/اختبار) فسُجّل السؤال المعلّق في "
+        "runs/approval-decisions.jsonl؛ أجب عنه ثم أعد النشر"
+        % action, exit_code=3)
 
 
 def build_tiktok_caption(title, caption, moral="",
@@ -157,7 +241,13 @@ def write_tiktok_bundle(bundle_dir, video, title, caption, moral="",
     ولا أي ملف خارج مجلد الحزمة. يرجع قاموسًا فيه
     {"bundle_dir", "caption", "metadata_path", "steps_path",
     "video_info"}.
+    بوابة الموافقة أولًا (جولة v0.1.63): الحزمة هي خطوة
+    النشر الخارجي في هذا المسار (مهمة متصفح) — فبلا ملف
+    إعداد موافقة تُكتب بلا سؤال؛ وdeny يرفع
+    ApprovalBlockedError خروج 5 قبل كتابة أي ملف؛ وask غير
+    التفاعلي يرفع خروج 3 (سؤال معلّق مسجَّل).
     """
+    _require_approval("publish_tiktok")
     text = build_tiktok_caption(title, caption, moral=moral,
                                 next_part=next_part,
                                 next_part_time=next_part_time,

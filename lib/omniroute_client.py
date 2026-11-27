@@ -72,16 +72,37 @@ class LLMAllFailedError(OmniRouteError):
     .failures: قائمة (المزود، نوع الخطأ، تفصيل مختصر) لكل
     مزود جُرِّب. تُمسك كـ OmniRouteError في كل المواضع
     القديمة (except OmniRouteError ما زال يعمل).
+    .provider_codes: {المزود: رمز ProviderError المكتوب}
+    (عقد ع10) — يملؤها محرك المحاولات عند الفشل.
     """
 
     def __init__(self, failures):
         self.failures = list(failures or [])
+        self.provider_codes = {}
         parts = ["%s (%s)" % (provider, kind)
                  for provider, kind, _detail in self.failures]
         message = ("فشلت كل مزودات الذكاء (%d): %s — جرّب لاحقًا "
                    "أو تحقق من الشبكة ومن حالة المزودين "
                    "بـ `python3 studio.py llm-status`"
                    % (len(self.failures), "؛ ".join(parts) or "بلا مزود"))
+        super().__init__(message)
+
+
+class UsageCapError(OmniRouteError):
+    """رفض حدود الاستخدام قبل بدء عمل جديد (عقد ع9).
+
+    .status: 429 للعمل غير المراقب، و409 للرسالة المباشرة
+    تحت stops=everything؛ و.retry_after: ثوانٍ حتى إعادة
+    الضبط؛ و.code: "spend_cap" دائمًا عند الرفض. الدور
+    الجاري لا يقطعه هذا الخطأ — المستدعي يفحص فقط قبل
+    بدء عمل جديد.
+    """
+
+    def __init__(self, message, status=429, retry_after=None,
+                 code="spend_cap"):
+        self.status = status
+        self.retry_after = retry_after
+        self.code = code
         super().__init__(message)
 
 
@@ -158,6 +179,145 @@ def classify_llm_error(text):
         if pattern in low:
             return "network"
     return "unknown"
+
+
+# ─── توصيل الموجة ب (جولة v0.1.63): الموجّه + رموز المزوّد + حدود الاستخدام ───
+# كل الاستيرادات المتقاطعة كسولة داخل الدوال (بلا دورات)،
+# وكل فشل في وحدة جديدة يرجع للسلوك الحالي بلا كسر.
+
+def classify_provider_error(text, status=None):
+    """صنّف خطأ مزوّد إلى رمز ProviderError المكتوب (عقد ع10).
+
+    غلاف رقيق فوق lib.model_driver.classify_provider_error
+    باستيراد كسول؛ وأي عطل في الوحدة ← "unknown" (لا كسر
+    لمسار الاستدعاء الحالي).
+    """
+    try:
+        from lib import model_driver as driver_lib
+        return driver_lib.classify_provider_error(text, status=status)
+    except Exception:  # noqa: BLE001 — بلا ترجمة بلا كسر
+        return "unknown"
+
+
+def _provider_code(exc):
+    """رمز ProviderError لخطأ استدعاء (من حالته أو نصه)."""
+    if exc is None:
+        return "unknown"
+    try:
+        from lib import model_driver as driver_lib
+        if isinstance(exc, driver_lib.ProviderError):
+            return exc.code
+    except Exception:  # noqa: BLE001 — يُترجم بالنص أدناه
+        pass
+    return classify_provider_error(
+        str(exc), status=getattr(exc, "status_code", None))
+
+
+def _fallback_decision(default_model):
+    """قرار موجّه رجوع للافتراضي (حين يتعطل الموجّه نفسه)."""
+    return {"model": default_model or "", "effort": "medium",
+            "source": "fallback", "confidence": 0.0,
+            "attribution": "Picked by fallback · 0%",
+            "reason": "internal_error"}
+
+
+def _route_model(prompt, models, default=None, decider=None):
+    """اختر نموذجًا عبر lib.router.route — fail-open للافتراضي.
+
+    models: معرّفات النماذج المعروضة بالترتيب؛ وdefault:
+    النموذج الافتراضي الحالي (الأول إن غاب). أي عطل —
+    استيراد، أو موجّه يرمي، أو إجابة مشوّهة — يرجع قرار
+    رجوع للافتراضي (route نفسه لا يرمي أبدًا). بلا decider
+    محقون يرجع الافتراضي بسبب no_choice (كما في عقد ع8).
+    """
+    default_model = (default or "").strip() if isinstance(
+        default, str) else ""
+    if not default_model and models:
+        default_model = str(models[0])
+    try:
+        from lib import router as router_lib
+    except Exception:  # noqa: BLE001 — الموجّه غائب = الافتراضي
+        return _fallback_decision(default_model)
+    try:
+        roles = [{"model": str(m).strip()} for m in (models or [])
+                 if isinstance(m, str) and m.strip()]
+        return router_lib.route(
+            task="chat", roles=roles, context="", request=prompt,
+            default=default_model, decider=decider)
+    except Exception:  # noqa: BLE001 — fail-open للافتراضي
+        return _fallback_decision(default_model)
+
+
+def _reorder_models(models, decision):
+    """أعد ترتيب النماذج ليتصدر اختيار الموجّه (إن كان معروضًا).
+
+    قرار fallback أو اختيار غير معروض ← الترتيب كما هو.
+    يرجع قائمة جديدة بلا تعديل الأصلية.
+    """
+    ordered = list(models or [])
+    if not isinstance(decision, dict):
+        return ordered
+    if decision.get("source") != "router":
+        return ordered
+    chosen = decision.get("model")
+    if chosen in ordered:
+        ordered.remove(chosen)
+        ordered.insert(0, chosen)
+    return ordered
+
+
+def _reorder_providers(providers, decision):
+    """أعد ترتيب سلسلة المزودين ليتصدر اختيار الموجّه."""
+    if not isinstance(decision, dict):
+        return list(providers or [])
+    if decision.get("source") != "router":
+        return list(providers or [])
+    chosen = decision.get("model")
+    ordered = list(providers or [])
+    for index, prov in enumerate(ordered):
+        if isinstance(prov, dict) and prov.get("model") == chosen:
+            ordered.insert(0, ordered.pop(index))
+            break
+    return ordered
+
+
+def _record_router_decision(state, decision):
+    """احفظ قرار الموجّه في حالة LLM — بلا كسر عند أي عطل."""
+    if state is None or not isinstance(decision, dict):
+        return
+    try:
+        llm_state.record_router_decision(state, decision)
+    except Exception:  # noqa: BLE001 — التسجيل لا يكسر الاستدعاء
+        pass
+
+
+def _check_usage_caps(kind="unattended"):
+    """افحص حدود الاستخدام قبل بدء عمل جديد (عقد ع9).
+
+    يرفع UsageCapError (429 + Retry-After للعمل غير
+    المراقب؛ 409 برمز spend_cap للرسالة المباشرة تحت
+    stops=everything) عند الرفض. أي عطل في وحدة الحدود —
+    استيراد أو قراءة — يمضي العمل (fail-open للمسار
+    القديم)؛ والدور الجاري لا يفحص أبدًا (الفحص هنا فقط
+    قبل بناء المحاولات).
+    """
+    try:
+        from lib import usage_caps as caps_lib
+    except Exception:  # noqa: BLE001 — الحدود غائبة = بلا حد
+        return None
+    try:
+        result = caps_lib.check(kind)
+    except Exception:  # noqa: BLE001 — فشل الفحص = بلا حد
+        return None
+    if not isinstance(result, dict) or result.get("allowed"):
+        return result
+    status = result.get("status") or (
+        409 if kind == "direct" else 429)
+    reason = result.get("reason") or "بُلغ حد الاستخدام"
+    raise UsageCapError(
+        "بُلغ حد الاستخدام — %s" % reason,
+        status=status, retry_after=result.get("retry_after"),
+        code=result.get("code") or "spend_cap")
 
 
 # ─── منهجية تناوب المسار المجاني (جولة v0.1.41، بند 2) ───
@@ -644,6 +804,7 @@ def _run_attempts(prompt, attempts, retries, retry_delay,
     if not attempts:
         raise OmniRouteError("لا يوجد مزود للتجربة")
     failures = []
+    provider_codes = {}
     rotated_away = set()
     # سياسة إعادة المحاولة الموحّدة (lib.retry_policy — جولة
     # الأنماط W1): حدّ أقصى 5 محاولات إجمالًا، وتراجع أسّي مع
@@ -673,6 +834,8 @@ def _run_attempts(prompt, attempts, retries, retry_delay,
                 note = ("تجاوز الحصة (%s) — متبقٍ %d ثانية"
                         % (reason, retry_after))
                 failures.append((provider, "quota", note))
+                provider_codes[provider] = \
+                    "quota_or_region_restriction"
                 continue
         got = None
         last_error = None
@@ -718,9 +881,13 @@ def _run_attempts(prompt, attempts, retries, retry_delay,
         failures.append((provider, last_kind,
                          str(last_error)[:300] if last_error
                          else "خطأ غير معروف"))
+        # رمز المزوّد المكتوب (عقد ع10) من آخر خطأ له.
+        provider_codes[provider] = _provider_code(last_error)
         if on_attempt is not None:
             on_attempt(provider, False, last_kind)
-    raise LLMAllFailedError(failures)
+    error = LLMAllFailedError(failures)
+    error.provider_codes = dict(provider_codes)
+    raise error
 
 
 _SYSTEM_PROMPT_PATH = os.path.join(
@@ -926,7 +1093,8 @@ def _provider_attempts(prompt, providers, base_url, system,
 def chat_chain(prompt, providers, system=None, max_tokens=200,
                temperature=0.7, retries=1, retry_delay=5,
                base_url="http://localhost:20128", state=None,
-               on_attempt=None):
+               on_attempt=None, router_decider=None,
+               usage_kind="unattended", check_usage_caps=True):
     """سلسلة بدائل LLM: يجرّب كل مزود بالترتيب حتى ينجح أحدها.
 
     providers: [{"kind": "omniroute"|"gemini"|"ollama", "model": ...}].
@@ -935,11 +1103,27 @@ def chat_chain(prompt, providers, system=None, max_tokens=200,
     يرجع (النص، المسار، الموديل)؛ ويرفع LLMAllFailedError
     (عربي) لو فشل الكل. بلا موجّه نظام صريح يُحمَّل الموجّه
     المشترك حرفيًا.
+    توصيل الموجة ب: قبل بدء العمل الجديد يُفحص حد الاستخدام
+    (check_usage_caps — يرفع UsageCapError بأسلوب API عند
+    الرفض)؛ ويُمرَّر اختيار النموذج عبر lib.router.route
+    (router_decider دالة موجّه قابلة للحقن — بلا decider
+    يرجع الافتراضي) فيتصدر اختيار الموجّه السلسلة؛ ويُحفظ
+    قرار الموجّه في state (إن وُجد) عبر llm_state.
     """
     if not providers:
         raise OmniRouteError("سلسلة المزودين فارغة — لا مزود للتجربة")
+    if check_usage_caps:
+        _check_usage_caps(usage_kind)
     if system is None:
         system = load_system_prompt() or None
+    provider_models = [p.get("model") for p in (providers or [])
+                       if isinstance(p, dict) and p.get("model")]
+    decision = _route_model(
+        prompt, provider_models,
+        default=provider_models[0] if provider_models else "",
+        decider=router_decider)
+    providers = _reorder_providers(providers, decision)
+    _record_router_decision(state, decision)
     attempts = _provider_attempts(prompt, providers, base_url, system,
                                   max_tokens, temperature)
     return _run_attempts(prompt, attempts, retries, retry_delay,
@@ -949,7 +1133,8 @@ def chat_chain(prompt, providers, system=None, max_tokens=200,
 def chat_free_rotation(prompt, models, system=None, max_tokens=200,
                        temperature=0.7, retries=1, retry_delay=5,
                        base_url="http://localhost:20128", state=None,
-                       on_attempt=None):
+                       on_attempt=None, router_decider=None,
+                       usage_kind="unattended", check_usage_caps=True):
     """سلسلة تناوب على نماذج مجانية رسمية (OpenRouter ‎:free
     أولًا عند اكتمال ربطه، ثم أي ركن رسمي مجاني).
 
@@ -971,13 +1156,17 @@ def chat_free_rotation(prompt, models, system=None, max_tokens=200,
                       max_tokens=max_tokens, temperature=temperature,
                       retries=retries, retry_delay=retry_delay,
                       base_url=base_url, state=state,
-                      on_attempt=on_attempt)
+                      on_attempt=on_attempt,
+                      router_decider=router_decider,
+                      usage_kind=usage_kind,
+                      check_usage_caps=check_usage_caps)
 
 
 def chat(prompt, model, fallback_model=None, base_url="http://localhost:20128",
          system=None, max_tokens=200, temperature=0.7,
          retries=1, retry_delay=5, providers=None, state=None,
-         on_attempt=None):
+         on_attempt=None, router_decider=None,
+         usage_kind="unattended", check_usage_caps=True):
     """يحاول CLI أولًا، ثم HTTP لو وُجد مفتاح، ثم الموديل البديل.
 
     كل محاولة تُعاد تلقائيًا `retries` مرة بفاصل انتظار متضاعف
@@ -997,10 +1186,24 @@ def chat(prompt, model, fallback_model=None, base_url="http://localhost:20128",
     model/fallback_model (وتضيف ساق Gemini عادةً).
     state/on_attempt (اختياريان): تسجيل حالة المزودين
     (حصة/تهدئة) عبر lib/llm_state.
+    توصيل الموجة ب: قبل بدء العمل الجديد يُفحص حد الاستخدام
+    (UsageCapError بأسلوب API عند الرفض)؛ ويُمرَّر اختيار
+    النموذج عبر lib.router.route فيتصدر اختيار الموجّه
+    المحاولات؛ ويُحفظ قرار الموجّه في state (إن وُجد).
     """
+    if check_usage_caps:
+        _check_usage_caps(usage_kind)
     if system is None:
         system = load_system_prompt() or None
     if providers is not None:
+        provider_models = [p.get("model") for p in providers
+                           if isinstance(p, dict) and p.get("model")]
+        decision = _route_model(
+            prompt, provider_models,
+            default=provider_models[0] if provider_models else "",
+            decider=router_decider)
+        providers = _reorder_providers(providers, decision)
+        _record_router_decision(state, decision)
         attempts = _provider_attempts(prompt, providers, base_url,
                                       system, max_tokens, temperature)
         return _run_attempts(prompt, attempts, retries, retry_delay,
@@ -1009,6 +1212,10 @@ def chat(prompt, model, fallback_model=None, base_url="http://localhost:20128",
     for m in (model, fallback_model):
         if m and m not in models:
             models.append(m)
+    decision = _route_model(prompt, models, default=model,
+                            decider=router_decider)
+    models = _reorder_models(models, decision)
+    _record_router_decision(state, decision)
     attempts = _omniroute_attempts(prompt, models, base_url, system,
                                    max_tokens, temperature)
     return _run_attempts(prompt, attempts, retries, retry_delay,

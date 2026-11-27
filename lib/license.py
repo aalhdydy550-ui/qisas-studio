@@ -55,12 +55,24 @@
 الوحدة مستقلة تمامًا: لا تستورد أي وحدة lib أخرى ولا ``studio``،
 ولا تُوصَّل في ``studio.py`` من هنا — التوصيل للمنسّق (انظر
 تقرير البند 2 في الجولة).
+
+إعداد أول تشغيل (جولة v0.1.63، بند 34 — عقد ع19): عند أول
+تشغيل يسجَّل تاريخ أول تشغيل وتُنشأ البنية ويُطبع شرح موجز
+وبطاقة إضافة مفتاح، والموجز الصباحي 08:00 بتوقيت
+Africa/Cairo. `first_run_setup()` idempotent: إعادة التشغيل
+لا تعيد التهيئة أبدًا (ترجع `already_setup: True` بلا أي
+كتابة). أمر `studio.py setup` يربطه عامل آخر — هنا الدوال
+النظيفة فقط.
 """
 import json
 import os
 from datetime import date, datetime
 
 TRIAL_DAYS = 30
+
+# إعداد أول تشغيل (بند 34): المنطقة والموعد الصباحي ثابتان.
+FIRST_RUN_TIMEZONE = "Africa/Cairo"
+FIRST_RUN_MORNING_TIME = "08:00"
 
 LICENSE_DIR_ENV = "QISAS_LICENSE_DIR"
 DEFAULT_LICENSE_DIR = os.path.join("~", ".qisas-studio")
@@ -417,6 +429,121 @@ def status_lines(state=None):
     return lines
 
 
+# ------------------------------------------------------------------
+# إعداد أول تشغيل — جولة v0.1.63، بند 34 (عقد ع19)
+# ------------------------------------------------------------------
+
+def is_first_run():
+    """هل هذا أول تشغيل؟ True حين لا توجد حالة أو بلا first_run.
+
+    قراءة فقط — لا تنشئ ملف الحالة ولا تسجّل شيئًا. ملف تالف
+    يُعامل كأول تشغيل (يُصلحه `first_run_setup` عبر
+    `record_first_run`).
+    """
+    state, _corrupt = _read_state()
+    return state is None or not state.get("first_run")
+
+
+def first_run_steps():
+    """خطوات أول تشغيل الموجزة (للعرض — بلا أي كتابة)."""
+    return [
+        "أُنشئ مجلد الحالة %s وسُجّل تاريخ أول تشغيل — بداية "
+        "فترة التجربة (30 يومًا)." % license_dir(),
+        "أضف مفتاح Gemini (أو مزوّد آخر) عبر بطاقة إضافة المفتاح "
+        "أدناه — المفتاح يُكتب ولا يُقرأ أبدًا.",
+        "تحقق أن النظام جاهز: studio.py doctor — يجب أن تكون كل "
+        "الفحوصات سليمة قبل أول فيديو.",
+        "الموجز الصباحي اليومي الساعة %s بتوقيت %s."
+        % (FIRST_RUN_MORNING_TIME, FIRST_RUN_TIMEZONE),
+        "أنتج أول فيديو بالخطوات المعتادة (توليد → تجميع → نشر)؛ "
+        "والكتابة على الشاشة متزامنة مع السرد وأسفل الصورة فقط.",
+    ]
+
+
+def _first_run_key_card():
+    """بطاقة إضافة مفتاح (للعرض — الرمز عبر ملف أبدًا سطر أوامر)."""
+    return {
+        "title": "بطاقة إضافة مفتاح",
+        "command": ("studio.py keys set --provider gemini "
+                    "--token-file <مسار-ملف-التوكن>"),
+        "notes": [
+            "ضع المفتاح في ملف نصي ثم مرّر مساره عبر "
+            "--token-file — لا تكتب المفتاح نفسه في سطر الأوامر "
+            "أبدًا (يُسجَّل في سجل الأوامر).",
+            "عند الحفظ يُجرى استدعاء اختبار واحد صغير؛ والمفتاح "
+            "الذي يرفضه المزوّد لا يُحفظ.",
+            "لتدوير مفتاح لاحقًا: studio.py keys rotate --provider "
+            "gemini --token-file <ملف-المفتاح-الجديد>.",
+            "لسرد المفاتيح بلا قيم: studio.py keys list.",
+        ],
+    }
+
+
+def _first_run_report(already_setup, first_run):
+    """تقرير إعداد أول تشغيل (قاموس جاهز للطباعة/JSON)."""
+    return {"already_setup": already_setup,
+            "first_run": first_run,
+            "timezone": FIRST_RUN_TIMEZONE,
+            "morning_time": FIRST_RUN_MORNING_TIME,
+            "morning_brief": "%s %s" % (FIRST_RUN_MORNING_TIME,
+                                         FIRST_RUN_TIMEZONE),
+            "steps": first_run_steps(),
+            "key_card": _first_run_key_card()}
+
+
+def first_run_setup(now=None):
+    """نفّذ إعداد أول تشغيل مرة واحدة — وإعادة التشغيل لا تعيد
+    التهيئة أبدًا.
+
+    - أول تشغيل: يسجّل تاريخ أول تشغيل (عبر `record_first_run`
+      — فينشئ مجلد الحالة وملف license.json) ويرجع تقريرًا
+      بـ `already_setup: False`.
+    - إعادة تشغيل: يرجع التقرير نفسه بـ `already_setup: True`
+      وتاريخ أول تشغيل الأصلي — بلا أي كتابة في ملف الحالة.
+    ترجع قاموس التقرير (انظر `_first_run_report`).
+    """
+    if not is_first_run():
+        state, _corrupt = _read_state()
+        first = state.get("first_run") if state else None
+        return _first_run_report(True, first)
+    state = record_first_run(now)
+    return _first_run_report(False, state["first_run"])
+
+
+def first_run_lines(setup=None):
+    """أسطر عربية جاهزة للطباعة من تقرير `first_run_setup`.
+
+    setup قاموس من `first_run_setup` (أو None فيُبنى قراءةً فقط
+    بلا أي كتابة — لا يسجّل أول تشغيل). لا تتضمن أي سر.
+    """
+    if setup is None:
+        first = license_status().get("first_run")
+        setup = _first_run_report(not is_first_run(), first)
+    lines = []
+    if setup["already_setup"]:
+        lines.append("الاستوديو مهيأ مسبقًا — أول تشغيل كان في %s؛ "
+                     "لا إعادة تهيئة." % (setup["first_run"]
+                                          or "غير مسجَّل"))
+    elif setup["first_run"]:
+        lines.append("أهلًا بك في استوديو «قصص وعبر» — تم إعداد "
+                     "أول تشغيل في %s." % setup["first_run"])
+    else:
+        lines.append("أهلًا بك في استوديو «قصص وعبر» — لم يُسجَّل "
+                     "أول تشغيل بعد؛ شغّل الإعداد لتسجيله.")
+    lines.append("المنطقة الزمنية: %s — الموجز الصباحي اليومي "
+                 "الساعة %s." % (setup["timezone"],
+                                 setup["morning_time"]))
+    lines.append("خطوات البدء:")
+    for i, step in enumerate(setup["steps"], 1):
+        lines.append("%d. %s" % (i, step))
+    card = setup["key_card"]
+    lines.append("%s:" % card["title"])
+    lines.append("  %s" % card["command"])
+    for note in card["notes"]:
+        lines.append("  - %s" % note)
+    return lines
+
+
 def doctor_check(now=None):
     """فحص ترخيص بصيغة فحوصات doctor: {"name", "ok", "level",
     "detail", "fix"} — للربط في `doctor` لاحقًا (لا يُستدعى
@@ -464,7 +591,9 @@ def doctor_check(now=None):
 
 __all__ = ["TRIAL_DAYS", "LICENSE_DIR_ENV", "PAYMENT_NUMBER",
            "PRICE_INDIVIDUAL_EGP", "PRICE_COMPANY_EGP",
+           "FIRST_RUN_TIMEZONE", "FIRST_RUN_MORNING_TIME",
            "license_dir", "state_path", "record_first_run",
            "license_status", "commercial_allowed", "expired_message",
            "set_owner", "mark_licensed", "status_lines",
-           "doctor_check"]
+           "doctor_check", "is_first_run", "first_run_steps",
+           "first_run_setup", "first_run_lines"]

@@ -37,6 +37,8 @@ __all__ = [
     "classify_exception", "parse_retry_after",
     "parse_rate_limit_headers", "format_rate_limit_log",
     "log_rate_limit", "call_with_retry",
+    "routine_backoff_delay", "routine_backoff_sequence",
+    "ROUTINE_BACKOFF_FIRST_SECONDS", "ROUTINE_BACKOFF_MAX_SECONDS",
 ]
 
 _LOG = logging.getLogger("studio.retry_policy")
@@ -546,3 +548,42 @@ def call_with_retry(fn, policy=None, sleep=time.sleep,
             if on_retry is not None:
                 on_retry(attempt, kind, delay, exc)
             sleep(delay)
+
+
+# ─── تراجع موثوقية الروتينات (جولة v0.1.63 — بند 38) ───
+# بعد جولة روتين فاشلة: انتظار 15 دقيقة ثم مضاعفة حتى
+# سقف 4 ساعات، مع jitter كامل (uniform(0, delay) — نفس
+# نمط RetryPolicy.delay_for فيمنع تزامن إعادة المحاولات).
+# هذا تسلسل زمني لا سياسة HTTP: بلا حد محاولات هنا —
+# المستدعي (lib/schedule_watch.py) يقرر متى يتوقف.
+ROUTINE_BACKOFF_FIRST_SECONDS = 900.0   # 15 دقيقة
+ROUTINE_BACKOFF_MAX_SECONDS = 14400.0   # 4 ساعات
+
+
+def routine_backoff_delay(failure_index, jitter=True, rng=None):
+    """فاصل الانتظار بعد الفشل رقم failure_index (0-based).
+
+    failure_index=0 ← 15 دقيقة؛ ثم 30م، 60م، 120م، 240م
+    (سقف 4 ساعات)؛ وبعدها يبقى السقف. مع jitter (الافتراضي):
+    uniform(0, delay)؛ وبلا jitter يرجع القيمة الدقيقة
+    (للتخطيط والاختبار). failure_index سالب يُعامل كصفر.
+    """
+    index = max(int(failure_index), 0)
+    delay = min(ROUTINE_BACKOFF_FIRST_SECONDS * (2 ** index),
+                ROUTINE_BACKOFF_MAX_SECONDS)
+    if jitter and delay > 0:
+        delay = (rng or random).uniform(0, delay)
+    return delay
+
+
+def routine_backoff_sequence(count, jitter=False, rng=None):
+    """تسلسل فواصل التراجع لأول count فشلًا (قائمة ثوانٍ).
+
+    بلا jitter (الافتراضي): [900, 1800, 3600, 7200, 14400,
+    14400, ...] — القيم الدقيقة. count ≤ 0 ← قائمة فارغة.
+    """
+    count = int(count)
+    if count <= 0:
+        return []
+    return [routine_backoff_delay(i, jitter=jitter, rng=rng)
+            for i in range(count)]

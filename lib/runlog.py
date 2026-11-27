@@ -16,6 +16,13 @@ import os
 
 _OK_STATUSES = ("ok", "passed", "done", "success")
 
+# حدود القراءة (جولة v0.1.63 — بند 30): 200 رسالة للقراءة،
+# 100 نتيجة للبحث؛ وتقطيع المخرجات الطويلة عند 1000 حرف.
+READ_LIMIT = 200
+SEARCH_LIMIT = 100
+CLIP_LIMIT = 1000
+RETENTION_DAYS = 180
+
 # حالات سجلات التشغيل run-*.json (جولة v0.1.41 — بند 6):
 # crashed هي حالة التشغيل المنقطع (ريستارت VM) القابل للاستئناف.
 _RECORD_STATUSES = {"running": "جارٍ", "crashed": "تعطّل",
@@ -117,8 +124,21 @@ def _parse_analyze(path):
             "detail": " / ".join(parts)}
 
 
+def clip_text(text, limit=CLIP_LIMIT):
+    """قصّ نصًا عند الحد؛ ارجع (النص، هل قُصّ؟)."""
+    text = str(text)
+    if len(text) <= limit:
+        return text, False
+    return text[:limit], True
+
+
 def collect_runs(runs_dir, today_only=False, limit=20, today=None):
-    """اجمع التشغيلات (الأحدث أولًا). today_only يقصرها على اليوم."""
+    """اجمع التشغيلات (الأحدث أولًا). today_only يقصرها على اليوم.
+
+    الحد يُقصّ عند 200 (بند 30) — فلا تُقرأ قائمة بلا سقف.
+    """
+    if limit is not None and limit > READ_LIMIT:
+        limit = READ_LIMIT
     entries = []
     for path in glob.glob(os.path.join(runs_dir, "*", "run-log.json")):
         try:
@@ -146,6 +166,52 @@ def collect_runs(runs_dir, today_only=False, limit=20, today=None):
         day = (today or datetime.date.today()).isoformat()
         entries = [e for e in entries if e["date_key"] == day]
     return entries[:limit] if limit else entries
+
+
+def search_runs(runs_dir, query, limit=SEARCH_LIMIT):
+    """ابحث في التشغيلات: أول `limit` مطابقة (افتراضي 100).
+
+    المطابقة جزئية بلا حساسية لحالة الأحرف على العنوان
+    والتفاصيل والحالة والنوع. التفاصيل الطويلة تُقصّ عند
+    1000 حرف مع مفتاح "clipped": true.
+    """
+    if limit is None:
+        limit = SEARCH_LIMIT
+    if not isinstance(limit, int) or isinstance(limit, bool) \
+            or limit < 1:
+        raise ValueError("حد البحث غير صالح: %r" % (limit,))
+    limit = min(limit, SEARCH_LIMIT)
+    needle = str(query or "").casefold()
+    if not needle:
+        raise ValueError("عبارة البحث فارغة")
+    matches = []
+    for entry in collect_runs(runs_dir, limit=READ_LIMIT):
+        haystack = " ".join([
+            str(entry.get("title") or ""),
+            str(entry.get("detail") or ""),
+            str(entry.get("status") or ""),
+            str(entry.get("kind") or ""),
+        ]).casefold()
+        if needle in haystack:
+            detail, clipped = clip_text(str(entry.get("detail") or ""))
+            found = dict(entry)
+            found["detail"] = detail
+            found["clipped"] = clipped
+            matches.append(found)
+            if len(matches) >= limit:
+                break
+    return matches
+
+
+def prune_old_logs(runs_dir, days=RETENTION_DAYS, now=None):
+    """احذف سجلات القرار/الموافقة الأقدم من `days` يومًا (180).
+
+    تفويض إلى lib.run_log.prune_decision_logs (التنفيذ الواحد
+    — يغطي runs/decider-log/*.ndjson وruns/approval-
+    decisions.jsonl). يرجع قاموسه نفسه.
+    """
+    from lib.run_log import prune_decision_logs
+    return prune_decision_logs(runs_dir, days=days, now=now)
 
 
 def format_runs(entries):

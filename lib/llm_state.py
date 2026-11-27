@@ -91,7 +91,8 @@ def default_state():
     return {"version": 1, "providers": {},
             "daily": {"date": time.strftime("%Y-%m-%d"),
                       "calls": {}, "successes": {}, "failures": {}},
-            "windows": {}, "limits": {}}
+            "windows": {}, "limits": {},
+            "router": {"last": None, "history": []}}
 
 
 def state_path(runs_dir=None):
@@ -145,6 +146,16 @@ def load_state(runs_dir=None):
         for key in list(limits):
             if not isinstance(limits[key], dict):
                 del limits[key]
+    # قرارات الموجّه (جولة v0.1.63 — توصيل الموجة ب): حالة
+    # قديمة بلا مفتاح router ← قسم فارغ، بلا فشل.
+    router = state.get("router")
+    if not isinstance(router, dict):
+        state["router"] = {"last": None, "history": []}
+    else:
+        if not isinstance(router.get("history"), list):
+            router["history"] = []
+        router.setdefault("last", None)
+        state["router"] = router
     return state
 
 
@@ -506,3 +517,154 @@ def status_lines(state, providers=None, now=None):
                         status["successes_today"],
                         status["failures_today"]))
     return lines
+
+
+# ─── قرار الموجّه + سائق النموذج (جولة v0.1.63 — توصيل الموجة ب) ───
+# قرار الموجّه (lib.router.route) يُحفظ هنا: النموذج المختار +
+# المصدر (router/fallback) + الثقة — بلا نصوص طلب ولا مفاتيح.
+# وسائق النموذج (lib.model_driver.get_driver) يُستخدم عند
+# توفره، والمسار الحالي (سلسلة omniroute) هو الرجوع عند غيابه.
+
+# سقف سجل قرارات الموجّه المحفوظ في الحالة.
+ROUTER_HISTORY_MAX = 50
+
+# ترجمة رمز خطأ المزوّد (عقد ع10) إلى نوع خطأ llm_state.
+_DRIVER_CODE_TO_KIND = {
+    "quota_or_region_restriction": "quota",
+    "turn_usage_limit_refused": "quota",
+    "invalid_credentials": "auth",
+    "inactive_subscription": "auth",
+    "insufficient_funds": "auth",
+    "upstream_outage": "server",
+    "turn_not_started": "server",
+    "missing_cli": "not_found",
+    "model_catalog_outage": "not_found",
+    "unknown_driver": "not_found",
+    "unknown": "unknown",
+}
+
+
+def record_router_decision(state, decision, task=None, now=None):
+    """احفظ قرار الموجّه في الحالة.
+
+    decision: قاموس route() (model/effort/source/confidence/
+    attribution/reason). يُحفظ في state["router"]["last"]
+    (آخر قرار) ويُلحق بـ state["router"]["history"] (آخر 50
+    قرارًا) — النموذج والمصدر والثقة فقط، بلا نص طلب ولا
+    مفاتيح. قرار بلا نموذج أو ليس قاموسًا يُتجاهل. يرجع
+    الحالة نفسها.
+    """
+    if not isinstance(state, dict) or not isinstance(decision, dict):
+        return state
+    model = decision.get("model")
+    if not isinstance(model, str) or not model.strip():
+        return state
+    try:
+        confidence = float(decision.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    source = decision.get("source")
+    entry = {
+        "model": model.strip(),
+        "effort": decision.get("effort") or "medium",
+        "source": source if source in ("router", "fallback")
+                  else "fallback",
+        "confidence": confidence,
+        "attribution": decision.get("attribution") or "",
+        "reason": decision.get("reason"),
+        "task": (str(task)[:80] if task is not None else None),
+        "decided_at": time.strftime(
+            "%Y-%m-%dT%H:%M:%S",
+            time.localtime(now) if now is not None
+            else time.localtime()),
+    }
+    router = state.setdefault("router", {"last": None,
+                                         "history": []})
+    if not isinstance(router, dict):
+        router = state["router"] = {"last": None, "history": []}
+    router["last"] = dict(entry)
+    history = router.setdefault("history", [])
+    if not isinstance(history, list):
+        history = router["history"] = []
+    history.append(dict(entry))
+    del history[:-ROUTER_HISTORY_MAX]
+    return state
+
+
+def last_router_decision(state):
+    """آخر قرار موجّه محفوظ في الحالة — أو None.
+
+    يرجع نسخة (لا مرجعًا حيًا)؛ وحالة بلا قسم router ← None.
+    """
+    if not isinstance(state, dict):
+        return None
+    router = state.get("router")
+    if not isinstance(router, dict):
+        return None
+    last = router.get("last")
+    return dict(last) if isinstance(last, dict) else None
+
+
+def get_model_driver(name):
+    """سائق نموذج مسجل بالاسم — أو None عند غيابه.
+
+    يستخدم lib.model_driver.get_driver باستيراد كسول (بلا
+    اعتماد بناء — model_driver يستورد omniroute_client الذي
+    يستورد هذه الوحدة). اسم غير مسجل أو أي عطل ← None،
+    فيرجع المستدعي للمسار الحالي (سلسلة omniroute).
+    """
+    if not isinstance(name, str) or not name.strip():
+        return None
+    try:
+        from lib import model_driver as driver_lib
+        if name.strip() not in driver_lib.list_drivers():
+            return None
+        return driver_lib.get_driver(name.strip())
+    except Exception:  # noqa: BLE001 — غياب السائق = رجوع هادئ
+        return None
+
+
+def try_driver_send(state, driver_name, prompt, model=None,
+                    system=None, max_tokens=200, temperature=0.7,
+                    timeout=120):
+    """أرسل برومبت عبر سائق مسجل — أو None للرجوع للمسار الحالي.
+
+    - سائق غير مسجل/غير متاح ← None بلا أي تسجيل: المستدعي
+      يستخدم سلسلة omniroute الحالية كما قبل.
+    - نجاح ← نص الرد، مع تسجيل محاولة ناجحة في الحالة
+      (record_attempt للمزود باسم السائق).
+    - فشل الإرسال ← تُسجَّل المحاولة الفاشلة (بنوع مترجم من
+      رمز ProviderError) ثم None: المستدعي يرجع للمسار
+      الحالي بدل السقوط — فشل السائق لا يكسر السلسلة أبدًا.
+    """
+    driver = get_model_driver(driver_name)
+    if driver is None:
+        return None
+    try:
+        text = driver.send(prompt, model=model, system=system,
+                           max_tokens=max_tokens,
+                           temperature=temperature, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 — فشل السائق = رجوع
+        code = "unknown"
+        try:
+            from lib import model_driver as driver_lib
+            if isinstance(exc, driver_lib.ProviderError):
+                code = exc.code
+            else:
+                code = driver_lib.classify_provider_error(str(exc))
+        except Exception:  # noqa: BLE001 — بلا ترجمة بلا كسر
+            code = "unknown"
+        try:
+            record_attempt(state, str(driver_name), False,
+                           _DRIVER_CODE_TO_KIND.get(code, "unknown"))
+        except Exception:  # noqa: BLE001 — التسجيل لا يكسر الرجوع
+            pass
+        return None
+    if not isinstance(text, str) or not text:
+        return None
+    try:
+        record_attempt(state, str(driver_name), True)
+    except Exception:  # noqa: BLE001 — التسجيل لا يكسر الرد
+        pass
+    return text

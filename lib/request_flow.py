@@ -40,6 +40,7 @@ OpenMontage للإنتاج يرفع ``NoProjectError`` فتُحفظ القصة �
 """
 import os
 import re
+import sys
 
 from lib import queue as queue_lib
 
@@ -92,6 +93,35 @@ class RequestFlowError(Exception):
     """خطأ في تدفق «اطلب فيديو» — رسالته عربية للمستخدم."""
 
 
+class ApprovalBlockedError(RequestFlowError):
+    """رفضت بوابة الموافقة الفعل قبل تنفيذه (جولة v0.1.63).
+
+    .exit_code: 5 عند الرفض (deny أو رفض المستخدم تفاعليًا)،
+    و3 حين يحتاج الفعل إجابة بشرية والتشغيل غير تفاعلي
+    (سؤال معلّق مسجَّل في runs/approval-decisions.jsonl).
+    """
+
+    def __init__(self, message, exit_code=5):
+        self.exit_code = exit_code
+        super().__init__(message)
+
+
+class UsageCapError(RequestFlowError):
+    """رفض حدود الاستخدام قبل بدء عمل جديد (عقد ع9).
+
+    .status: 429 للعمل غير المراقب، و409 للرسالة المباشرة
+    تحت stops=everything؛ و.retry_after: ثوانٍ حتى إعادة
+    الضبط؛ و.code: "spend_cap" دائمًا عند الرفض.
+    """
+
+    def __init__(self, message, status=429, retry_after=None,
+                 code="spend_cap"):
+        self.status = status
+        self.retry_after = retry_after
+        self.code = code
+        super().__init__(message)
+
+
 class NoProjectError(RequestFlowError):
     """لا مشروع OpenMontage للإنتاج — القصة محفوظة في الطابور.
 
@@ -114,6 +144,108 @@ class NoProjectError(RequestFlowError):
 def _norm_ws(text):
     """اطوِ كل المسافات البيضاء إلى مسافات مفردة."""
     return re.sub(r"\s+", " ", (text or "")).strip()
+
+
+# ─── توصيل الموجة ب (جولة v0.1.63): بوابة الموافقة + حدود الاستخدام ───
+# الاستيرادات المتقاطعة كسولة داخل الدوال (بلا دورات)، وكل
+# فشل في وحدة جديدة يرجع للسلوك الحالي بلا كسر — ما عدا
+# أرضية الأمان فهي deny دائمًا.
+
+def _require_approval(action, scope="*"):
+    """افحص بوابة الموافقة قبل تنفيذ فعل — قاعدة «بلا تغيير
+    سلوك افتراضي» (قرار المنسق الملزم).
+
+    - بلا ملف إعداد (~/.qisas-studio/approval.json غائب):
+      allow فورًا بلا أي سؤال — فيبقى سلوك الأوامر والكرونات
+      الحالية كما هو.
+    - أرضية الأمان (delete_published/spend_money/change_keys/
+      delete_project_files): deny دائمًا حتى بلا إعداد.
+    - allow ← يمضي؛ وdeny ← ApprovalBlockedError خروج 5؛
+    - ask + stdin طرفية ← سؤال تفاعلي (نعم يمضي، وغيرها
+      رفض خروج 5)؛ وask + بلا طرفية ← السؤال معلّق مسجَّل
+      في runs/approval-decisions.jsonl (تسجله gate.check)
+      + ApprovalBlockedError خروج 3 — بلا تعليق أبدًا.
+    - أي عطل في وحدة الموافقة ← allow (fail-open للمسار
+      القديم، ما عدا أرضية الأمان).
+    """
+    try:
+        from lib import approval as approval_lib
+    except Exception:  # noqa: BLE001 — البوابة غائبة = يمضي
+        return "allow"
+    try:
+        if action in getattr(approval_lib, "SAFETY_FLOOR",
+                             frozenset()):
+            raise ApprovalBlockedError(
+                "أرضية الأمان: الفعل «%s» مرفوض دائمًا — لا "
+                "موافقة تسمح به" % action, exit_code=5)
+        if not os.path.isfile(approval_lib.config_path()):
+            return "allow"
+        gate = approval_lib.ApprovalGate()
+        decision = gate.check(action, scope=scope)
+    except ApprovalBlockedError:
+        raise
+    except Exception:  # noqa: BLE001 — فشل البوابة = يمضي
+        return "allow"
+    if decision == "allow":
+        return "allow"
+    if decision == "deny":
+        raise ApprovalBlockedError(
+            "بوابة الموافقة رفضت الفعل «%s» — اضبط مستوى "
+            "الموافقة أو امنح الفعل صراحةً ثم أعد الطلب"
+            % action, exit_code=5)
+    # ask: تفاعلي فقط حين يكون stdin طرفية.
+    try:
+        interactive = sys.stdin.isatty()
+    except Exception:  # noqa: BLE001 — بلا طرفية = غير تفاعلي
+        interactive = False
+    if interactive:
+        try:
+            answer = input(
+                "هذا الفعل يحتاج موافقتك — «%s» (نعم/لا): "
+                % action).strip().lower()
+        except EOFError:
+            raise ApprovalBlockedError(
+                "الفعل «%s» يحتاج موافقة بشرية — أُغلق الإدخال "
+                "قبل الإجابة؛ وسُجّل السؤال المعلّق في "
+                "runs/approval-decisions.jsonl" % action,
+                exit_code=3)
+        except KeyboardInterrupt:
+            raise
+        if answer in ("نعم", "ن", "yes", "y"):
+            return "allow"
+        raise ApprovalBlockedError(
+            "رفضتَ الفعل «%s» — لم يُنفَّذ شيء" % action,
+            exit_code=5)
+    raise ApprovalBlockedError(
+        "الفعل «%s» يحتاج موافقة بشرية — التشغيل غير تفاعلي "
+        "(كرون/اختبار) فسُجّل السؤال المعلّق في "
+        "runs/approval-decisions.jsonl؛ أجب عنه ثم أعد الطلب"
+        % action, exit_code=3)
+
+
+def _check_usage_caps(kind="direct"):
+    """افحص حدود الاستخدام قبل بدء عمل جديد (عقد ع9).
+
+    يرفع UsageCapError (429/409 برمز spend_cap) عند الرفض.
+    أي عطل في وحدة الحدود ← يمضي العمل (fail-open).
+    """
+    try:
+        from lib import usage_caps as caps_lib
+    except Exception:  # noqa: BLE001 — الحدود غائبة = بلا حد
+        return None
+    try:
+        result = caps_lib.check(kind)
+    except Exception:  # noqa: BLE001 — فشل الفحص = بلا حد
+        return None
+    if not isinstance(result, dict) or result.get("allowed"):
+        return result
+    status = result.get("status") or (
+        409 if kind == "direct" else 429)
+    reason = result.get("reason") or "بُلغ حد الاستخدام"
+    raise UsageCapError(
+        "بُلغ حد الاستخدام — %s" % reason,
+        status=status, retry_after=result.get("retry_after"),
+        code=result.get("code") or "spend_cap")
 
 
 def _word_count(text):
@@ -269,7 +401,9 @@ def _print_plan(print_fn, result):
 def request_to_run(cfg, text, chat_fn, out_path, run_fn=None,
                    project=None, dry_run=False, allow_fallback=False,
                    queue_add_fn=None, studio_dir=None,
-                   print_fn=None):
+                   print_fn=None, approval_action="produce_video",
+                   approval_scope="*", usage_kind="direct",
+                   check_usage_caps=True):
     """نسّق طلب فيديو كاملًا: حلّ الطلب → حفظه في الطابور →
     تشغيل خط الإنتاج. يرجع قاموس النتيجة.
 
@@ -294,6 +428,19 @@ def request_to_run(cfg, text, chat_fn, out_path, run_fn=None,
       حقيقي في الطابور).
     - studio_dir: مجلد studio لحفظ نص القصة (للاختبار).
     - print_fn: للحقن في الاختبارات (الافتراضي print).
+    - approval_action: فعل بوابة الموافقة قبل تشغيل الإنتاج
+      (الافتراضي "produce_video"؛ وNone يلغي البوابة).
+      بلا ملف إعداد موافقة يمضي الإنتاج بلا سؤال؛ وdeny
+      يرفع ApprovalBlockedError خروج 5 قبل أي إنتاج؛ وask
+      غير التفاعلي يرفع خروج 3 (سؤال معلّق مسجَّل).
+    - approval_scope: نطاق فعل الموافقة (الافتراضي "*").
+    - usage_kind: نوع الفحص في حدود الاستخدام (الافتراضي
+      "direct" — طلب مستخدم مباشر يعمل دائمًا تحت
+      stops=unattended)؛ وcheck_usage_caps=False يلغي فحص
+      الحدود. الفحص قبل بدء العمل الجديد فقط (الدور الجاري
+      يُكمل)، ويرفع UsageCapError بأسلوب API عند الرفض.
+    - dry_run: يطبع الخطة فقط بلا حفظ وبلا إنتاج — وبلا
+      أي فحص بوابة/حدود (لا فعل يُنفَّذ).
 
     النتيجة: {"kind", "title", "story_text", "story_words",
     "project", "out_path", "queue_number", "output", "status"}؛
@@ -304,6 +451,10 @@ def request_to_run(cfg, text, chat_fn, out_path, run_fn=None,
     """
     printf = print_fn or print
     kind = classify_request(text)
+    # حدود الاستخدام قبل بدء العمل الجديد (التوليد ثم
+    # الإنتاج) — لا في dry-run (خطة بلا فعل يُنفَّذ).
+    if not dry_run and check_usage_caps:
+        _check_usage_caps(usage_kind)
     story_text = request_to_story(chat_fn, text)
     title = extract_title(story_text)
     result = {
@@ -336,6 +487,11 @@ def request_to_run(cfg, text, chat_fn, out_path, run_fn=None,
                "بانتظار مشروع OpenMontage.")
         _print_plan(printf, result)
         return result
+    # بوابة الموافقة قبل تنفيذ الإنتاج (الفعل المكلف) — بعد
+    # حفظ القصة في الطابور (كالرفض عند غياب المشروع: القصة
+    # محفوظة ولا فيديو وهمي). بلا ملف إعداد يمضي بلا سؤال.
+    if approval_action is not None:
+        _require_approval(approval_action, scope=approval_scope)
     try:
         out = run_fn(cfg, story_text, title, project, out_path,
                      allow_fallback, saved.get("number"))

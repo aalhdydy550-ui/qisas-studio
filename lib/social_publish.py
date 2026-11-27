@@ -51,6 +51,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -61,6 +62,7 @@ from lib import retry_policy as retry_lib
 import json
 import math
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -328,6 +330,116 @@ def check_token_freshness(platform, studio_dir=None, now=None):
 
 class SocialPublishError(Exception):
     """خطأ في نشر TikTok/Instagram (رسالته عربية)."""
+
+
+class ApprovalBlockedError(SocialPublishError):
+    """رفضت بوابة الموافقة النشر الخارجي (جولة v0.1.63).
+
+    .exit_code: 5 عند الرفض (deny أو رفض المستخدم تفاعليًا)،
+    و3 حين يحتاج النشر إجابة بشرية والتشغيل غير تفاعلي
+    (سؤال معلّق مسجَّل في runs/approval-decisions.jsonl).
+    يمسكها مستدعو SocialPublishError كما قبل (فئة فرعية).
+    """
+
+    def __init__(self, message, exit_code=5):
+        self.exit_code = exit_code
+        super().__init__(message)
+
+
+# ─── توصيل الموجة ب (جولة v0.1.63): بوابة الموافقة + خطاف الفرز ───
+
+def _require_approval(action, scope="*"):
+    """افحص بوابة الموافقة قبل أي نشر خارجي — قاعدة «بلا
+    تغيير سلوك افتراضي» (قرار المنسق الملزم).
+
+    - بلا ملف إعداد (~/.qisas-studio/approval.json غائب):
+      allow فورًا بلا أي سؤال — فيبقى سلوك أوامر النشر
+      الحالية (والكرونات) كما هو.
+    - أرضية الأمان: deny دائمًا حتى بلا إعداد.
+    - allow ← يمضي النشر؛ وdeny ← ApprovalBlockedError
+      خروج 5؛ وask + stdin طرفية ← سؤال تفاعلي؛ وask + بلا
+      طرفية ← السؤال معلّق مسجَّل في
+      runs/approval-decisions.jsonl (تسجله gate.check) +
+      ApprovalBlockedError خروج 3 — بلا تعليق أبدًا.
+    - أي عطل في وحدة الموافقة ← allow (fail-open للمسار
+      القديم، ما عدا أرضية الأمان).
+    """
+    try:
+        from lib import approval as approval_lib
+    except Exception:  # noqa: BLE001 — البوابة غائبة = يمضي
+        return "allow"
+    try:
+        if action in getattr(approval_lib, "SAFETY_FLOOR",
+                             frozenset()):
+            raise ApprovalBlockedError(
+                "أرضية الأمان: الفعل «%s» مرفوض دائمًا — لا "
+                "موافقة تسمح به" % action, exit_code=5)
+        if not os.path.isfile(approval_lib.config_path()):
+            return "allow"
+        gate = approval_lib.ApprovalGate()
+        decision = gate.check(action, scope=scope)
+    except ApprovalBlockedError:
+        raise
+    except Exception:  # noqa: BLE001 — فشل البوابة = يمضي
+        return "allow"
+    if decision == "allow":
+        return "allow"
+    if decision == "deny":
+        raise ApprovalBlockedError(
+            "بوابة الموافقة رفضت النشر «%s» — اضبط مستوى "
+            "الموافقة أو امنح النشر صراحةً ثم أعد النشر"
+            % action, exit_code=5)
+    try:
+        interactive = sys.stdin.isatty()
+    except Exception:  # noqa: BLE001 — بلا طرفية = غير تفاعلي
+        interactive = False
+    if interactive:
+        try:
+            answer = input(
+                "النشر يحتاج موافقتك — «%s» (نعم/لا): "
+                % action).strip().lower()
+        except EOFError:
+            raise ApprovalBlockedError(
+                "النشر «%s» يحتاج موافقة بشرية — أُغلق الإدخال "
+                "قبل الإجابة؛ وسُجّل السؤال المعلّق في "
+                "runs/approval-decisions.jsonl" % action,
+                exit_code=3)
+        except KeyboardInterrupt:
+            raise
+        if answer in ("نعم", "ن", "yes", "y"):
+            return "allow"
+        raise ApprovalBlockedError(
+            "رفضتَ النشر «%s» — لم يُنشر شيء" % action,
+            exit_code=5)
+    raise ApprovalBlockedError(
+        "النشر «%s» يحتاج موافقة بشرية — التشغيل غير تفاعلي "
+        "(كرون/اختبار) فسُجّل السؤال المعلّق في "
+        "runs/approval-decisions.jsonl؛ أجب عنه ثم أعد النشر"
+        % action, exit_code=3)
+
+
+def triage_inbox(items, recent_dismissals=None, client=None):
+    """فرز تعليقات/رسائل واردة عبر lib.inbox_triage — خطاف التوصيل.
+
+    لا يوجد تدفق تعليقات/رسائل حي داخل هذه الوحدة بعد (لا
+    جلب تعليقات هنا)؛ فهذه الدالة هي نقطة الربط التي
+    يستدعيها المنسّق حين يوجد تدفق (مثلًا: تعليقات صفحة
+    «قصص وعبر» بعد جلبها). أي عطل في وحدة الفرز — استيراد
+    أو استدعاء — يرجع كل عنصر deferred (ينتظر الفحص
+    التالي) بلا سقوط عنصر أبدًا.
+    """
+    try:
+        from lib import inbox_triage as triage_lib
+        return triage_lib.triage(
+            items, recent_dismissals=recent_dismissals,
+            client=client)
+    except Exception:  # noqa: BLE001 — فشل الفرز = تأجيل الكل
+        return [{"id": (item or {}).get("id"),
+                 "status": "deferred", "reading": None,
+                 "decision": None,
+                 "reason": "تعذّر تحميل وحدة الفرز — ينتظر "
+                           "الفحص التالي"}
+                for item in (items or [])]
 
 
 def token_path(platform, studio_dir=None):
@@ -968,7 +1080,12 @@ def upload_tiktok(video, title, caption, token, timeout=600):
     {"publish_id": ..., "status": ..., "public_url": ...}.
     يرفع SocialPublishError إن أعاد فحص الحالة FAILED (كان
     الكود يرجع بنجاح ويطبع «رُفع» حتى عند الفشل).
+    بوابة الموافقة أولًا (جولة v0.1.63): بلا ملف إعداد
+    موافقة يمضي الرفع بلا سؤال؛ وdeny يرفع
+    ApprovalBlockedError خروج 5 قبل أي شبكة؛ وask غير
+    التفاعلي يرفع خروج 3 (سؤال معلّق مسجَّل).
     """
+    _require_approval("publish_tiktok")
     validate_social_payload("tiktok", video, title, caption)
     _check_duration(video, TIKTOK_MAX_DURATION, "TikTok")
     payload = tiktok_init_payload(video, title, caption)
@@ -1016,7 +1133,12 @@ def upload_instagram(video, title, caption, ig_user_id, token,
     منفَّذ كاملًا لكن غير مختبَر حيًا (لا حساب مربوط) — لا
     يُستدعى إلا عند وجود توكن ومعرّف حساب محفوظين.
     يرجع {"media_id": ...}.
+    بوابة الموافقة أولًا (جولة v0.1.63): بلا ملف إعداد
+    موافقة يمضي الرفع بلا سؤال؛ وdeny يرفع
+    ApprovalBlockedError خروج 5 قبل أي شبكة؛ وask غير
+    التفاعلي يرفع خروج 3 (سؤال معلّق مسجَّل).
     """
+    _require_approval("publish_instagram")
     if not (ig_user_id or "").strip():
         raise SocialPublishError(
             "معرّف حساب Instagram مفقود — اضبط "

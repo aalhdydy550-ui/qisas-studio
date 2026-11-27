@@ -39,11 +39,27 @@ STUDIO-<العائلة>-<رقم من 3 خانات> معرّفات عامة ثا�
 مثل facebook_token تحملها كقيم في lib/errors.py،
 وإنتروبياها العالية توقع كاشف الإسناد فيها خطأً؛
 فهي مستثناة بنمطها (لا بقيمها) في _ERROR_CODE_RE أدناه.
+
+مفاتيح كتابة فقط (جولة v0.1.63، بند 13 — عقد ع12، §7):
+المفاتيح تُكتب ولا تُقرأ أبدًا — لا دالة عامة في هذه الوحدة
+ترجع قيمة مفتاح؛ وسرد المفاتيح يعرض الأسماء والوجود فقط،
+والتشخيص يقنّع القيم. حفظ مفتاح يجري اختبارًا واحدًا صغيرًا
+(قابل للحقن عبر `tester` — والافتراضي تحقق صيغة فقط بلا
+شبكة؛ والتحقق الحي من المزوّد يحقنه المتصل)؛ والمفتاح الذي
+يرفضه الاختبار لا يُحفظ. التدوير يكتب الجديد بعد نجاح
+اختباره فقط والقديم يبقى حتى ينجح الجديد. الرموز تُقرأ من
+ملف عبر `read_token_file` (مسار `--token-file`) أبدًا من
+سطر الأوامر. مخزن المفاتيح `keys.json` تحت مجلد الحالة
+نفسه `~/.qisas-studio` (أو `QISAS_KEYS_DIR` في الاختبارات)،
+المجلد 0700 والملف 0600 وكتابة ذرية على نمط `lib/license.py`.
 """
 import fnmatch
+import json
 import math
 import os
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # --- قائمة السماح الصريحة (قيم عامة معلنة) ---
 # مفاتيح وهمية بصيغ صحيحة للوثائق/الاختبارات (W8): كلها
@@ -460,3 +476,355 @@ def check_gitignore(root):
         return list(REQUIRED_GITIGNORE)
     return [entry for entry in REQUIRED_GITIGNORE
             if entry not in content]
+
+
+# ------------------------------------------------------------------
+# مفاتيح كتابة فقط — جولة v0.1.63، بند 13 (عقد ع12)
+# ------------------------------------------------------------------
+
+KEYS_DIR_ENV = "QISAS_KEYS_DIR"
+DEFAULT_KEYS_DIR = os.path.join("~", ".qisas-studio")
+KEYS_FILENAME = "keys.json"
+
+CAIRO_TZ = ZoneInfo("Africa/Cairo")
+
+# المزودون الذين يستخدمهم الاستوديو فعلًا (نفس قائمة كواشف
+# الصيغة أعلاه) — اسم المزوّد ← نمط صيغة مفتاحه للتحقق
+# الأولي من الصيغة (بلا شبكة).
+_PROVIDER_FORMAT_RES = {
+    "gemini": _GOOGLE_RE,
+    "google": _GOOGLE_RE,
+    "groq": _GROQ_RE,
+    "openrouter": _OPENROUTER_RE,
+    "openai": _OPENAI_RE,
+    "anthropic": _ANTHROPIC_RE,
+    "elevenlabs": _ELEVENLABS_RE,
+    "huggingface": _HF_RE,
+    "github": _GITHUB_RE,
+}
+
+KNOWN_PROVIDERS = tuple(sorted(_PROVIDER_FORMAT_RES))
+
+_KEY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+class KeyTestError(Exception):
+    """رفض الاختبار مفتاحًا (رسالته عربية) — والمفتاح لم يُحفظ."""
+
+
+class KeyStoreError(Exception):
+    """خطأ في مخزن المفاتيح أو ملف التوكن (رسالته عربية)."""
+
+
+def keys_dir():
+    """مجلد مخزن المفاتيح: QISAS_KEYS_DIR أو ~/.qisas-studio."""
+    override = os.environ.get(KEYS_DIR_ENV, "").strip()
+    if override:
+        return os.path.expanduser(override)
+    return os.path.expanduser(DEFAULT_KEYS_DIR)
+
+
+def keys_path(directory=None):
+    """المسار الكامل لملف مخزن المفاتيح keys.json."""
+    return os.path.join(directory or keys_dir(), KEYS_FILENAME)
+
+
+def _now_cairo_iso():
+    """الآن بتوقيت القاهرة بصيغة ISO (لأختام المخزن)."""
+    return datetime.now(tz=CAIRO_TZ).isoformat(timespec="seconds")
+
+
+def _validate_key_name(name):
+    """تحقق من اسم مفتاح؛ ValueError على اسم فارغ أو غير صالح."""
+    if not isinstance(name, str) or not _KEY_NAME_RE.match(name):
+        raise ValueError(
+            "اسم المفتاح غير صالح: %r — الاسم حروف وأرقام و«-» "
+            "و«_» فقط، ويبدأ بحرف أو رقم (حتى 64 حرفًا)"
+            % (name,))
+
+
+def _infer_provider(value):
+    """خمّن المزوّد من صيغة القيمة، أو None إن لم تطابق أحدًا."""
+    for provider, pattern in _PROVIDER_FORMAT_RES.items():
+        if pattern.search(value):
+            return provider
+    return None
+
+
+def _format_tester(provider, value):
+    """الاختبار الافتراضي: تحقق صيغة فقط (بلا أي شبكة).
+
+    يرجع (True/False، رسالة عربية). مزوّد غير معروف تُقبل
+    قيمته إن كانت غير فارغة (لا صيغة معروفة تُقاس عليها) —
+    والتحقق الحي من أي مزوّد يمرَّر عبر `tester` في
+    `test_key`/`set_key`/`rotate_key`.
+    """
+    pattern = _PROVIDER_FORMAT_RES.get(provider)
+    if pattern is None:
+        return True, ("لا صيغة معروفة لمزوّد «%s» — قُبلت القيمة "
+                      "بعد تحقق الصيغة العامة فقط (بلا استدعاء "
+                      "شبكة)" % provider)
+    if pattern.search(value):
+        return True, ("صيغة المفتاح مطابقة لصيغة مزوّد «%s» "
+                      "(فحص صيغة فقط — بلا استدعاء شبكة)"
+                      % provider)
+    return False, ("صيغة المفتاح غير مطابقة لصيغة مزوّد «%s» — "
+                   "تحقق من المفتاح وأعد المحاولة" % provider)
+
+
+def test_key(provider, value, tester=None):
+    """اختبر مفتاحًا بلا حفظه؛ ارجع (نجح؟، رسالة عربية).
+
+    tester قابل اختياري `tester(provider, value) -> bool` —
+    استدعاء واحد صغير يحقنه المتصل (التحقق الحي من المزوّد،
+    أو محاكاة المزوّد في الاختبارات). بلا tester يُستخدم
+    تحقق الصيغة فقط. tester يرفض (False) أو يرمي يعني
+    الفشل — ولا يُحفظ شيء هنا أبدًا.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False, "المفتاح فارغ — ضع مفتاحًا غير فارغ"
+    value = value.strip()
+    if tester is None:
+        return _format_tester(provider, value)
+    try:
+        ok = bool(tester(provider, value))
+    except Exception as exc:  # أي عطل في الاختبار = رفض.
+        return False, "رفض المزوّد المفتاح (%s): %s" % (provider, exc)
+    if ok:
+        return True, "قبل المزوّد المفتاح (%s)" % provider
+    return False, "رفض المزوّد المفتاح (%s) — لم يُحفظ" % provider
+
+
+def read_token_file(path):
+    """اقرأ رمزًا/مفتاحًا من ملف (مسار `--token-file`).
+
+    الرموز تُمرَّر عبر ملف أبدًا عبر سطر الأوامر — هذه الدالة
+    هي المسار المصرّح به وحده لقراءة قيمة من القرص. ترفع
+    KeyStoreError عند ملف غائب أو فارغ. القيمة تُرجع مقصوصة
+    الأطراف (سطر جديد أخير وما يشبهه ليس جزءًا من المفتاح).
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            value = fh.read().strip()
+    except OSError:
+        raise KeyStoreError(
+            "ملف التوكن غير موجود أو لا يُقرأ: %s — مرّر مسار ملف "
+            "يحمل التوكن عبر --token-file" % (path,))
+    if not value:
+        raise KeyStoreError(
+            "ملف التوكن فارغ: %s — ضع التوكن في الملف وأعد المحاولة"
+            % (path,))
+    return value
+
+
+def _load_store(directory=None):
+    """اقرأ مخزن المفاتيح (داخلية)؛ ارجع {"keys": {...}}.
+
+    ملف غائب = مخزن فارغ. JSON تالف أو بنية غير قاموس =
+    KeyStoreError (لا يُسكت بإسقاط مفاتيح محفوظة).
+    """
+    path = keys_path(directory)
+    if not os.path.isfile(path):
+        return {"keys": {}}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError, UnicodeDecodeError):
+        raise KeyStoreError(
+            "ملف مخزن المفاتيح تالف: %s — لا يُكتب فوقه حتى "
+            "يُراجَع يدويًا (حتى لا تُفقد مفاتيح محفوظة)" % path)
+    if not isinstance(data, dict) or not isinstance(
+            data.get("keys", {}), dict):
+        raise KeyStoreError(
+            "بنية ملف مخزن المفاتيح غير صالحة: %s" % path)
+    return {"keys": dict(data["keys"])}
+
+
+def _save_store(store, directory=None):
+    """احفظ المخزن ذريًا (ملف مؤقت + os.replace) بصلاحية 600،
+    ومجلد المخزن 700. ترجع نسخة من المخزن المحفوظ."""
+    directory = directory or keys_dir()
+    os.makedirs(directory, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+    path = keys_path(directory)
+    tmp = path + ".tmp"
+    payload = {"keys": store["keys"]}
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)
+    return {"keys": dict(store["keys"])}
+
+
+def _resolve_provider(name, value, provider):
+    """حدّد المزوّد: صريح، أو اسم معروف، أو تخمين من الصيغة،
+    أو «custom»."""
+    if provider:
+        return provider
+    if name in _PROVIDER_FORMAT_RES:
+        return name
+    return _infer_provider(value) or "custom"
+
+
+def set_key(name, value, provider=None, tester=None,
+            directory=None):
+    """احفظ مفتاحًا بعد اختبار واحد ناجح — ولا تحفظ غيره.
+
+    يجري `test_key` أولًا؛ والمفتاح الذي يرفضه الاختبار لا
+    يُحفظ (KeyTestError) ويبقى المخزن كما هو. حفظ اسم موجود
+    يستبدل قيمته بعد الاختبار ويحافظ على تاريخ إضافته.
+    ترجع إدخال السرد للمفتاح (اسم + مزوّد + وجود — بلا قيمة).
+    """
+    _validate_key_name(name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("قيمة المفتاح فارغة — ضع مفتاحًا غير فارغ")
+    value = value.strip()
+    provider = _resolve_provider(name, value, provider)
+    ok, message = test_key(provider, value, tester=tester)
+    if not ok:
+        raise KeyTestError(message)
+    store = _load_store(directory)
+    now = _now_cairo_iso()
+    previous = store["keys"].get(name)
+    entry = {"provider": provider,
+             "value": value,
+             "added_at": (previous.get("added_at") if previous
+                          else now),
+             "updated_at": now}
+    if previous and previous.get("rotated_at"):
+        entry["rotated_at"] = previous["rotated_at"]
+    store["keys"][name] = entry
+    _save_store(store, directory)
+    return {"name": name, "provider": provider, "present": True,
+            "added_at": entry["added_at"],
+            "rotated_at": entry.get("rotated_at")}
+
+
+def rotate_key(name, new_value, tester=None, directory=None):
+    """دوّر مفتاحًا: اختبر الجديد أولًا، واكتبه فقط بعد نجاحه.
+
+    القديم يبقى في المخزن حتى ينجح اختبار الجديد (فشل
+    الاختبار = KeyTestError والمخزن بلا أي تغيير). اسم غائب
+    = KeyStoreError. ترجع إدخال السرد للمفتاح (بلا قيمة).
+    """
+    _validate_key_name(name)
+    if not isinstance(new_value, str) or not new_value.strip():
+        raise ValueError("قيمة المفتاح الجديد فارغة — ضع مفتاحًا "
+                         "غير فارغ")
+    new_value = new_value.strip()
+    store = _load_store(directory)
+    previous = store["keys"].get(name)
+    if previous is None:
+        raise KeyStoreError(
+            "لا يوجد مفتاح محفوظ باسم «%s» حتى يُدوَّر — أضفه أولًا"
+            " عبر keys set" % name)
+    provider = previous.get("provider") or "custom"
+    ok, message = test_key(provider, new_value, tester=tester)
+    if not ok:
+        raise KeyTestError(message)
+    now = _now_cairo_iso()
+    store["keys"][name] = {"provider": provider,
+                           "value": new_value,
+                           "added_at": previous.get("added_at") or now,
+                           "updated_at": now,
+                           "rotated_at": now}
+    _save_store(store, directory)
+    return {"name": name, "provider": provider, "present": True,
+            "added_at": store["keys"][name]["added_at"],
+            "rotated_at": now}
+
+
+def list_keys(directory=None):
+    """اسرد المفاتيح: الأسماء والمزوّدون والوجود فقط.
+
+    لا ترجع أي قيمة سرية أبدًا — كل إدخال {"name"،
+    "provider"، "present": True، "added_at"، "rotated_at"}.
+    مرتبة بالاسم.
+    """
+    store = _load_store(directory)
+    entries = []
+    for name in sorted(store["keys"]):
+        entry = store["keys"][name]
+        entries.append({"name": name,
+                        "provider": entry.get("provider") or "custom",
+                        "present": True,
+                        "added_at": entry.get("added_at"),
+                        "rotated_at": entry.get("rotated_at")})
+    return entries
+
+
+def has_key(name, directory=None):
+    """هل يوجد مفتاح محفوظ بهذا الاسم؟ (وجود فقط — بلا قيمة)."""
+    _validate_key_name(name)
+    store = _load_store(directory)
+    return name in store["keys"]
+
+
+def mask_secret(value, visible=4):
+    """قنّع قيمة سرية للتشخيص: أول N + «…» + آخر N.
+
+    لا ترجع القيمة الكاملة أبدًا؛ وقيمة أقصر من 2N تُستبدل
+    بنجوم بطولها. قيمة فارغة ترجع "".
+    """
+    if not value:
+        return ""
+    if len(value) <= 2 * visible:
+        return "*" * len(value)
+    return "%s…%s" % (value[:visible], value[-visible:])
+
+
+def redact_text(text):
+    """احجب قيمًا بصيغ مزودين معروفة داخل نص (للتشخيص/المخرجات).
+
+    كل مطابقة تُستبدل بصيغتها المقنّعة عبر `mask_secret` —
+    فلا تظهر قيمة كاملة في أي مخرج. نص بلا مطابقات يُرجع
+    كما هو.
+    """
+    if not text:
+        return ""
+    redacted = text
+    for pattern in (_GOOGLE_RE, _GROQ_RE, _OPENROUTER_RE,
+                    _ANTHROPIC_RE, _OPENAI_RE, _ELEVENLABS_RE,
+                    _HF_RE, _GITHUB_RE, _GITHUB_PAT_RE, _AWS_RE):
+        redacted = pattern.sub(
+            lambda m: mask_secret(m.group(0)), redacted)
+    redacted = _BEARER_RE.sub(
+        lambda m: "Bearer " + mask_secret(m.group(1)), redacted)
+    return redacted
+
+
+def diagnose_keys(directory=None):
+    """أسطر تشخيص عربية عن المفاتيح المحفوظة — مقنّعة دائمًا.
+
+    كل سطر يحمل الاسم والمزوّد والوجود والقيمة المقنّعة فقط؛
+    ولا سطر يحمل قيمة كاملة أبدًا. ترجع قائمة أسطر.
+    """
+    store = _load_store(directory)
+    lines = ["تشخيص المفاتيح: %d مفتاحًا محفوظًا "
+             "(القيم مقنّعة ولا تُعرض كاملة أبدًا)"
+             % len(store["keys"])]
+    for name in sorted(store["keys"]):
+        entry = store["keys"][name]
+        lines.append("• %s (%s): موجود — %s"
+                     % (name, entry.get("provider") or "custom",
+                        mask_secret(entry.get("value") or "")))
+    for provider in KNOWN_PROVIDERS:
+        if provider not in store["keys"]:
+            lines.append("• %s: غير موجود" % provider)
+    return lines
+
+
+__all__ = ["ALLOWLIST_VALUES", "REQUIRED_GITIGNORE", "SKIP_DIRS",
+           "SKIP_EXTENSIONS", "scan_tree", "to_sarif",
+           "check_gitignore", "KEYS_DIR_ENV", "KEYS_FILENAME",
+           "KNOWN_PROVIDERS", "KeyTestError", "KeyStoreError",
+           "keys_dir", "keys_path", "test_key", "read_token_file",
+           "set_key", "rotate_key", "list_keys", "has_key",
+           "mask_secret", "redact_text", "diagnose_keys"]

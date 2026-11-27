@@ -56,6 +56,100 @@ class PreflightError(Exception):
     """خطأ في فحص ما قبل النشر (رسالته عربية)."""
 
 
+class ApprovalBlockedError(RuntimeError):
+    """رفضت بوابة الموافقة النشر على يوتيوب (جولة v0.1.63).
+
+    .exit_code: 5 عند الرفض (deny أو رفض المستخدم تفاعليًا)،
+    و3 حين يحتاج النشر إجابة بشرية والتشغيل غير تفاعلي
+    (سؤال معلّق مسجَّل في runs/approval-decisions.jsonl).
+    فئة فرعية من RuntimeError فيمسكها main كما يمسك فشل
+    الرفع — وتعيين رمز الخروج 3/5 على سطر الأوامر مهمة
+    المنسّق (studio.py) لا هذا الملف.
+    """
+
+    def __init__(self, message, exit_code=5):
+        self.exit_code = exit_code
+        super().__init__(message)
+
+
+def _require_approval(action, scope="*"):
+    """افحص بوابة الموافقة قبل النشر على يوتيوب — قاعدة «بلا
+    تغيير سلوك افتراضي» (قرار المنسق الملزم).
+
+    - بلا ملف إعداد (~/.qisas-studio/approval.json غائب):
+      allow فورًا بلا أي سؤال.
+    - أرضية الأمان: deny دائمًا حتى بلا إعداد.
+    - allow ← يمضي؛ وdeny ← ApprovalBlockedError خروج 5؛
+      وask + stdin طرفية ← سؤال تفاعلي؛ وask + بلا طرفية ←
+      سؤال معلّق مسجَّل + خروج 3 — بلا تعليق أبدًا.
+    - أي عطل في وحدة الموافقة ← allow (fail-open).
+    ملاحظة: هذا الملف يُشغَّل سكربتًا مستقلًا أحيانًا
+    (مفسّر .venv-youtube) فيفشل `from lib import approval`
+    لأن مجلد lib نفسه على sys.path — فيُضاف جذر الاستوديو
+    (أب مجلد lib) إلى sys.path وتُعاد المحاولة قبل الاستسلام
+    للسماح.
+    """
+    try:
+        from lib import approval as approval_lib
+    except Exception:  # noqa: BLE001 — محاولة عبر جذر الاستوديو
+        try:
+            root = os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))
+            if root not in sys.path:
+                sys.path.insert(0, root)
+            from lib import approval as approval_lib
+        except Exception:  # noqa: BLE001 — البوابة غائبة = يمضي
+            return "allow"
+    try:
+        if action in getattr(approval_lib, "SAFETY_FLOOR",
+                             frozenset()):
+            raise ApprovalBlockedError(
+                "أرضية الأمان: الفعل «%s» مرفوض دائمًا — لا "
+                "موافقة تسمح به" % action, exit_code=5)
+        if not os.path.isfile(approval_lib.config_path()):
+            return "allow"
+        gate = approval_lib.ApprovalGate()
+        decision = gate.check(action, scope=scope)
+    except ApprovalBlockedError:
+        raise
+    except Exception:  # noqa: BLE001 — فشل البوابة = يمضي
+        return "allow"
+    if decision == "allow":
+        return "allow"
+    if decision == "deny":
+        raise ApprovalBlockedError(
+            "بوابة الموافقة رفضت النشر «%s» — اضبط مستوى "
+            "الموافقة أو امنح النشر صراحةً ثم أعد النشر"
+            % action, exit_code=5)
+    try:
+        interactive = sys.stdin.isatty()
+    except Exception:  # noqa: BLE001 — بلا طرفية = غير تفاعلي
+        interactive = False
+    if interactive:
+        try:
+            answer = input(
+                "النشر يحتاج موافقتك — «%s» (نعم/لا): "
+                % action).strip().lower()
+        except EOFError:
+            raise ApprovalBlockedError(
+                "النشر «%s» يحتاج موافقة بشرية — أُغلق الإدخال "
+                "قبل الإجابة؛ وسُجّل السؤال المعلّق في "
+                "runs/approval-decisions.jsonl" % action,
+                exit_code=3)
+        except KeyboardInterrupt:
+            raise
+        if answer in ("نعم", "ن", "yes", "y"):
+            return "allow"
+        raise ApprovalBlockedError(
+            "رفضتَ النشر «%s» — لم يُنشر شيء" % action,
+            exit_code=5)
+    raise ApprovalBlockedError(
+        "النشر «%s» يحتاج موافقة بشرية — التشغيل غير تفاعلي "
+        "(كرون/اختبار) فسُجّل السؤال المعلّق في "
+        "runs/approval-decisions.jsonl؛ أجب عنه ثم أعد النشر"
+        % action, exit_code=3)
+
+
 def _import_google():
     try:
         from google.auth.transport.requests import Request
@@ -143,7 +237,14 @@ def build_upload_body(title, description, tags, privacy="public",
 def upload_video(service, video, title, description, tags,
                  privacy="public", publish_at=None, category_id="24",
                  thumbnail=None):
-    """ارفع فيديو (resumable) + صورة مصغرة اختيارية. يرجع dict النتيجة."""
+    """ارفع فيديو (resumable) + صورة مصغرة اختيارية. يرجع dict النتيجة.
+
+    بوابة الموافقة أولًا (جولة v0.1.63): بلا ملف إعداد
+    موافقة يمضي الرفع بلا سؤال؛ وdeny يرفع
+    ApprovalBlockedError خروج 5 قبل أي شبكة؛ وask غير
+    التفاعلي يرفع خروج 3 (سؤال معلّق مسجَّل).
+    """
+    _require_approval("publish_youtube")
     _, _, _, _, HttpError, MediaFileUpload = _import_google()
     body = build_upload_body(title, description, tags, privacy,
                              publish_at, category_id)

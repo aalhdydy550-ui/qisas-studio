@@ -17,8 +17,8 @@ Contents API (بلا مصادقة) ويطبّق الملفات المتغيرة 
 وclient-orders/ والبيئات الافتراضية.
 
 `backup`: يحفظ config.yaml + الطابور + طلبات العملاء +
-سجلات التشغيل (runs/*.json) في ملف zip مؤرخ تحت backups/
-مع manifest يعدد المحتويات.
+سجلات التشغيل (runs/*.json — عدا سجلات القرارات، بند 30)
+في ملف zip مؤرخ تحت backups/ مع manifest يعدد المحتويات.
 """
 import contextlib
 import fcntl
@@ -60,6 +60,26 @@ PROTECTED_DIRS = {
     "__pycache__", ".git",
 }
 MAX_RUN_FILES = 200
+
+# جولة v0.1.63 — بند 30: نسخ مساحة العمل الاحتياطية تستثني
+# سجلات القرارات — سجلات الموجّه (runs/decider-log/) وسجل
+# قرارات الموافقة (runs/approval-decisions.jsonl). هي سجلات
+# تشغيلية قصيرة العمر (احتفاظ 180 يومًا) لا تنتمي لنسخة
+# استعادة مساحة العمل.
+DECIDER_LOG_DIR = "decider-log"
+DECIDER_LOG_FILE = "approval-decisions.jsonl"
+
+
+def is_decider_log(rel_path):
+    """هل المسار النسبي سجل قرارات يُستثنى من النسخ الاحتياطي؟
+
+    True لأي ملف تحت runs/decider-log/ (أو decider-log/ بأي
+    عمق) ولسجل قرارات الموافقة approval-decisions.jsonl.
+    """
+    parts = rel_path.replace("\\", "/").split("/")
+    if DECIDER_LOG_DIR in parts:
+        return True
+    return parts[-1] == DECIDER_LOG_FILE
 
 # الجولة 6 (2026-11-22): احتفاظ النسخ الاحتياطية — آخر N نسخة
 # فقط في مجلد النسخ، والأقدم تُحذف تلقائيًا بعد كل نسخة ناجحة
@@ -292,6 +312,10 @@ def collect_backup_files(studio_dir, cfg):
                     # رابط رمزي داخل runs/ قد يشير لملف خارجي
                     # (محتواه يتسرب للنسخة) — يُتخطى.
                     if os.path.islink(full):
+                        continue
+                    # بند 30: سجلات القرارات لا تدخل النسخة.
+                    if is_decider_log(os.path.relpath(full,
+                                                      studio_dir)):
                         continue
                     run_files.append(full)
             if len(run_files) >= MAX_RUN_FILES:

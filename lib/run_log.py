@@ -47,7 +47,7 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from lib import errors as _errors
 
@@ -355,3 +355,270 @@ class _StageContext:
 def start_run(command, **kwargs):
     """اختصار: أنشئ RunLog وابدأه فورًا."""
     return RunLog(command, **kwargs).start()
+
+
+# ============================================================
+# قراءة محدودة + احتفاظ (جولة v0.1.63 — بند 30)
+#
+# حدود الصفحات: 200 رسالة للقراءة، 100 نتيجة للبحث — فلا
+# تُقرأ سجلات ضخمة كاملة في الذاكرة. والاحتفاظ: سجلات
+# القرار/الموافقة الأقدم من 180 يومًا تُحذف.
+# ============================================================
+
+READ_LIMIT = 200
+SEARCH_LIMIT = 100
+RETENTION_DAYS = 180
+CLIP_LIMIT = 1000
+
+
+def clip_text(text, limit=CLIP_LIMIT):
+    """قصّ نصًا عند الحد؛ ارجع (النص، هل قُصّ؟)."""
+    text = str(text)
+    if len(text) <= limit:
+        return text, False
+    return text[:limit], True
+
+
+def _check_limit(limit, default, cap):
+    """تحقق من حد؛ ارجع الحد الفعلي مقصوصًا عند السقف."""
+    if limit is None:
+        return default
+    if not isinstance(limit, int) or isinstance(limit, bool) \
+            or limit < 1:
+        raise ValueError("حد القراءة غير صالح: %r" % (limit,))
+    return min(limit, cap)
+
+
+def _load_run_log_file(path):
+    """اقرأ ملف run-log-*.json واحدًا؛ None إن تالف أو غير قاموس."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (ValueError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _run_log_summary(data):
+    """ملخص سجل تشغيل: معرّفات وحالة ومدد فقط — بلا نصوص طويلة."""
+    first = data.get("errors") or []
+    first_error = first[0] if first else None
+    summary = {
+        "correlation_id": data.get("correlation_id") or "",
+        "command": data.get("command") or "",
+        "status": data.get("status") or "",
+        "started_at": data.get("started_at") or "",
+        "duration_seconds": data.get("duration_seconds"),
+        "error_count": len(first),
+    }
+    if isinstance(first_error, dict):
+        original, clipped = clip_text(
+            str(first_error.get("original") or ""))
+        summary["first_error"] = {
+            "code": first_error.get("code") or "",
+            "title": first_error.get("title") or "",
+            "original": original,
+            "clipped": clipped,
+        }
+    return summary
+
+
+def list_run_logs(out_dir=None, limit=READ_LIMIT):
+    """اقرأ ملخصات سجلات التشغيل (الأحدث أولًا، بحد 200).
+
+    ملف JSON تالف يُتخطى ولا يُسقط القائمة.
+    """
+    limit = _check_limit(limit, READ_LIMIT, READ_LIMIT)
+    out_dir = out_dir if out_dir is not None else _DEFAULT_OUT_DIR
+    summaries = []
+    if not os.path.isdir(out_dir):
+        return summaries
+    for name in sorted(os.listdir(out_dir)):
+        if not (name.startswith("run-log-")
+                and name.endswith(".json")):
+            continue
+        data = _load_run_log_file(os.path.join(out_dir, name))
+        if data is not None:
+            summaries.append(_run_log_summary(data))
+    summaries.sort(key=lambda s: s.get("started_at") or "",
+                   reverse=True)
+    return summaries[:limit]
+
+
+def search_run_logs(out_dir=None, query="", limit=SEARCH_LIMIT):
+    """ابحث في سجلات التشغيل: أول 100 مطابقة (الأحدث أولًا).
+
+    المطابقة جزئية بلا حساسية لحالة الأحرف على الأمر ومعرّف
+    الارتباط ورمز/عنوان أول خطأ.
+    """
+    limit = _check_limit(limit, SEARCH_LIMIT, SEARCH_LIMIT)
+    needle = str(query or "").casefold()
+    if not needle:
+        raise ValueError("عبارة البحث فارغة")
+    matches = []
+    for summary in list_run_logs(out_dir, limit=READ_LIMIT):
+        haystack = " ".join([
+            str(summary.get("command") or ""),
+            str(summary.get("correlation_id") or ""),
+            str(summary.get("status") or ""),
+            str((summary.get("first_error") or {}).get("code") or ""),
+            str((summary.get("first_error") or {}).get("title") or ""),
+        ]).casefold()
+        if needle in haystack:
+            matches.append(summary)
+            if len(matches) >= limit:
+                break
+    return matches
+
+
+def _parse_ts(value):
+    """فسّر طابعًا زمنيًا (ISO أو epoch) إلى datetime واعٍ؛ None إن تعذّر."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(
+                text[:-1] + "+00:00" if text.endswith("Z")
+                else text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return None
+
+
+def _prune_ndjson_file(path, cutoff):
+    """احذف من ملف JSONL السطور الأقدم من cutoff؛ ارجع (محذوف، باقٍ).
+
+    سطر بلا طابع زمني مفسَّر يُبقى (لا نحذف ما لا نستطيع
+    تأريخه). ملف يفرغ تمامًا يُحذف ويرجع محذوفًا في القائمة
+    عبر القيمة الثانية الخاصة: (n, -1) تعني حُذف الملف.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return 0, 0
+    kept = []
+    deleted = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            record = json.loads(stripped)
+        except ValueError:
+            kept.append(line)
+            continue
+        ts = None
+        if isinstance(record, dict):
+            for key in ("ts", "at", "time", "timestamp",
+                        "created_at"):
+                ts = _parse_ts(record.get(key))
+                if ts is not None:
+                    break
+        if ts is not None and ts < cutoff:
+            deleted += 1
+        else:
+            kept.append(line)
+    if not kept:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return deleted, -1
+    if deleted:
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.writelines(kept)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return 0, len(kept)
+    return deleted, len(kept)
+
+
+def prune_old_logs(out_dir=None, days=RETENTION_DAYS, now=None):
+    """احذف ملفات run-log-*.json الأقدم من `days` يومًا.
+
+    القدم بزمن التعديل (أو started_at داخل الملف إن فُسّر).
+    يرجع قائمة مسارات المحذوفة.
+    """
+    out_dir = out_dir if out_dir is not None else _DEFAULT_OUT_DIR
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    cutoff = moment - timedelta(days=days)
+    deleted = []
+    if not os.path.isdir(out_dir):
+        return deleted
+    for name in sorted(os.listdir(out_dir)):
+        if not (name.startswith("run-log-")
+                and name.endswith(".json")):
+            continue
+        path = os.path.join(out_dir, name)
+        try:
+            mtime = datetime.fromtimestamp(os.stat(path).st_mtime,
+                                           tz=timezone.utc)
+        except OSError:
+            continue
+        stamp = mtime
+        data = _load_run_log_file(path)
+        if data is not None:
+            parsed = _parse_ts(data.get("started_at"))
+            if parsed is not None:
+                stamp = parsed
+        if stamp < cutoff:
+            try:
+                os.unlink(path)
+                deleted.append(path)
+            except OSError:
+                continue
+    return deleted
+
+
+def prune_decision_logs(runs_dir, days=RETENTION_DAYS, now=None):
+    """احذف سجلات القرار/الموافقة الأقدم من `days` يومًا (180).
+
+    يغطي `runs/decider-log/*.ndjson` (سجلات الموجّه — ع8)
+    و`runs/approval-decisions.jsonl` (سجل قرارات الموافقة —
+    ع3): السطور القديمة تُحذف سطرًا سطرًا بطابعها الزمني،
+    والملف الذي يفرغ يُحذف. يرجع {"deleted": [ملفات حُذفت]،
+    "pruned": {مسار: سطور محذوفة}، "kept": سطور باقية}.
+    """
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    cutoff = moment - timedelta(days=days)
+    result = {"deleted": [], "pruned": {}, "kept": 0}
+    targets = []
+    decider_dir = os.path.join(runs_dir, "decider-log")
+    if os.path.isdir(decider_dir):
+        for name in sorted(os.listdir(decider_dir)):
+            if name.endswith(".ndjson"):
+                targets.append(os.path.join(decider_dir, name))
+    approval = os.path.join(runs_dir, "approval-decisions.jsonl")
+    if os.path.isfile(approval):
+        targets.append(approval)
+    for path in targets:
+        deleted, kept = _prune_ndjson_file(path, cutoff)
+        if kept == -1:
+            result["deleted"].append(path)
+        else:
+            result["kept"] += kept
+        if deleted:
+            result["pruned"][path] = deleted
+    return result
