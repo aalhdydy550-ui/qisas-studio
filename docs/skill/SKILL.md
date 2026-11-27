@@ -329,6 +329,27 @@ python3 studio.py failure-drill --all --json
 # تدريب على الأعطال: يحاكي melt مفقودًا ورابط piper مكسورًا وPillow قديمة داخل مجلد مؤقت فقط ويتحقق أن الكشف يعمل — بلا أي مساس بالبيئة الحقيقية (لا HOME ولا PATH ولا ملفات خارج workdir) — خروج 1 إن فشل أي drill في الكشف
 ```
 
+## قدرات التنسيق متعدد الوكلاء (منذ v0.1.63 — من أنماط OpenMausBot، تنفيذ أصلي من الصفر، بلا نسخ كود؛ ومزايا enterprise مستبعدة نهائيًا)
+
+```bash
+python3 studio.py approval show
+# مستويات الموافقة الخمسة (ask/edits/auto/full/custom)؛ والافتراضي ask؛ وأرضية أمان ترفض دائمًا: حذف منشور/إنفاق مال/تغيير مفاتيح/حذف ملفات مشروع — حتى تحت full
+python3 studio.py team apply --dry-run
+# ملف team.yaml: فرق وبوتات (نموذج INSTANCE/MODEL، جهد، موافقة، حاسوب local|off، أدوات allow/deny، أسرار {env|file} فقط) — وcheck خروج 6 عند تغيير معلّق، وإعادة التطبيق تطبع No changes.
+python3 studio.py doctor --json
+# تقرير JSON {ok, problems, warnings, checks:[{id,status,message,fix}]} — وخروج 7 عند أي FAIL؛ و--fix يصلح ما يمكن ثم يعيد الفحص؛ وفحوص مضيف (شبكة/قرص/melt/piper)
+python3 studio.py usage caps show
+# حدود استخدام (يومي/شهري بالدولار والرموز) — الرفض 429 + Retry-After، و409 برمز spend_cap للرسالة المباشرة تحت everything؛ وتحت unattended (الافتراضي) المباشر يعمل دائمًا
+python3 studio.py keys set --provider NAME --token-file FILE
+# مفاتيح كتابة فقط: تُختبر عند الحفظ والمرفوض لا يُحفظ؛ والتدوير بعد نجاح الاختبار فقط؛ والمفتاح عبر --token-file أبدًا --token على سطر الأوامر
+python3 studio.py brief show
+# الموجز اليومي (Needs you / Your day / Important emails / Routines) — والفارغ لا يُنشر أبدًا؛ والكرون 08:00 ليس في الشجرة بعد
+python3 studio.py webhook serve
+# مرفوض والراية webhookReceiver مطفأة (الافتراضي) — لا مستمع حي بلا قرار صريح لاحق
+```
+
+- كل الأوامر الجديدة تقبل `--json` و`--quiet` (رايتا الجذر) وترجع رمز خروج من ع1 (0/1/2/3/4/5/6/7/8/130)؛ و`ask` غير التفاعلي يُسجَّل ويُرفض برمز 3 بلا تعليق؛ وبلا ملف إعداد موافقة يمضي النشر كما كان بلا أسئلة. وكل الأوقات المعروضة Africa/Cairo. والأوامر الكاملة: `approval` و`team` و`routines` و`check-back` و`usage` و`models` و`round-pack` و`handoffs` و`keys` و`sentinel` و`control` و`inspect` و`read-log` و`search-log` و`send-work` و`wait-job` و`interrupt-job` و`switch-model` و`wait` و`events` و`brief` و`workers` و`export` و`features` و`triage` و`recipe` و`webhook` و`setup` و`router test`.
+
 ## إصلاحات v0.1.62 (جولة إصلاح — لا أوامر جديدة)
 
 - `assemble --no-title`: يتخطى حرق عنوان الهوك على خلفية Concat؛ والبيان يكتب عنوانًا فارغًا فيسمح `hook-title` لاحقًا. مسار `run`/`produce` الافتراضي بلا تغيير.
