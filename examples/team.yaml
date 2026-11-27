@@ -1,0 +1,83 @@
+# مثال ملف فريق إعلاني — جولة v0.1.63، بند 4 (ع17).
+#
+# يعرّف سربًا صغيرًا لمنسّق الاستوديو: تشخيص، توليد، نشر.
+# يُطبَّق (لاحقًا) بـ: studio.py team apply examples/team.yaml
+# والخطة فقط بـ:   studio.py team apply --dry-run examples/team.yaml
+#
+# القواعد المطبَّقة هنا:
+# - النموذج بصيغة INSTANCE/MODEL دائمًا.
+# - الحاسوب local أو off فقط في v1.
+# - المفاتيح كمراجع {env: NAME} أو {file: PATH} فقط — لا مفتاح
+#   مكتوب في الملف أبدًا.
+# - رئيس واحد لكل فريق (chief: true).
+# - الأدوات بقائمتي allow/deny؛ وExclude يفوز دائمًا.
+teams:
+  - name: qisas-crew
+    description: سرب إنتاج قصص وعبر اليومي — تشخيص وتوليد ونشر.
+
+bots:
+  - name: doctor
+    team: qisas-crew
+    title: عامل التشخيص
+    description: يفحص صحة الاستوديو ويشخّص الأعطال قبل أي توليد.
+    chief: true
+    manages:
+      - qisas-crew
+    soul: >-
+      أنت عامل تشخيص في استوديو قصص وعبر. تفحص ولا تنشر أبدًا؛
+      وتبلّغ بالعيب والدليل ورقم السطر، ولا تخفي فشلًا.
+    model: gemini/gemini-3-flash-preview
+    effort: low
+    approval: ask
+    computer: off
+    cwd: /home/hatch/workspace/studio
+    tools:
+      allow:
+        - native:read
+      deny: []
+    skills:
+      - file: skills/doctor/SKILL.md
+        enabled: true
+
+  - name: narrator
+    team: qisas-crew
+    title: عامل التوليد
+    description: يولّد نص القصة والراوي والصور، ولا ينشر.
+    soul: >-
+      أنت عامل توليد في استوديو قصص وعبر. تكتب القصة بصوت راوٍ
+      رجل واحد، والكتابة على الشاشة أسفل الصورة فقط.
+    model: gemini/gemini-3-flash-preview
+    effort: medium
+    approval: ask
+    computer: local
+    cwd: /home/hatch/workspace/studio
+    tools:
+      allow:
+        - native:read
+        - native:write
+      deny:
+        - native:publish
+    skills:
+      - file: skills/story/SKILL.md
+        enabled: true
+
+  - name: publisher
+    team: qisas-crew
+    title: عامل النشر
+    description: ينشر الفيديو الجاهز على المنصات بعد موافقة ask.
+    soul: >-
+      أنت عامل نشر في استوديو قصص وعبر. لا تنشر إلا فيديو
+      مكتملًا موثقًا، ولا تحذف منشورًا منشورًا أبدًا.
+    model: gemini/gemini-3-flash-preview
+    effort: low
+    approval: ask
+    computer: off
+    cwd: /home/hatch/workspace/studio
+    tools:
+      allow:
+        - native:publish
+      deny:
+        - native:read_secrets
+    skills:
+      - file: skills/publish/SKILL.md
+        enabled: true
