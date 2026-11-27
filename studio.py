@@ -6979,9 +6979,16 @@ def cmd_team(cfg, args, out):
     apply يطبع الخطة ثم يطبّقها (--dry-run للخطة فقط، و--prune
     للحذف في فرق prune: true)؛ وcheck خروج 6 إن كان شيء
     سيتغيّر؛ وexport يطبع الحالة المحفوظة. إعادة التطبيق بلا
-    تغييرات تطبع `No changes.`.
+    تغييرات تطبع `No changes.`. و``${STUDIO_HOME}`` في حقول
+    ``cwd`` داخل الملف يُحلّ إلى جذر الاستوديو (مجلد
+    ``studio.py`` نفسه) إن لم يكن المتغير معرَّفًا أصلًا —
+    فيعمل المثال المشحون ``examples/team.yaml`` على أي جهاز
+    بلا تعديل.
     """
     from lib import team_file as _team_file
+    # جذر الاستوديو افتراضيًا لـ ${STUDIO_HOME} في cwd — قيمة
+    # معرَّفة صراحة من المستخدم تُحترم (setdefault لا يتجاوزها).
+    os.environ.setdefault("STUDIO_HOME", STUDIO_DIR)
     if args.team_cmd == "export":
         state = _load_team_state(cfg)
         data = _team_file.export_state(state)
