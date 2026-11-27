@@ -241,7 +241,9 @@ class TestHostChecks(unittest.TestCase):
         def boom(*args, **kwargs):
             raise OSError("لا شبكة")
 
-        checks = doctor.run_host_checks(urlopen=boom, min_free_gb=0)
+        with mock.patch("lib.doctor.shutil.which",
+                        return_value="/usr/bin/x"):
+            checks = doctor.run_host_checks(urlopen=boom, min_free_gb=0)
         net = [c for c in checks if "الشبكة" in c["name"]][0]
         self.assertFalse(net["ok"])
         self.assertEqual(net["level"], "warn")
