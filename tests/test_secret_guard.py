@@ -9,9 +9,11 @@
 """
 import json
 import os
+import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -396,6 +398,243 @@ class TestSarifExport(unittest.TestCase):
         run = sarif["runs"][0]
         self.assertEqual(run["results"], [])
         self.assertEqual(run["tool"]["driver"]["rules"], [])
+
+
+class TestWriteOnlyKeys(unittest.TestCase):
+    """مفاتيح كتابة فقط (جولة v0.1.63، بند 13 — عقد ع12).
+
+    كل الاختبارات على مجلد مؤقت عبر QISAS_KEYS_DIR — لا تلمس
+    مخزن المفاتيح الحقيقي (~/.qisas-studio/keys.json) أبدًا،
+    وتتحقق في النهاية أن حالته لم تتغيّر. المفاتيح وهمية
+    تُبنى وقت التشغيل عبر _mixed (بلا قيم حرفية إطلاقًا).
+    """
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.td = self._td.name
+        self.addCleanup(self._td.cleanup)
+        self.env = mock.patch.dict(
+            os.environ, {secret_guard.KEYS_DIR_ENV: self.td})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self._real_snapshot = None
+        if os.path.exists(REAL_KEYS):
+            with open(REAL_KEYS, "rb") as fh:
+                self._real_snapshot = fh.read()
+
+    def tearDown(self):
+        # الحارس: مخزن المفاتيح الحقيقي لم يُنشأ ولم يُعدَّل.
+        if self._real_snapshot is None:
+            self.assertFalse(os.path.exists(REAL_KEYS),
+                             "الاختبار كتب في مخزن المفاتيح الحقيقي!")
+        else:
+            self.assertTrue(os.path.exists(REAL_KEYS),
+                            "الاختبار حذف مخزن المفاتيح الحقيقي!")
+            with open(REAL_KEYS, "rb") as fh:
+                self.assertEqual(fh.read(), self._real_snapshot,
+                                 "الاختبار عدّل مخزن المفاتيح الحقيقي!")
+
+    def _fake(self, provider):
+        if provider in ("gemini", "google"):
+            return "AIza" + _mixed(35)
+        if provider == "groq":
+            return "gsk_" + _mixed(48)
+        if provider == "openrouter":
+            return "sk-or-v1-" + _mixed(64)
+        if provider == "openai":
+            return "sk-" + _mixed(48)
+        return "sk-" + _mixed(48)
+
+    def _read_store_bytes(self):
+        path = os.path.join(self.td, secret_guard.KEYS_FILENAME)
+        with open(path, "rb") as fh:
+            return fh.read()
+
+    def test_rejected_key_is_not_saved(self):
+        # مزوّد محاكى يرفض المفتاح → لا حفظ إطلاقًا.
+        fake = self._fake("gemini")
+        with self.assertRaises(secret_guard.KeyTestError):
+            secret_guard.set_key(
+                "gemini", fake,
+                tester=lambda provider, value: False)
+        self.assertEqual(secret_guard.list_keys(), [])
+        self.assertFalse(os.path.exists(
+            os.path.join(self.td, secret_guard.KEYS_FILENAME)))
+
+    def test_tester_exception_is_rejection_not_save(self):
+        fake = self._fake("gemini")
+
+        def _boom(provider, value):
+            raise RuntimeError("انقطع الاتصال بالمزوّد")
+
+        with self.assertRaises(secret_guard.KeyTestError):
+            secret_guard.set_key("gemini", fake, tester=_boom)
+        self.assertEqual(secret_guard.list_keys(), [])
+
+    def test_accepted_key_saved_but_value_never_listed(self):
+        fake = self._fake("gemini")
+        entry = secret_guard.set_key(
+            "gemini", fake, tester=lambda p, v: True)
+        self.assertEqual(entry["name"], "gemini")
+        self.assertEqual(entry["provider"], "gemini")
+        self.assertTrue(entry["present"])
+        self.assertNotIn("value", entry)
+        listed = secret_guard.list_keys()
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["name"], "gemini")
+        self.assertTrue(listed[0]["present"])
+        self.assertNotIn("value", listed[0])
+        # لا قيمة سرية في أي مخرج سرد إطلاقًا.
+        self.assertNotIn(fake, json.dumps(listed))
+        self.assertNotIn(fake, json.dumps(entry))
+
+    def test_default_tester_rejects_wrong_format(self):
+        # بلا tester: تحقق صيغة فقط — صيغة خاطئة تُرفض.
+        with self.assertRaises(secret_guard.KeyTestError):
+            secret_guard.set_key("gemini", "not-a-real-key")
+        self.assertEqual(secret_guard.list_keys(), [])
+
+    def test_default_tester_accepts_right_format(self):
+        fake = self._fake("groq")
+        entry = secret_guard.set_key("groq", fake)
+        self.assertEqual(entry["provider"], "groq")
+        self.assertTrue(secret_guard.has_key("groq"))
+
+    def test_provider_inferred_from_value_format(self):
+        fake = self._fake("openrouter")
+        entry = secret_guard.set_key("mykey", fake)
+        self.assertEqual(entry["provider"], "openrouter")
+
+    def test_rotate_keeps_old_until_new_passes(self):
+        old = self._fake("gemini")
+        secret_guard.set_key("gemini", old,
+                             tester=lambda p, v: True)
+        before = self._read_store_bytes()
+        # تدوير بمفتاح يرفضه المزوّد → المخزن بلا أي تغيير.
+        # (القيم الجديدة مبنية ببادئة حرف مختلف لأن _mixed
+        # حتمي — وإلا تطابق الجديد القديم.)
+        new_bad = "AIza" + "Y" + _mixed(34)
+        with self.assertRaises(secret_guard.KeyTestError):
+            secret_guard.rotate_key(
+                "gemini", new_bad,
+                tester=lambda p, v: False)
+        self.assertEqual(self._read_store_bytes(), before)
+        # تدوير بمفتاح يقبله المزوّد → يُكتب الجديد فقط.
+        new_good = "AIza" + "Z" + _mixed(34)
+        entry = secret_guard.rotate_key(
+            "gemini", new_good, tester=lambda p, v: True)
+        self.assertTrue(entry["present"])
+        self.assertTrue(entry["rotated_at"])
+        self.assertNotEqual(self._read_store_bytes(), before)
+        stored = json.loads(self._read_store_bytes())
+        self.assertEqual(stored["keys"]["gemini"]["value"], new_good)
+        self.assertNotEqual(stored["keys"]["gemini"]["value"], old)
+
+    def test_rotate_missing_key_raises(self):
+        with self.assertRaises(secret_guard.KeyStoreError):
+            secret_guard.rotate_key(
+                "ghost", self._fake("gemini"),
+                tester=lambda p, v: True)
+
+    def test_list_shows_names_and_presence_only(self):
+        secret_guard.set_key("gemini", self._fake("gemini"),
+                             tester=lambda p, v: True)
+        secret_guard.set_key("groq", self._fake("groq"),
+                             tester=lambda p, v: True)
+        listed = secret_guard.list_keys()
+        self.assertEqual([e["name"] for e in listed],
+                         ["gemini", "groq"])
+        for entry in listed:
+            self.assertTrue(entry["present"])
+            self.assertNotIn("value", entry)
+        self.assertNotIn("AIza", json.dumps(listed))
+        self.assertNotIn("gsk_", json.dumps(listed))
+
+    def test_diagnose_masks_keys(self):
+        fake = self._fake("gemini")
+        secret_guard.set_key("gemini", fake,
+                             tester=lambda p, v: True)
+        text = "\n".join(secret_guard.diagnose_keys())
+        self.assertNotIn(fake, text)
+        # القيمة المقنّعة (أول 4 + … + آخر 4) ظاهرة، لا الكاملة.
+        self.assertIn(fake[:4] + "…" + fake[-4:], text)
+        self.assertIn("gemini", text)
+        self.assertIn("موجود", text)
+
+    def test_redact_text_masks_provider_key(self):
+        fake = self._fake("gemini")
+        text = 'حدث خطأ أثناء استدعاء المفتاح "%s" — أعد المحاولة' % fake
+        redacted = secret_guard.redact_text(text)
+        self.assertNotIn(fake, redacted)
+        self.assertIn(fake[:4] + "…" + fake[-4:], redacted)
+        self.assertIn("حدث خطأ", redacted)
+
+    def test_mask_secret_never_returns_full_value(self):
+        fake = self._fake("openai")
+        masked = secret_guard.mask_secret(fake)
+        self.assertNotEqual(masked, fake)
+        self.assertNotIn(fake, masked)
+        self.assertTrue(masked.startswith(fake[:4]))
+        self.assertTrue(masked.endswith(fake[-4:]))
+        # قيمة قصيرة تُستبدل بنجوم بطولها.
+        self.assertEqual(secret_guard.mask_secret("abc"), "***")
+        self.assertEqual(secret_guard.mask_secret(""), "")
+
+    def test_read_token_file(self):
+        fake = self._fake("groq")
+        path = os.path.join(self.td, "token.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(fake + "\n")
+        self.assertEqual(secret_guard.read_token_file(path), fake)
+        # ملف غائب أو فارغ = خطأ صريح.
+        with self.assertRaises(secret_guard.KeyStoreError):
+            secret_guard.read_token_file(
+                os.path.join(self.td, "missing.txt"))
+        empty = os.path.join(self.td, "empty.txt")
+        with open(empty, "w", encoding="utf-8") as fh:
+            fh.write("  \n")
+        with self.assertRaises(secret_guard.KeyStoreError):
+            secret_guard.read_token_file(empty)
+
+    def test_invalid_name_rejected(self):
+        fake = self._fake("gemini")
+        for bad in ("", "bad/name", "bad name", "a" * 65):
+            with self.assertRaises(ValueError, msg=bad):
+                secret_guard.set_key(bad, fake,
+                                     tester=lambda p, v: True)
+        self.assertEqual(secret_guard.list_keys(), [])
+
+    def test_empty_value_rejected(self):
+        with self.assertRaises(ValueError):
+            secret_guard.set_key("gemini", "   ",
+                                 tester=lambda p, v: True)
+
+    def test_store_file_is_0600(self):
+        secret_guard.set_key("gemini", self._fake("gemini"),
+                             tester=lambda p, v: True)
+        path = os.path.join(self.td, secret_guard.KEYS_FILENAME)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(self.td).st_mode), 0o700)
+
+    def test_corrupt_store_is_not_silently_emptied(self):
+        path = os.path.join(self.td, secret_guard.KEYS_FILENAME)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{not json")
+        with self.assertRaises(secret_guard.KeyStoreError):
+            secret_guard.list_keys()
+        with self.assertRaises(secret_guard.KeyStoreError):
+            secret_guard.set_key("gemini", self._fake("gemini"),
+                                 tester=lambda p, v: True)
+
+    def test_has_key(self):
+        self.assertFalse(secret_guard.has_key("gemini"))
+        secret_guard.set_key("gemini", self._fake("gemini"),
+                             tester=lambda p, v: True)
+        self.assertTrue(secret_guard.has_key("gemini"))
+        self.assertFalse(secret_guard.has_key("groq"))
+
+
+REAL_KEYS = os.path.expanduser("~/.qisas-studio/keys.json")
 
 
 if __name__ == "__main__":

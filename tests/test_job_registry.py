@@ -218,5 +218,372 @@ class TestFormatJobs(unittest.TestCase):
             self.assertIn("أُعيد استخدامه", text)
 
 
+# ============================================================
+# جولة v0.1.63 — البنود 6 و10 و12 و19 و21 و28
+# ============================================================
+
+SRC = "[From worker-a · تسليم قصة · direct]"
+
+
+class TestDeliveryStateMachine(unittest.TestCase):
+    def _new(self, td):
+        return job_registry.register_delivery(td, SRC, kind="story",
+                                              title="العنزة")
+
+    def test_register_starts_at_source_with_counter_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._new(td)
+            self.assertTrue(d["id"].startswith("handoff-"))
+            self.assertEqual(d["state"], "source")
+            self.assertEqual(d["runs"], 0)
+            self.assertFalse(d["flagged"])
+            self.assertEqual(d["source"], SRC)
+            self.assertIsNotNone(d["created_at"])
+            self.assertIsNotNone(d["updated_at"])
+
+    def test_full_happy_path_chain(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._new(td)
+            for state in ("queued", "running", "waiting", "resume",
+                          "running", "completed"):
+                d = job_registry.transition_delivery(td, d["id"], state)
+                self.assertEqual(d["state"], state)
+            # دخل running مرتين → عدّاد التنفيذات 2.
+            self.assertEqual(d["runs"], 2)
+
+    def test_invalid_transitions_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._new(td)
+            # source → completed مباشرة مرفوض.
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.transition_delivery(td, d["id"],
+                                                 "completed")
+            # source → running مرفوض (يلزم queued أولًا).
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.transition_delivery(td, d["id"], "running")
+            job_registry.transition_delivery(td, d["id"], "queued")
+            job_registry.transition_delivery(td, d["id"], "running")
+            # running → resume مرفوض (resume بعد waiting فقط).
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.transition_delivery(td, d["id"], "resume")
+            job_registry.transition_delivery(td, d["id"], "completed")
+            # حالة نهائية لا تتحرك أبدًا.
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.transition_delivery(td, d["id"], "queued")
+
+    def test_invalid_state_name_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._new(td)
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.transition_delivery(td, d["id"], "نائم")
+
+    def test_transition_missing_returns_none(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertIsNone(job_registry.transition_delivery(
+                td, "handoff-غائب", "queued"))
+
+    def test_duplicate_delivery_id_raises(self):
+        with tempfile.TemporaryDirectory() as td:
+            job_registry.register_delivery(td, SRC, delivery_id="h-1")
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.register_delivery(td, SRC,
+                                               delivery_id="h-1")
+
+    def test_corrupt_line_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._new(td)
+            path = os.path.join(td, "deliveries.jsonl")
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write("{سطر تالف\n")
+            self.assertEqual(len(job_registry.list_deliveries(td)), 1)
+            self.assertEqual(job_registry.get_delivery(td, d["id"])
+                             ["state"], "source")
+
+
+class TestDeliverySourceAndFlag(unittest.TestCase):
+    def test_delivery_without_source_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            for bad in ("", None, "نص بلا تسمية", "[From x]"):
+                with self.assertRaises(job_registry.JobRegistryError,
+                                       msg=repr(bad)):
+                    job_registry.register_delivery(td, bad)
+
+    def test_format_source_builds_contract_label(self):
+        label = job_registry.format_source("worker-a", "تسليم قصة",
+                                           "direct")
+        self.assertEqual(label, SRC)
+        self.assertTrue(job_registry.is_valid_source_label(label))
+        self.assertFalse(job_registry.is_valid_source_label(""))
+
+    def test_flag_and_list_filters(self):
+        with tempfile.TemporaryDirectory() as td:
+            a = job_registry.register_delivery(td, SRC, title="أ")
+            b = job_registry.register_delivery(td, SRC, title="ب")
+            flagged = job_registry.flag_delivery(td, a["id"])
+            self.assertTrue(flagged["flagged"])
+            self.assertEqual(
+                [d["id"] for d in job_registry.list_deliveries(
+                    td, flagged=True)], [a["id"]])
+            self.assertEqual(
+                len(job_registry.list_deliveries(td, flagged=False)),
+                1)
+            job_registry.flag_delivery(td, a["id"], flagged=False)
+            self.assertEqual(
+                len(job_registry.list_deliveries(td, flagged=True)),
+                0)
+            self.assertIsNone(job_registry.flag_delivery(
+                td, "handoff-غائب"))
+            text = job_registry.format_deliveries(
+                job_registry.list_deliveries(td))
+            self.assertIn("أ", text)
+            self.assertIn("source", text)
+            self.assertIn("تنفيذات 0", text)
+
+    def test_list_by_state_and_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            a = job_registry.register_delivery(td, SRC, title="أ")
+            job_registry.register_delivery(td, SRC, title="ب")
+            job_registry.transition_delivery(td, a["id"], "queued")
+            self.assertEqual(
+                len(job_registry.list_deliveries(td, state="queued")),
+                1)
+            self.assertEqual(
+                len(job_registry.list_deliveries(td, state="source")),
+                1)
+            self.assertEqual(
+                len(job_registry.list_deliveries(td, source=SRC)), 2)
+            self.assertEqual(
+                len(job_registry.list_deliveries(
+                    td, source="[From x · y · z]")), 0)
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.list_deliveries(td, state="نائم")
+
+    def test_job_source_field_stored(self):
+        with tempfile.TemporaryDirectory() as td:
+            job = job_registry.register_job(td, "run", title="أ",
+                                            source=SRC)
+            self.assertEqual(job["source"], SRC)
+            updated = job_registry.update_job(
+                td, job["job_id"], source="[From b · x · y]")
+            self.assertEqual(updated["source"], "[From b · x · y]")
+            self.assertEqual(
+                len(job_registry.list_jobs(
+                    td, source="[From b · x · y]")), 1)
+
+
+class TestRoutineLedger(unittest.TestCase):
+    def test_append_and_read(self):
+        with tempfile.TemporaryDirectory() as td:
+            entry = job_registry.append_routine_ledger(
+                td, "daily-09", "ran", "completed", job_id="job-1",
+                count=3)
+            self.assertEqual(entry["routine"], "daily-09")
+            self.assertEqual(entry["state"], "ran")
+            self.assertEqual(entry["reason"], "completed")
+            self.assertEqual(entry["count"], 3)
+            self.assertTrue(os.path.isfile(
+                os.path.join(td, "routines.ledger.jsonl")))
+            rows = job_registry.read_routine_ledger(td)
+            self.assertEqual(len(rows), 1)
+            # السطر معرّفات وأوقات وعدّادات فقط — بلا مطالبات.
+            self.assertEqual(set(rows[0]),
+                             {"ts", "routine", "state", "reason",
+                              "job_id", "count"})
+
+    def test_all_states_and_reasons_accepted(self):
+        with tempfile.TemporaryDirectory() as td:
+            for state in job_registry.ROUTINE_STATES:
+                job_registry.append_routine_ledger(
+                    td, "r", state, "completed")
+            for reason in job_registry.ROUTINE_REASONS:
+                job_registry.append_routine_ledger(
+                    td, "r", "ran", reason)
+            self.assertEqual(
+                len(job_registry.read_routine_ledger(td)),
+                len(job_registry.ROUTINE_STATES)
+                + len(job_registry.ROUTINE_REASONS))
+
+    def test_invalid_state_or_reason_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.append_routine_ledger(
+                    td, "r", "done", "completed")
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.append_routine_ledger(
+                    td, "r", "ran", "لأنني أريد")
+
+    def test_read_filters_and_limit(self):
+        with tempfile.TemporaryDirectory() as td:
+            job_registry.append_routine_ledger(
+                td, "a", "ran", "completed")
+            job_registry.append_routine_ledger(
+                td, "a", "missed", "missed_window")
+            job_registry.append_routine_ledger(
+                td, "b", "skipped", "previous_active")
+            self.assertEqual(
+                len(job_registry.read_routine_ledger(td, routine="a")),
+                2)
+            self.assertEqual(
+                len(job_registry.read_routine_ledger(td, state="ran")),
+                1)
+            rows = job_registry.read_routine_ledger(td, limit=2)
+            self.assertEqual(len(rows), 2)
+            # الأحدث أولًا.
+            self.assertEqual(rows[0]["routine"], "b")
+
+    def test_corrupt_line_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            job_registry.append_routine_ledger(
+                td, "a", "ran", "completed")
+            path = os.path.join(td, "routines.ledger.jsonl")
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write("{تالف\n")
+            self.assertEqual(
+                len(job_registry.read_routine_ledger(td)), 1)
+
+
+class TestRosterCaps(unittest.TestCase):
+    def test_enforce_max_40(self):
+        self.assertEqual(job_registry.enforce_roster_size(40), 40)
+        self.assertEqual(job_registry.enforce_roster_size(3), 3)
+        with self.assertRaises(job_registry.JobRegistryError):
+            job_registry.enforce_roster_size(41)
+        self.assertTrue(job_registry.roster_size_ok(40))
+        self.assertFalse(job_registry.roster_size_ok(41))
+
+    def test_others_min_8(self):
+        self.assertTrue(job_registry.others_count_ok(8))
+        self.assertFalse(job_registry.others_count_ok(7))
+
+    def test_group_message_goes_to_chief_only(self):
+        self.assertEqual(
+            job_registry.route_group_message("@everyone"), "chief")
+        self.assertEqual(
+            job_registry.route_group_message("everyone"), "chief")
+        self.assertEqual(
+            job_registry.route_group_message("worker-a"), "worker-a")
+
+
+class TestWaitOutcomes(unittest.TestCase):
+    def test_mapping_all_job_states(self):
+        expected = {
+            "completed": "settled", "idle": "settled",
+            "needs-input": "needs-user", "failed": "failed",
+            "stalled": "stalled", "timed-out": "timed-out",
+        }
+        for state, outcome in expected.items():
+            self.assertEqual(
+                job_registry.wait_outcome_for_state(state), outcome)
+
+    def test_unknown_job_state_rejected(self):
+        with self.assertRaises(job_registry.JobRegistryError):
+            job_registry.wait_outcome_for_state("running")
+
+    def test_set_wait_outcome(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = job_registry.register_delivery(td, SRC, title="أ")
+            updated = job_registry.set_delivery_wait_outcome(
+                td, d["id"], "needs-user")
+            self.assertEqual(updated["wait_outcome"], "needs-user")
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.set_delivery_wait_outcome(
+                    td, d["id"], "waiting")
+            self.assertIsNone(job_registry.set_delivery_wait_outcome(
+                td, "handoff-غائب", "settled"))
+
+
+class TestInterrupt(unittest.TestCase):
+    def test_interrupt_delivery_tree(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = job_registry.register_delivery(td, SRC, title="جذر")
+            child = job_registry.register_delivery(
+                td, SRC, title="ابن", parent_id=root["id"])
+            grand = job_registry.register_delivery(
+                td, SRC, title="حفيد", parent_id=child["id"])
+            done = job_registry.register_delivery(
+                td, SRC, title="منتهٍ", parent_id=root["id"])
+            for d in (done,):
+                job_registry.transition_delivery(td, d["id"], "queued")
+                job_registry.transition_delivery(td, d["id"], "running")
+                job_registry.transition_delivery(td, d["id"],
+                                                 "completed")
+            job_registry.transition_delivery(td, root["id"], "queued")
+            job_registry.transition_delivery(td, root["id"], "running")
+            changed = job_registry.interrupt_delivery(td, root["id"])
+            self.assertEqual(
+                {c["id"] for c in changed},
+                {root["id"], child["id"], grand["id"]})
+            self.assertTrue(all(c["state"] == "cancelled"
+                                for c in changed))
+            # المنتهي أصلًا لم يُمسّ.
+            self.assertEqual(job_registry.get_delivery(
+                td, done["id"])["state"], "completed")
+
+    def test_interrupt_missing_returns_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(job_registry.interrupt_delivery(
+                td, "handoff-غائب"), [])
+
+    def test_interrupt_job_tree_stamps_finished(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = job_registry.register_job(td, "run", title="جذر")
+            child = job_registry.register_job(
+                td, "run", title="ابن", parent_id=root["job_id"])
+            done = job_registry.register_job(td, "run", title="منتهٍ",
+                                             parent_id=root["job_id"])
+            job_registry.update_job(td, done["job_id"], status="done")
+            changed = job_registry.interrupt_job(td, root["job_id"])
+            self.assertEqual(
+                {c["job_id"] for c in changed},
+                {root["job_id"], child["job_id"]})
+            self.assertTrue(all(c["status"] == "cancelled"
+                                for c in changed))
+            self.assertIsNotNone(changed[0]["finished_at"])
+            self.assertEqual(job_registry.get_job(
+                td, done["job_id"])["status"], "done")
+
+    def test_interrupt_job_missing_returns_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(job_registry.interrupt_job(
+                td, "job-غائب"), [])
+
+
+class TestWorkerStates(unittest.TestCase):
+    def test_pause_resume_cycle(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(
+                job_registry.get_worker_state(td, "w1"), "active")
+            job_registry.pause_worker(td, "w1")
+            self.assertEqual(
+                job_registry.get_worker_state(td, "w1"), "paused")
+            job_registry.resume_worker(td, "w1")
+            self.assertEqual(
+                job_registry.get_worker_state(td, "w1"), "active")
+
+    def test_stop_is_terminal(self):
+        with tempfile.TemporaryDirectory() as td:
+            job_registry.pause_worker(td, "w1")
+            job_registry.stop_worker(td, "w1")
+            self.assertEqual(
+                job_registry.get_worker_state(td, "w1"), "stopped")
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.resume_worker(td, "w1")
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.pause_worker(td, "w1")
+
+    def test_invalid_worker_state_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(job_registry.JobRegistryError):
+                job_registry.set_worker_state(td, "w1", "نائم")
+
+    def test_list_workers(self):
+        with tempfile.TemporaryDirectory() as td:
+            job_registry.pause_worker(td, "w1")
+            job_registry.stop_worker(td, "w2")
+            workers = job_registry.list_workers(td)
+            self.assertEqual(workers, {"w1": "paused",
+                                       "w2": "stopped"})
+
+
 if __name__ == "__main__":
     unittest.main()

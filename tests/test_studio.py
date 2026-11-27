@@ -1635,7 +1635,20 @@ class TestEnsureEnvironment(unittest.TestCase):
     """الإصلاح الذاتي عند بدء التشغيل (v0.1.15): بلا شبكة وبلا تنفيذ
     فعلي لسكربت الاستعادة — subprocess.run يُستبدل بمحاكاة."""
 
-    def _run(self, which=None, isfile=None, run_side=None):
+    def _run(self, which=None, isfile=None, run_side=None,
+             glob_return=None):
+        # إصلاح CI 315 (2026-11-27): ‏_ensure_environment‏ تستدعي في
+        # النهاية ‏_ensure_protection_tools‏ التي تفحص
+        # ‏glob.glob("/var/lib/clamav/*.cvd")‏ و‏*.cld‏ — وglob لم يكن
+        # محجوبًا هنا فيقرأ نظام الملفات الحقيقي؛ وعلى العدّاء (بلا
+        # ‏/var/lib/clamav‏) يصير db_missing=True فيُطلق
+        # ‏Popen(ensure-env.sh --apt-only)‏ في الخلفية — استدعاء
+        # ثانٍ غير متوقع يكسر ‏test_missing_unit_file_...‏ ويُطلق
+        # سرًا سكربتًا حقيقيًا في ‏test_all_present_no_restore‏.
+        # الافتراضي: القاعدة موجودة، فيصير مسار الحماية حتميًا بلا
+        # إطلاق شيء؛ واختبار مسار الحماية المخصص يمرر [].
+        if glob_return is None:
+            glob_return = ["/var/lib/clamav/daily.cvd"]
         env = {"PATH": "/usr/bin:/bin"}
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch("shutil.which",
@@ -1643,6 +1656,8 @@ class TestEnsureEnvironment(unittest.TestCase):
                            if which is None else which), \
                 mock.patch("os.path.isfile",
                            side_effect=isfile), \
+                mock.patch("glob.glob",
+                           return_value=glob_return), \
                 mock.patch.object(studio, "_script_safe_to_run",
                                   return_value=True), \
                 mock.patch.object(studio.subprocess, "run",
@@ -1672,6 +1687,26 @@ class TestEnsureEnvironment(unittest.TestCase):
         self.assertEqual(args[0][0], "/bin/bash")
         self.assertIn("setup-env.sh", args[0][-1])
         self.assertEqual(kwargs["env"].get("STUDIO_ENV_RESTORED"), "1")
+        self.assertTrue(kwargs.get("start_new_session"))
+        self.assertEqual(kwargs.get("stdout"), studio.subprocess.DEVNULL)
+
+    def test_missing_clamav_db_triggers_protection_restore_once(self):
+        # مسار الحماية (CI 315، 2026-11-27): قاعدة ClamAV غائبة
+        # (glob يرجع []) وملف الخدمة موجود وكل أدوات الحماية
+        # موجودة — فيجب أن يُطلق ‏_ensure_protection_tools‏
+        # ‏ensure-env.sh --apt-only‏ في الخلفية مرة واحدة بالضبط،
+        # وبلا أي استرداد متزامن (setup-env.sh). هذا هو الاستدعاء
+        # الثاني الذي كان يظهر سرًا في
+        # ‏test_missing_unit_file_triggers_restore_once‏ قبل حجب
+        # glob في ‏_run‏ — هنا يُثبَّت كسلوك مقصود لا كتسرب.
+        with mock.patch.object(studio.subprocess, "Popen") as popen:
+            run = self._run(isfile=lambda p: True, glob_return=[])
+        run.assert_not_called()  # لا استرداد متزامن إطلاقًا
+        popen.assert_called_once()
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0][0], "/bin/bash")
+        self.assertIn("ensure-env.sh", args[0][1])
+        self.assertEqual(args[0][2], "--apt-only")
         self.assertTrue(kwargs.get("start_new_session"))
         self.assertEqual(kwargs.get("stdout"), studio.subprocess.DEVNULL)
 

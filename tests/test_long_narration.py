@@ -273,10 +273,25 @@ class TestSynthesizeLongLang(unittest.TestCase):
             proc.stdout = ""
             return proc
 
+        # الموديل المحسوم من lang يعيش خارج شجرة المستودع
+        # (~/workspace/tts-models) وغائب على عدّاء CI — احجب
+        # فحص وجوده وحده، وفوّض باقي الفحوصات للدالة الحقيقية
+        # (ثنائي Piper وملف الإخراج الناتج يُفحصان فعلًا).
+        model_path = long_narration.i18n.resolve_voice_model(
+            lang="en")[1]
+        _real_isfile = os.path.isfile
+
+        def _isfile(path):
+            if path == model_path:
+                return True
+            return _real_isfile(path)
+
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "c.wav")
             with mock.patch.object(long_narration.subprocess, "run",
-                                   _fake_run):
+                                   _fake_run), \
+                    mock.patch.object(os.path, "isfile",
+                                      side_effect=_isfile):
                 got = long_narration.synthesize_chunk(
                     "Hello world.", out, piper_bin=sys.executable,
                     lang="en")
@@ -285,6 +300,20 @@ class TestSynthesizeLongLang(unittest.TestCase):
             model_arg = calls[0][calls[0].index("--model") + 1]
             self.assertTrue(
                 model_arg.endswith("en_US-ryan-medium.onnx"), model_arg)
+
+    def test_synthesize_chunk_missing_explicit_model_raises(self):
+        # حارس وجود ملف الموديل: موديل صريح غير موجود يرفع
+        # LongNarrationError — بلا تشغيل Piper حيًا. يغلب
+        # الموديل الصريح lang حتى مع lang="en".
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = os.path.join(tmp, "no-such-model.onnx")
+            with self.assertRaises(
+                    long_narration.LongNarrationError) as cm:
+                long_narration.synthesize_chunk(
+                    "Hello world.", os.path.join(tmp, "c.wav"),
+                    piper_bin=sys.executable, model=missing,
+                    lang="en")
+            self.assertIn(missing, str(cm.exception))
 
     @unittest.skipUnless(
         _PIPER_OK and os.path.isfile(os.path.expanduser(
